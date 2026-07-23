@@ -1,0 +1,79 @@
+# MkDocs Configuration — SecureScan Pro X
+
+site_name: "SecureScan Pro X Documentation"
+site_description: "Enterprise-Grade Defensive Security Assessment Platform"
+site_url: "https://docs.securescan.dev"
+
+repo_url: "https://github.com/securescan/securescan-pro-x"
+repo_name: "securescan/securescan-pro-x"
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - mermaid2
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Architecture:
+    - Overview: architecture/overview.md
+    - Layer Architecture: architecture/layers.md
+    - Security: architecture/security.md
+    - Plugin System: architecture/plugins.md
+  - Guides:
+    - Getting Started: guides/getting-started.md
+    - Configuration: guides/configuration.md
+    - Workspaces: guides/workspaces.md
+    - Assessments: guides/assessments.md
+    - Plugins: guides/plugins.md
+    - Reporting: guides/reporting.md
+  - API Reference:
+    - Overview: api/overview.md
+    - Workspaces: api/workspaces.md
+    - Assets: api/assets.md
+    - Assessments: api/assessments.md
+  - SDK:
+    - Python SDK: sdk/python.md
+    - TypeScript SDK: sdk/typescript.md
+  - Tutorials:
+    - First Assessment: tutorials/first-assessment.md
+    - Custom Plugin: tutorials/custom-plugin.md
+  - Contributing: contributing.md

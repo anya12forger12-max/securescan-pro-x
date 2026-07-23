@@ -1,0 +1,77 @@
+version: 2
+updates:
+  # Python (pip) dependencies
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "MalwareHashChecker-Pro/maintainers"
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      dev-dependencies:
+        dependency-type: "development"
+        patterns:
+          - "ruff"
+          - "black"
+          - "mypy"
+          - "pytest*"
+          - "coverage*"
+          - "bandit"
+          - "pip-audit"
+          - "pre-commit"
+      security-dependencies:
+        dependency-type: "production"
+        patterns:
+          - "cryptography"
+          - "hashlib*"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "MalwareHashChecker-Pro/maintainers"
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+
+  # Node.js (for docs tooling)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "MalwareHashChecker-Pro/maintainers"
+    labels:
+      - "dependencies"
+      - "npm"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    ignore:
+      # Ignore major version bumps for Node.js packages
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"

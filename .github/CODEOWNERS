@@ -1,0 +1,33 @@
+# Code Owners for Malware Hash Checker Pro
+# Each line is a file pattern followed by one or more owners.
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything
+* @MalwareHashChecker-Pro/maintainers
+
+# Backend packages
+/packages/core/ @MalwareHashChecker-Pro/maintainers
+/packages/hashing/ @MalwareHashChecker-Pro/maintainers
+/packages/scanner/ @MalwareHashChecker-Pro/maintainers
+/packages/database/ @MalwareHashChecker-Pro/maintainers
+/packages/security/ @MalwareHashChecker-Pro/maintainers
+/packages/logging/ @MalwareHashChecker-Pro/maintainers
+/packages/config/ @MalwareHashChecker-Pro/maintainers
+/packages/ui/ @MalwareHashChecker-Pro/maintainers
+
+# Frontend
+/apps/ @MalwareHashChecker-Pro/maintainers
+
+# Infrastructure and CI
+/.github/ @MalwareHashChecker-Pro/maintainers
+/scripts/ @MalwareHashChecker-Pro/maintainers
+/configs/ @MalwareHashChecker-Pro/maintainers
+
+# Documentation
+/docs/ @MalwareHashChecker-Pro/maintainers
+*.md @MalwareHashChecker-Pro/maintainers
+
+# Security-sensitive files
+/packages/security/ @MalwareHashChecker-Pro/security
+/SECURITY.md @MalwareHashChecker-Pro/security
+/pyproject.toml @MalwareHashChecker-Pro/maintainers

@@ -1,0 +1,113 @@
+# ============================================
+# SecureScan Pro X — Git Ignore
+# ============================================
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / Frontend
+node_modules/
+.pnp
+.pnp.js
+.yarn-integrity
+dist/
+build/
+.next/
+out/
+.turbo/
+
+# Tauri
+src-tauri/target/
+src-tauri/WixTools/
+src-tauri/Frameworks/
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+
+# Environment
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# Backups
+backups/*.db
+backups/*.zip
+
+# Build artifacts
+installer/output/
+docker/dev/data/
+docker/prod/data/
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+.coverage.*
+
+# Documentation build
+site/
+docs/site/
+
+# Temporary
+tmp/
+temp/
+.tmp/
+
+# Secrets — never commit
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+secrets.yaml
+secrets.json
+credentials.json
+
+# Plugin artifacts
+plugins/*/dist/
+plugins/*/*.so
+plugins/*/*.pyd

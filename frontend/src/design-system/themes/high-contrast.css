@@ -1,0 +1,56 @@
+/**
+ * SecureScan Pro X — High Contrast Theme
+ *
+ * Meets WCAG AAA contrast requirements for enhanced visibility.
+ */
+
+[data-theme="high-contrast"] {
+  /* Backgrounds */
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-tertiary: #1a1a1a;
+  --bg-elevated: #1a1a1a;
+  --bg-overlay: rgba(0, 0, 0, 0.8);
+
+  /* Surface */
+  --surface-primary: #1a1a1a;
+  --surface-secondary: #2a2a2a;
+  --surface-hover: #2a2a2a;
+  --surface-active: #3a3a3a;
+
+  /* Text — maximum contrast */
+  --text-primary: #ffffff;
+  --text-secondary: #e0e0e0;
+  --text-tertiary: #b0b0b0;
+  --text-disabled: #666666;
+  --text-inverse: #000000;
+
+  /* Borders — high visibility */
+  --border-primary: #ffffff;
+  --border-secondary: #b0b0b0;
+  --border-focus: #ffff00;
+
+  /* Interactive — high visibility */
+  --interactive-primary: #6699ff;
+  --interactive-primary-hover: #99bbff;
+  --interactive-primary-active: #3366cc;
+  --interactive-danger: #ff4444;
+  --interactive-danger-hover: #ff6666;
+
+  /* Severity — high contrast */
+  --color-severity-critical: #ff4444;
+  --color-severity-high: #ff8800;
+  --color-severity-medium: #ffcc00;
+  --color-severity-low: #6699ff;
+  --color-severity-info: #b0b0b0;
+
+  /* Focus — maximum visibility */
+  --focus-ring-width: 3px;
+  --focus-ring-offset: 3px;
+  --focus-ring-color: #ffff00;
+
+  /* Scrollbar */
+  --scrollbar-track: #1a1a1a;
+  --scrollbar-thumb: #666666;
+  --scrollbar-thumb-hover: #888888;
+}

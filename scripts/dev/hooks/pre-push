@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Malware Hash Checker Pro - Git Pre-Push Hook
+# Runs the full validation suite and test suite before allowing a push.
+# =============================================================================
+set -euo pipefail
+
+# -- Colors -------------------------------------------------------------------
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+info()  { printf "${YELLOW}[HOOK]${NC} %s\n" "$*"; }
+pass()  { printf "${GREEN}[PASS]${NC} %s\n" "$*"; }
+error() { printf "${RED}[FAIL]${NC} %s\n" "$*" >&2; }
+
+# -- Repo Root ----------------------------------------------------------------
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+info "Running pre-push validation..."
+echo ""
+
+# -- 1. Full Validation ------------------------------------------------------
+info "=== Running Full Validation ==="
+VALIDATE_SCRIPT="${REPO_ROOT}/scripts/dev/validate.sh"
+
+if [[ -f "$VALIDATE_SCRIPT" ]]; then
+    if bash "$VALIDATE_SCRIPT"; then
+        pass "Full validation passed"
+    else
+        error "Full validation FAILED"
+        echo ""
+        error "Push aborted. Fix validation issues before pushing."
+        error "To bypass (not recommended): git push --no-verify"
+        exit 1
+    fi
+else
+    info "validate.sh not found, running individual checks..."
+
+    # Fallback: run individual tools
+    if command -v ruff &>/dev/null; then
+        info "Running ruff..."
+        ruff check packages/ tests/ scripts/ || { error "Ruff failed"; exit 1; }
+    fi
+
+    if command -v black &>/dev/null; then
+        info "Running black..."
+        black --check packages/ tests/ scripts/ || { error "Black failed"; exit 1; }
+    fi
+
+    if command -v mypy &>/dev/null; then
+        info "Running mypy..."
+        mypy packages/ || { error "Mypy failed"; exit 1; }
+    fi
+fi
+
+echo ""
+
+# -- 2. Test Suite -----------------------------------------------------------
+info "=== Running Test Suite ==="
+if command -v pytest &>/dev/null; then
+    if pytest tests/ --tb=short -q --no-header; then
+        pass "Test suite passed"
+    else
+        error "Test suite FAILED"
+        echo ""
+        error "Push aborted. Fix failing tests before pushing."
+        error "To bypass (not recommended): git push --no-verify"
+        exit 1
+    fi
+else
+    info "pytest not found, skipping test suite"
+fi
+
+echo ""
+
+# -- Summary ------------------------------------------------------------------
+pass "All pre-push checks passed. Push is safe to proceed."
+exit 0

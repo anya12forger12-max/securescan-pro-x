@@ -1,0 +1,52 @@
+/**
+ * SecureScan Pro X — Color Blind Safe Theme
+ *
+ * Uses color palette safe for deuteranopia, protanopia, and tritanopia.
+ * Status is indicated by shape/pattern in addition to color.
+ */
+
+[data-theme="colorblind"] {
+  /* Backgrounds */
+  --bg-primary: var(--color-neutral-950);
+  --bg-secondary: var(--color-neutral-900);
+  --bg-tertiary: var(--color-neutral-800);
+  --bg-elevated: var(--color-neutral-800);
+  --bg-overlay: rgba(0, 0, 0, 0.5);
+
+  /* Surface */
+  --surface-primary: var(--color-neutral-800);
+  --surface-secondary: var(--color-neutral-700);
+  --surface-hover: var(--color-neutral-700);
+  --surface-active: var(--color-neutral-600);
+
+  /* Text */
+  --text-primary: var(--color-neutral-50);
+  --text-secondary: var(--color-neutral-300);
+  --text-tertiary: var(--color-neutral-400);
+  --text-disabled: var(--color-neutral-600);
+  --text-inverse: var(--color-neutral-950);
+
+  /* Borders */
+  --border-primary: var(--color-neutral-700);
+  --border-secondary: var(--color-neutral-600);
+  --border-focus: var(--color-primary-500);
+
+  /* Severity — colorblind safe palette (blue-orange based) */
+  --color-severity-critical: #cc79a7;  /* Pink — distinct from all others */
+  --color-severity-high: #e69f00;      /* Orange — safe for all types */
+  --color-severity-medium: #f0e442;    /* Yellow — safe for all types */
+  --color-severity-low: #0072b2;       /* Blue — safe for all types */
+  --color-severity-info: #999999;      /* Gray — always neutral */
+
+  /* Interactive */
+  --interactive-primary: #0072b2;
+  --interactive-primary-hover: #3391cc;
+  --interactive-primary-active: #005a8e;
+  --interactive-danger: #cc79a7;
+  --interactive-danger-hover: #d99abf;
+
+  /* Scrollbar */
+  --scrollbar-track: var(--color-neutral-900);
+  --scrollbar-thumb: var(--color-neutral-600);
+  --scrollbar-thumb-hover: var(--color-neutral-500);
+}

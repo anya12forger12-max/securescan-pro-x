@@ -1,0 +1,42 @@
+/**
+ * SecureScan Pro X — Light Theme
+ */
+
+[data-theme="light"] {
+  /* Backgrounds */
+  --bg-primary: var(--color-neutral-0);
+  --bg-secondary: var(--color-neutral-50);
+  --bg-tertiary: var(--color-neutral-100);
+  --bg-elevated: var(--color-neutral-0);
+  --bg-overlay: rgba(0, 0, 0, 0.3);
+
+  /* Surface */
+  --surface-primary: var(--color-neutral-0);
+  --surface-secondary: var(--color-neutral-100);
+  --surface-hover: var(--color-neutral-100);
+  --surface-active: var(--color-neutral-200);
+
+  /* Text */
+  --text-primary: var(--color-neutral-900);
+  --text-secondary: var(--color-neutral-600);
+  --text-tertiary: var(--color-neutral-500);
+  --text-disabled: var(--color-neutral-300);
+  --text-inverse: var(--color-neutral-0);
+
+  /* Borders */
+  --border-primary: var(--color-neutral-200);
+  --border-secondary: var(--color-neutral-300);
+  --border-focus: var(--color-primary-500);
+
+  /* Interactive */
+  --interactive-primary: var(--color-primary-600);
+  --interactive-primary-hover: var(--color-primary-700);
+  --interactive-primary-active: var(--color-primary-800);
+  --interactive-danger: var(--color-severity-critical);
+  --interactive-danger-hover: #b91c1c;
+
+  /* Scrollbar */
+  --scrollbar-track: var(--color-neutral-100);
+  --scrollbar-thumb: var(--color-neutral-300);
+  --scrollbar-thumb-hover: var(--color-neutral-400);
+}

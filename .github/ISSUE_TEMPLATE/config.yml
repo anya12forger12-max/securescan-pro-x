@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security Vulnerability Report
+    url: mailto:security@malwarehashchecker.dev
+    about: Report security vulnerabilities privately via email. Do NOT open a public issue.
+  - name: Documentation
+    url: https://github.com/placeholder/MalwareHashChecker-Pro/tree/main/docs
+    about: Check the documentation for guides and API references
+  - name: Discussions
+    url: https://github.com/placeholder/MalwareHashChecker-Pro/discussions
+    about: Ask questions and discuss ideas with the community

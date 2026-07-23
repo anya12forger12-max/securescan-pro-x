@@ -1,0 +1,22 @@
+{
+  "name": "@securescan/sdk",
+  "version": "0.1.0",
+  "description": "SecureScan Pro X Plugin SDK for TypeScript",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "docs": "typedoc src/"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "typedoc": "^0.26.0",
+    "eslint": "^9.15.0"
+  },
+  "files": ["dist"],
+  "license": "MIT"
+}

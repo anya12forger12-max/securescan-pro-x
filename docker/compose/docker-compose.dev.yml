@@ -1,0 +1,32 @@
+# Docker Compose — Development Environment
+
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ../..
+      dockerfile: docker/dev/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../backend:/app
+      - securescan-data:/root/.securescan
+    environment:
+      - SECURESCAN_DEBUG=true
+      - SECURESCAN_LOG_LEVEL=debug
+    command: uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: ../docker/dev/Dockerfile.frontend
+    ports:
+      - "1420:1420"
+    volumes:
+      - ../../frontend:/app
+      - /app/node_modules
+    command: pnpm dev --host
+
+volumes:
+  securescan-data:

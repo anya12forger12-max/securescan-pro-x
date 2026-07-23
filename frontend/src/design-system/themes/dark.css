@@ -1,0 +1,43 @@
+/**
+ * SecureScan Pro X — Dark Theme (Default)
+ */
+
+:root,
+[data-theme="dark"] {
+  /* Backgrounds */
+  --bg-primary: var(--color-neutral-950);
+  --bg-secondary: var(--color-neutral-900);
+  --bg-tertiary: var(--color-neutral-800);
+  --bg-elevated: var(--color-neutral-800);
+  --bg-overlay: rgba(0, 0, 0, 0.5);
+
+  /* Surface */
+  --surface-primary: var(--color-neutral-800);
+  --surface-secondary: var(--color-neutral-700);
+  --surface-hover: var(--color-neutral-700);
+  --surface-active: var(--color-neutral-600);
+
+  /* Text */
+  --text-primary: var(--color-neutral-50);
+  --text-secondary: var(--color-neutral-300);
+  --text-tertiary: var(--color-neutral-400);
+  --text-disabled: var(--color-neutral-600);
+  --text-inverse: var(--color-neutral-950);
+
+  /* Borders */
+  --border-primary: var(--color-neutral-700);
+  --border-secondary: var(--color-neutral-600);
+  --border-focus: var(--color-primary-500);
+
+  /* Interactive */
+  --interactive-primary: var(--color-primary-500);
+  --interactive-primary-hover: var(--color-primary-400);
+  --interactive-primary-active: var(--color-primary-600);
+  --interactive-danger: var(--color-severity-critical);
+  --interactive-danger-hover: #b91c1c;
+
+  /* Scrollbar */
+  --scrollbar-track: var(--color-neutral-900);
+  --scrollbar-thumb: var(--color-neutral-600);
+  --scrollbar-thumb-hover: var(--color-neutral-500);
+}

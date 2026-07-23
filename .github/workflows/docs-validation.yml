@@ -1,0 +1,163 @@
+name: Documentation Validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "*.md"
+      - "CHANGELOG.md"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "*.md"
+      - "CHANGELOG.md"
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  markdown-lint:
+    name: Markdown Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install markdownlint-cli
+        run: npm install -g markdownlint-cli
+
+      - name: Run markdownlint
+        run: markdownlint "**/*.md" --ignore node_modules --ignore .venv --ignore venv
+
+  link-check:
+    name: Link Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install linkchecker
+        run: pip install linkchecker
+
+      - name: Check internal links in markdown files
+        run: |
+          find . -name "*.md" -not -path "./.git/*" -not -path "./.venv/*" -not -path "./venv/*" -not -path "./node_modules/*" | while read -r file; do
+            echo "Checking links in: $file"
+            grep -oP '\[.*?\]\((.*?)\)' "$file" | grep -oP '\((.*?)\)' | tr -d '()' | while read -r url; do
+              case "$url" in
+                http*|mailto*)
+                  continue
+                  ;;
+                *)
+                  if [ ! -e "$url" ] && [ ! -e "$(dirname "$file")/$url" ]; then
+                    echo "WARNING: Broken link in $file -> $url"
+                  fi
+                  ;;
+              esac
+            done
+          done
+
+  docs-build:
+    name: Documentation Build Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Check README rendering
+        run: |
+          python -c "
+          import re
+          with open('README.md') as f:
+              content = f.read()
+          # Basic markdown validation
+          assert len(content) > 100, 'README.md appears too short'
+          assert '# ' in content, 'README.md missing title'
+          print(f'README.md: {len(content)} chars, valid structure')
+          "
+
+      - name: Validate CHANGELOG format
+        if: hashFiles('CHANGELOG.md') != ''
+        run: |
+          python -c "
+          import re
+          with open('CHANGELOG.md') as f:
+              content = f.read()
+          # Check for standard changelog format
+          has_version = bool(re.search(r'## \[\d+\.\d+\.\d+\]', content))
+          has_date = bool(re.search(r'\d{4}-\d{2}-\d{2}', content))
+          print(f'CHANGELOG.md: {len(content)} chars')
+          print(f'Has version entries: {has_version}')
+          print(f'Has dates: {has_date}')
+          "
+
+  toc-validation:
+    name: Table of Contents Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Validate README table of contents
+        run: |
+          python -c "
+          import re
+          with open('README.md') as f:
+              content = f.read()
+
+          # Extract TOC links
+          toc_pattern = r'\[(.*?)\]\(#(.*?)\)'
+          toc_links = re.findall(toc_pattern, content)
+
+          # Extract headers
+          header_pattern = r'^#+\s+(.+)$'
+          headers = re.findall(header_pattern, content, re.MULTILINE)
+
+          # Convert headers to anchor format
+          def header_to_anchor(header):
+              return re.sub(r'[^a-z0-9 -]', '', header.lower()).replace(' ', '-').strip('-')
+
+          anchors = [header_to_anchor(h) for h in headers]
+
+          print(f'Found {len(toc_links)} TOC links')
+          print(f'Found {len(anchors)} headers')
+
+          broken = []
+          for text, anchor in toc_links:
+              if anchor not in anchors:
+                  broken.append((text, anchor))
+
+          if broken:
+              print('Broken TOC links:')
+              for text, anchor in broken:
+                  print(f'  - [{text}](#{anchor})')
+          else:
+              print('All TOC links valid')
+          "

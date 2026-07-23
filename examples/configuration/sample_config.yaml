@@ -1,0 +1,60 @@
+# ──────────────────────────────────────────────────────────────────
+# Malware Hash Checker Pro — Sample Configuration
+# ──────────────────────────────────────────────────────────────────
+# Copy this file to ~/.mhcp/config/mhcp.toml and edit as needed.
+# All keys shown here are optional; omitted keys use built-in defaults.
+#
+# Environment variables prefixed with MCP_ override matching keys:
+#   MCP_LOGGING__LEVEL=DEBUG  →  logging.level = "DEBUG"
+# ──────────────────────────────────────────────────────────────────
+
+version = "0.1.0"
+
+# ── Paths ────────────────────────────────────────────────────────
+[paths]
+data_dir   = "~/.mhcp/data"
+log_dir    = "~/.mhcp/logs"
+config_dir = "~/.mhcp/config"
+cache_dir  = "~/.mhcp/cache"
+database   = "~/.mhcp/data/mhcp.db"
+
+# ── Logging ──────────────────────────────────────────────────────
+[logging]
+level              = "INFO"
+format             = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+max_file_size_mb   = 10
+backup_count       = 5
+audit_enabled      = true
+audit_file         = "audit.log"
+redact_sensitive   = true
+
+# ── Security ─────────────────────────────────────────────────────
+[security]
+verify_hashes          = true
+hash_algorithms        = ["md5", "sha1", "sha256"]
+api_timeout_seconds    = 30
+max_retries            = 3
+rate_limit_per_minute  = 60
+ca_bundle              = ""
+
+# ── UI ───────────────────────────────────────────────────────────
+[ui]
+theme                    = "auto"
+show_notifications       = true
+notification_duration_ms = 3000
+column_width             = 80
+color_mode               = "auto"
+
+# ── Database ─────────────────────────────────────────────────────
+[database]
+engine       = "sqlite"
+pool_size    = 5
+max_overflow = 10
+echo         = false
+
+# ── Scanner ──────────────────────────────────────────────────────
+[scanner]
+max_concurrent_files  = 4
+default_algorithms    = ["sha256"]
+chunk_size_bytes      = 8192
+enable_progress       = true

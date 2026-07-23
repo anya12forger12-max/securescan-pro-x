@@ -1,0 +1,163 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "securescan-pro-x"
+version = "0.1.0"
+description = "Enterprise-Grade Defensive Security Assessment Platform"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13"
+authors = [
+    { name = "SecureScan Team", email = "team@securescan.dev" },
+]
+keywords = [
+    "security",
+    "assessment",
+    "defensive",
+    "compliance",
+    "hardening",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+]
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "aiosqlite>=0.20.0",
+    "alembic>=1.14.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "typer>=0.14.0",
+    "rich>=13.9.0",
+    "structlog>=24.4.0",
+    "cryptography>=44.0.0",
+    "httpx>=0.28.0",
+    "jinja2>=3.1.0",
+    "python-multipart>=0.0.17",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "pytest-benchmark>=4.0.0",
+    "httpx>=0.28.0",
+    "mypy>=1.13.0",
+    "ruff>=0.8.0",
+    "bandit>=1.8.0",
+    "safety>=3.2.0",
+    "pre-commit>=4.0.0",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.27.0",
+    "mkdocs-mermaid2-plugin>=2.0.0",
+]
+
+[project.scripts]
+securescan = "app.cli:app"
+
+[project.urls]
+Homepage = "https://securescan.dev"
+Documentation = "https://docs.securescan.dev"
+Repository = "https://github.com/securescan/securescan-pro-x"
+Issues = "https://github.com/securescan/securescan-pro-x/issues"
+Security = "https://securescan.dev/security"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "S",    # flake8-bandit
+    "A",    # flake8-builtins
+    "C4",   # flake8-comprehensions
+    "DTZ",  # flake8-datetimez
+    "T20",  # flake8-print
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "ARG",  # flake8-unused-arguments
+    "PTH",  # flake8-use-pathlib
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "S101",   # assert used (fine in tests)
+    "ARG001", # unused argument in abstract methods
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = [
+    "tests.*",
+]
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "e2e: End-to-end tests",
+    "slow: Slow tests",
+    "security: Security tests",
+    "accessibility: Accessibility tests",
+]
+addopts = [
+    "--strict-markers",
+    "--tb=short",
+    "-v",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "tests/*",
+    "app/cli.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+]
+fail_under = 80
+show_missing = true
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B101"]
