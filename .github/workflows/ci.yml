@@ -54,7 +54,7 @@ jobs:
           pytest tests/ -v --tb=short --cov=app --cov-report=xml --cov-report=term-missing
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-coverage
           path: backend/coverage.xml
@@ -142,7 +142,7 @@ jobs:
         working-directory: frontend
         run: pnpm build
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-dist
           path: frontend/dist
