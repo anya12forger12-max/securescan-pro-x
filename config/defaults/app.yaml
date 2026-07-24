@@ -1,0 +1,79 @@
+app:
+  name: "SecureScan Pro X"
+  version: "0.1.0"
+  environment: "development"
+  debug: false
+  locale: "en"
+
+logging:
+  level: "INFO"
+  format: "json"
+  file_enabled: true
+  console_enabled: true
+  max_file_size_mb: 50
+  max_files: 10
+  audit_enabled: true
+
+database:
+  engine: "sqlite"
+  path: "data/securescan.db"
+  echo: false
+  pool_size: 5
+  max_overflow: 10
+  backup_enabled: true
+  backup_interval_hours: 24
+
+security:
+  session_timeout_minutes: 30
+  max_login_attempts: 5
+  lockout_duration_minutes: 15
+  password_min_length: 12
+  require_mfa: false
+  cors_origins:
+    - "tauri://localhost"
+    - "http://localhost:1420"
+    - "http://localhost:3000"
+  rate_limit_requests: 100
+  rate_limit_window_seconds: 60
+
+network:
+  timeout_seconds: 30
+  max_concurrent_scans: 5
+  max_concurrent_hosts: 50
+  retry_attempts: 3
+  retry_delay_seconds: 5
+  dns_resolution_enabled: true
+
+scan:
+  max_scan_duration_minutes: 60
+  max_ports_per_scan: 1000
+  default_scan_profile: "quick"
+  evidence_retention_days: 90
+  auto_save_interval_seconds: 30
+
+plugins:
+  enabled: true
+  directory: "plugins"
+  sandbox_enabled: true
+  max_execution_time_seconds: 300
+
+report:
+  default_format: "html"
+  include_evidence: true
+  include_raw_data: false
+  templates_directory: "templates"
+
+ui:
+  theme: "dark"
+  language: "en"
+  sidebar_collapsed: false
+  animations_enabled: true
+  high_contrast_mode: false
+  font_size: "medium"
+
+backup:
+  enabled: true
+  directory: "backups"
+  max_backups: 10
+  auto_backup: true
+  backup_on_scan_complete: true

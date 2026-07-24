@@ -158,18 +158,58 @@ securescan-pro-x/
 | [ROADMAP.md](ROADMAP.md) | Development roadmap |
 | [CONFIGURATION.md](CONFIGURATION.md) | Configuration reference |
 
-## Development Phases
+## Quick Install from GitHub
 
-| Phase | Description | Status |
-|---|---|---|
-| **1A** | Foundation, Architecture, Repository Setup | In Progress |
-| 1B | Core Services & Data Layer | Planned |
-| 2 | Assessment Engine Foundation | Planned |
-| 3 | UI Development | Planned |
-| 4 | Plugin System | Planned |
-| 5 | Reporting | Planned |
-| 6 | Integration & Testing | Planned |
-| 7 | Polish & Release | Planned |
+```bash
+git clone https://github.com/securescan/securescan-pro-x.git
+cd securescan-pro-x
+bash install.sh
+```
+
+## Features
+
+| Feature | Description |
+|---|---|
+| **Port Scanner** | Discovers open ports and identifies running services |
+| **Header Checker** | Analyzes HTTP security headers (CSP, HSTS, X-Frame-Options, etc.) |
+| **SSL/TLS Analyzer** | Checks certificate validity, protocol versions, cipher suites |
+| **Password Strength** | Evaluates passwords against common patterns and breaches |
+| **Risk Scoring** | CVSS-based risk calculation with severity correlation |
+| **Report Generation** | HTML, JSON, Markdown, CSV reports with integrity hashes |
+| **Knowledge Base** | 24+ vulnerability entries with CWE/OWASP/NIST mappings |
+| **Plugin System** | Extensible scanner framework with built-in plugins |
+
+## Architecture
+
+```
+┌─────────────────────────────────────┐
+│        Presentation Layer           │  React 19 + TypeScript
+├─────────────────────────────────────┤
+│         REST API (FastAPI)          │  30+ endpoints, RBAC
+├─────────────────────────────────────┤
+│         Assessment Layer            │  Scan engine, plugins
+├─────────────────────────────────────┤
+│         Risk & Correlation          │  Cross-check analysis
+├─────────────────────────────────────┤
+│         Knowledge Engine            │  24+ vuln entries
+├─────────────────────────────────────┤
+│         Reporting Layer             │  4 formats, integrity
+├─────────────────────────────────────┤
+│         Database (SQLite)           │  FTS5, WAL mode
+└─────────────────────────────────────┘
+```
+
+## Security Features
+
+- **Rate limiting** — Token bucket algorithm per client
+- **Security headers** — CSP, HSTS, X-Frame-Options on all responses
+- **Input sanitization** — XSS protection middleware
+- **Audit logging** — All API requests logged with client IP
+- **Session management** — Secure cookie-based auth with timeout
+- **RBAC** — Admin/Operator/Viewer role hierarchy
+- **Password hashing** — bcrypt with configurable rounds
+- **Report integrity** — SHA-256 hashes on all generated reports
+- **No telemetry** — All data stays local, no cloud dependencies
 
 ## Contributing
 

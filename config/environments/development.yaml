@@ -1,0 +1,21 @@
+app:
+  environment: "development"
+  debug: true
+
+logging:
+  level: "DEBUG"
+  format: "console"
+  console_enabled: true
+
+database:
+  echo: true
+  path: "data/securescan-dev.db"
+
+security:
+  session_timeout_minutes: 120
+  max_login_attempts: 100
+  rate_limit_requests: 1000
+
+scan:
+  max_scan_duration_minutes: 120
+  max_concurrent_scans: 2

@@ -1,37 +1,38 @@
 #!/usr/bin/env bash
-# SecureScan Pro X — Start Development Servers
+# SecureScan Pro X — Start Development Environment
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 echo "Starting SecureScan Pro X development environment..."
 
 # Start backend
-echo "Starting backend server on http://localhost:8000..."
-cd backend
-source .venv/bin/activate 2>/dev/null || true
-uvicorn app.api:app --reload --host 127.0.0.1 --port 8000 &
+echo "Starting backend on http://localhost:8000..."
+cd "$ROOT_DIR/backend"
+if [ ! -d ".venv" ]; then
+    python3 -m venv .venv
+    source .venv/bin/activate
+    pip install -e ".[dev]"
+else
+    source .venv/bin/activate
+fi
+uvicorn app.api:app --reload --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 
 # Start frontend
-echo "Starting frontend server on http://localhost:1420..."
-cd ../frontend
+echo "Starting frontend on http://localhost:5173..."
+cd "$ROOT_DIR/frontend"
 pnpm dev &
 FRONTEND_PID=$!
 
 echo ""
-echo "Development servers started!"
+echo "SecureScan Pro X is running!"
+echo "  Frontend: http://localhost:5173"
 echo "  Backend:  http://localhost:8000"
-echo "  Frontend: http://localhost:1420"
 echo "  API Docs: http://localhost:8000/docs"
 echo ""
-echo "Press Ctrl+C to stop all servers."
+echo "Press Ctrl+C to stop both servers."
 
-# Cleanup on exit
-cleanup() {
-    echo "Stopping servers..."
-    kill $BACKEND_PID 2>/dev/null || true
-    kill $FRONTEND_PID 2>/dev/null || true
-    wait
-}
-trap cleanup EXIT INT TERM
-
+trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; exit" INT TERM
 wait

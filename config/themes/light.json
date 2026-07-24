@@ -1,0 +1,48 @@
+{
+  "name": "light",
+  "label": "Light Theme",
+  "colors": {
+    "bg": {
+      "primary": "#ffffff",
+      "secondary": "#f8fafc",
+      "tertiary": "#f1f5f9"
+    },
+    "surface": {
+      "primary": "#ffffff",
+      "secondary": "#f8fafc",
+      "elevated": "#ffffff"
+    },
+    "text": {
+      "primary": "#0f172a",
+      "secondary": "#475569",
+      "muted": "#94a3b8",
+      "inverse": "#f8fafc"
+    },
+    "border": {
+      "primary": "#e2e8f0",
+      "secondary": "#cbd5e1",
+      "strong": "#94a3b8"
+    },
+    "severity": {
+      "critical": "#dc2626",
+      "high": "#ea580c",
+      "medium": "#ca8a04",
+      "low": "#2563eb",
+      "info": "#6b7280"
+    },
+    "status": {
+      "success": "#16a34a",
+      "warning": "#d97706",
+      "error": "#dc2626",
+      "info": "#2563eb"
+    },
+    "accent": {
+      "primary": "#2563eb",
+      "secondary": "#7c3aed",
+      "tertiary": "#0891b2"
+    },
+    "focus": {
+      "ring": "#2563eb"
+    }
+  }
+}

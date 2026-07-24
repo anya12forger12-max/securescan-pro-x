@@ -1,0 +1,48 @@
+{
+  "name": "dark",
+  "label": "Dark Theme",
+  "colors": {
+    "bg": {
+      "primary": "#0a0e17",
+      "secondary": "#111827",
+      "tertiary": "#1f2937"
+    },
+    "surface": {
+      "primary": "#1a2332",
+      "secondary": "#243044",
+      "elevated": "#2d3a4f"
+    },
+    "text": {
+      "primary": "#f1f5f9",
+      "secondary": "#94a3b8",
+      "muted": "#64748b",
+      "inverse": "#0a0e17"
+    },
+    "border": {
+      "primary": "#334155",
+      "secondary": "#475569",
+      "strong": "#64748b"
+    },
+    "severity": {
+      "critical": "#ef4444",
+      "high": "#f97316",
+      "medium": "#eab308",
+      "low": "#3b82f6",
+      "info": "#6b7280"
+    },
+    "status": {
+      "success": "#22c55e",
+      "warning": "#f59e0b",
+      "error": "#ef4444",
+      "info": "#3b82f6"
+    },
+    "accent": {
+      "primary": "#3b82f6",
+      "secondary": "#8b5cf6",
+      "tertiary": "#06b6d4"
+    },
+    "focus": {
+      "ring": "#3b82f6"
+    }
+  }
+}

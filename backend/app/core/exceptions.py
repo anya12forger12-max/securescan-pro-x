@@ -81,6 +81,42 @@ class AssessmentCancelledError(AssessmentError):
     """Raised when an assessment is cancelled."""
 
 
+class AssessmentInvalidTransitionError(AssessmentError):
+    """Raised when an invalid state transition is attempted."""
+
+
+class AssessmentConflictError(AssessmentError):
+    """Raised when an assessment operation conflicts with current state."""
+
+
+# ── Evidence Errors ────────────────────────────────────────────────
+
+class EvidenceError(SecureScanError):
+    """Raised when an evidence operation fails."""
+
+
+class EvidenceNotFoundError(EvidenceError):
+    """Raised when an evidence item does not exist."""
+
+
+class EvidenceIntegrityError(EvidenceError):
+    """Raised when evidence integrity verification fails."""
+
+
+# ── Report Errors ──────────────────────────────────────────────────
+
+class ReportError(SecureScanError):
+    """Raised when a report operation fails."""
+
+
+class ReportGenerationError(ReportError):
+    """Raised when report generation fails."""
+
+
+class ReportFormatError(ReportError):
+    """Raised when an unsupported report format is requested."""
+
+
 # ── Plugin Errors ─────────────────────────────────────────────────
 
 class PluginError(SecureScanError):
