@@ -60,32 +60,258 @@ export interface AssetUpdate {
 // ── Assessment ──────────────────────────────────────────────────
 
 export type AssessmentStatus =
-  | "pending"
+  | "draft"
+  | "queued"
+  | "preparing"
   | "running"
+  | "collecting_evidence"
+  | "normalizing_results"
+  | "correlating"
+  | "generating_report"
   | "completed"
-  | "failed"
-  | "cancelled";
+  | "archived"
+  | "paused"
+  | "cancelled"
+  | "failed";
+
+export type AssessmentPriority = "low" | "normal" | "high" | "critical";
 
 export interface Assessment extends IDMixin {
   workspaceId: string;
   name: string;
   description: string | null;
   status: AssessmentStatus;
+  priority: AssessmentPriority;
+  version: number;
+  profileId: string | null;
+  policyId: string | null;
+  queuedAt: string | null;
   startedAt: string | null;
+  pausedAt: string | null;
   completedAt: string | null;
+  archivedAt: string | null;
+  cancelledAt: string | null;
+  failedAt: string | null;
   targetCount: number;
   findingCount: number;
+  evidenceCount: number;
+  progressPercent: number;
+  errorMessage: string | null;
+  retryCount: number;
+  maxRetries: number;
+  tags: string[];
 }
 
 export interface AssessmentCreate {
   name: string;
   description?: string;
+  priority?: AssessmentPriority;
+  profileId?: string;
+  policyId?: string;
   assetIds?: string[];
+  tags?: string[];
 }
 
 export interface AssessmentUpdate {
   name?: string;
   description?: string;
+  priority?: AssessmentPriority;
+}
+
+// ── Assessment Profile ───────────────────────────────────────────
+
+export interface AssessmentProfile extends IDMixin {
+  name: string;
+  description: string | null;
+  isBuiltin: boolean;
+  timeoutSeconds: number;
+  concurrencyLimit: number;
+  evidenceCollection: boolean;
+  reportingStyle: string;
+}
+
+// ── Assessment Policy ────────────────────────────────────────────
+
+export interface AssessmentPolicy extends IDMixin {
+  name: string;
+  description: string | null;
+  isBuiltin: boolean;
+  maxRuntimeSeconds: number;
+  maxMemoryMb: number;
+  maxCpuPercent: number;
+  loggingLevel: string;
+  retentionDays: number;
+  exportAllowed: boolean;
+  approvalRequired: boolean;
+  evidenceStorage: string;
+}
+
+// ── Assessment Job ───────────────────────────────────────────────
+
+export type JobStatus = AssessmentStatus;
+
+export interface AssessmentJob extends IDMixin {
+  assessmentId: string;
+  pluginId: string;
+  targetId: string | null;
+  status: JobStatus;
+  priority: number;
+  timeoutSeconds: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  resultJson: string | null;
+  errorMessage: string | null;
+  retryCount: number;
+}
+
+// ── Assessment Target ────────────────────────────────────────────
+
+export interface AssessmentTarget extends IDMixin {
+  assessmentId: string;
+  assetId: string;
+  targetType: string;
+  configJson: string | null;
+  status: AssessmentStatus;
+}
+
+// ── Evidence ─────────────────────────────────────────────────────
+
+export type EvidenceType =
+  | "structured_data"
+  | "configuration_file"
+  | "log"
+  | "metadata"
+  | "manual_note"
+  | "screenshot"
+  | "imported_report";
+
+export type EvidenceClassification =
+  | "public"
+  | "internal"
+  | "confidential"
+  | "restricted";
+
+export interface Evidence extends IDMixin {
+  assessmentId: string;
+  findingId: string | null;
+  evidenceType: EvidenceType;
+  title: string;
+  description: string | null;
+  integrityHash: string;
+  source: string;
+  collector: string;
+  classification: EvidenceClassification;
+  tags: string[];
+  retentionDays: number;
+}
+
+// ── Recommendation ──────────────────────────────────────────────
+
+export interface Recommendation extends IDMixin {
+  assessmentId: string;
+  findingId: string | null;
+  title: string;
+  description: string | null;
+  priority: AssessmentPriority;
+  effort: string | null;
+  explanation: string | null;
+  whyItMatters: string | null;
+  suggestedActions: string[];
+  references: string[];
+}
+
+// ── Timeline ────────────────────────────────────────────────────
+
+export interface TimelineEvent extends IDMixin {
+  assessmentId: string;
+  eventType: string;
+  title: string;
+  description: string | null;
+  severity: string | null;
+  actor: string | null;
+}
+
+// ── Assessment Statistics ────────────────────────────────────────
+
+export interface AssessmentStatistics {
+  assessmentId: string;
+  totalFindings: number;
+  criticalCount: number;
+  highCount: number;
+  mediumCount: number;
+  lowCount: number;
+  infoCount: number;
+  totalEvidence: number;
+  durationSeconds: number | null;
+  targetCount: number;
+  pluginCount: number;
+  riskScore: number | null;
+}
+
+// ── Assessment Dashboard ─────────────────────────────────────────
+
+export interface AssessmentDashboard {
+  totalAssessments: number;
+  draftCount: number;
+  queuedCount: number;
+  runningCount: number;
+  completedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+  recentAssessments: Assessment[];
+  upcomingScheduled: Assessment[];
+  severityBreakdown: Record<Severity, number>;
+  evidenceCount: number;
+  reportCount: number;
+}
+
+// ── Assessment Report ────────────────────────────────────────────
+
+export type ReportFormat = "json" | "markdown" | "html" | "csv";
+
+export interface AssessmentReport extends IDMixin {
+  assessmentId: string;
+  format: ReportFormat;
+  title: string;
+  contentLength: number;
+  integrityHash: string;
+  generatedAt: string;
+  generatedBy: string;
+}
+
+// ── Assessment Search ────────────────────────────────────────────
+
+export interface AssessmentSearchResult {
+  id: string;
+  type: "assessment" | "finding" | "evidence" | "report";
+  title: string;
+  summary: string | null;
+  relevanceScore: number;
+  source: string;
+}
+
+export interface AssessmentSearchResponse {
+  query: string;
+  totalResults: number;
+  results: AssessmentSearchResult[];
+  offset: number;
+  limit: number;
+}
+
+// ── Assessment Notes ─────────────────────────────────────────────
+
+export interface AssessmentNote extends IDMixin {
+  assessmentId: string;
+  author: string;
+  content: string;
+  isPinned: boolean;
+}
+
+// ── Assessment Tags ──────────────────────────────────────────────
+
+export interface AssessmentTag extends IDMixin {
+  assessmentId: string;
+  tag: string;
 }
 
 // ── Finding ─────────────────────────────────────────────────────

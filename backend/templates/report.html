@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ metadata.title | default('Assessment Report') }}</title>
+  <style>
+    :root {
+      --bg-primary: #0b1120;
+      --bg-secondary: #111827;
+      --bg-card: #1e293b;
+      --bg-card-hover: #263348;
+      --border-color: #334155;
+      --border-accent: #3b82f6;
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-blue: #3b82f6;
+      --accent-cyan: #06b6d4;
+      --severity-critical: #ef4444;
+      --severity-critical-bg: rgba(239, 68, 68, 0.15);
+      --severity-high: #f97316;
+      --severity-high-bg: rgba(249, 115, 22, 0.15);
+      --severity-medium: #eab308;
+      --severity-medium-bg: rgba(234, 179, 8, 0.15);
+      --severity-low: #22c55e;
+      --severity-low-bg: rgba(34, 197, 94, 0.15);
+      --severity-info: #3b82f6;
+      --severity-info-bg: rgba(59, 130, 246, 0.15);
+      --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+      --radius: 8px;
+      --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -2px rgba(0, 0, 0, 0.2);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.7;
+      min-height: 100vh;
+    }
+
+    .report-container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+
+    /* ── Cover Page ──────────────────────────────────────── */
+    .cover-page {
+      text-align: center;
+      padding: 4rem 2rem;
+      margin-bottom: 3rem;
+      border-bottom: 2px solid var(--border-color);
+      position: relative;
+    }
+
+    .cover-page::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 80px;
+      height: 4px;
+      background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan));
+      border-radius: 2px;
+    }
+
+    .cover-logo {
+      font-size: 0.875rem;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--accent-cyan);
+      margin-bottom: 1.5rem;
+    }
+
+    .cover-title {
+      font-size: 2.5rem;
+      font-weight: 800;
+      color: var(--text-primary);
+      margin-bottom: 0.5rem;
+      line-height: 1.2;
+    }
+
+    .cover-subtitle {
+      font-size: 1.125rem;
+      color: var(--text-secondary);
+      margin-bottom: 2rem;
+    }
+
+    .cover-meta {
+      display: flex;
+      justify-content: center;
+      gap: 2rem;
+      flex-wrap: wrap;
+    }
+
+    .cover-meta-item {
+      text-align: center;
+    }
+
+    .cover-meta-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      margin-bottom: 0.25rem;
+    }
+
+    .cover-meta-value {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+    }
+
+    /* ── Sections ────────────────────────────────────────── */
+    .section {
+      margin-bottom: 2.5rem;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .section-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+      flex-shrink: 0;
+    }
+
+    .section-title {
+      font-size: 1.375rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    /* ── Executive Summary ──────────────────────────────── */
+    .summary-card {
+      background: var(--bg-card);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      border-left: 4px solid var(--accent-blue);
+      box-shadow: var(--shadow);
+    }
+
+    .summary-card p {
+      color: var(--text-secondary);
+      font-size: 1rem;
+      line-height: 1.8;
+    }
+
+    /* ── Assessment Details ──────────────────────────────── */
+    .details-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+    }
+
+    .detail-item {
+      background: var(--bg-card);
+      border-radius: var(--radius);
+      padding: 1rem 1.25rem;
+      border: 1px solid var(--border-color);
+    }
+
+    .detail-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 0.25rem;
+    }
+
+    .detail-value {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    /* ── Severity Chart ──────────────────────────────────── */
+    .chart-container {
+      display: flex;
+      align-items: center;
+      gap: 2.5rem;
+      flex-wrap: wrap;
+      background: var(--bg-card);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      border: 1px solid var(--border-color);
+    }
+
+    .donut-chart {
+      flex-shrink: 0;
+    }
+
+    .severity-legend {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      flex: 1;
+      min-width: 200px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .legend-color {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+
+    .legend-label {
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      flex: 1;
+    }
+
+    .legend-count {
+      font-size: 1rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      color: var(--text-primary);
+    }
+
+    .legend-pct {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      min-width: 42px;
+      text-align: right;
+    }
+
+    /* ── Findings Table ──────────────────────────────────── */
+    .findings-table-wrapper {
+      overflow-x: auto;
+      border-radius: var(--radius);
+      border: 1px solid var(--border-color);
+    }
+
+    .findings-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    .findings-table thead th {
+      background: var(--bg-card);
+      padding: 0.875rem 1rem;
+      text-align: left;
+      font-weight: 700;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+      border-bottom: 2px solid var(--border-color);
+      white-space: nowrap;
+    }
+
+    .findings-table tbody td {
+      padding: 0.875rem 1rem;
+      border-bottom: 1px solid var(--border-color);
+      color: var(--text-primary);
+      vertical-align: top;
+    }
+
+    .findings-table tbody tr:hover {
+      background: var(--bg-card-hover);
+    }
+
+    .findings-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* ── Severity Badges ────────────────────────────────── */
+    .severity-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.25rem 0.65rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .severity-critical {
+      background: var(--severity-critical-bg);
+      color: var(--severity-critical);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .severity-high {
+      background: var(--severity-high-bg);
+      color: var(--severity-high);
+      border: 1px solid rgba(249, 115, 22, 0.3);
+    }
+
+    .severity-medium {
+      background: var(--severity-medium-bg);
+      color: var(--severity-medium);
+      border: 1px solid rgba(234, 179, 8, 0.3);
+    }
+
+    .severity-low {
+      background: var(--severity-low-bg);
+      color: var(--severity-low);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+
+    .severity-info {
+      background: var(--severity-info-bg);
+      color: var(--severity-info);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+
+    /* ── Recommendation Cards ────────────────────────────── */
+    .rec-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .rec-card {
+      background: var(--bg-card);
+      border-radius: var(--radius);
+      padding: 1.25rem;
+      border: 1px solid var(--border-color);
+    }
+
+    .rec-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.5rem;
+    }
+
+    .rec-card-title {
+      font-weight: 700;
+      font-size: 1rem;
+      color: var(--text-primary);
+    }
+
+    .rec-card-body {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+
+    .rec-card-actions {
+      margin-top: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .rec-card-actions h4 {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    .rec-card-actions ol {
+      padding-left: 1.25rem;
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+    }
+
+    .rec-card-actions li {
+      margin-bottom: 0.3rem;
+    }
+
+    /* ── Methodology ────────────────────────────────────── */
+    .methodology-text {
+      background: var(--bg-card);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      line-height: 1.8;
+    }
+
+    /* ── Footer / Integrity ──────────────────────────────── */
+    .report-footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border-color);
+      text-align: center;
+    }
+
+    .footer-text {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    .integrity-hash {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      word-break: break-all;
+      background: var(--bg-card);
+      padding: 0.5rem 1rem;
+      border-radius: 4px;
+      display: inline-block;
+      border: 1px solid var(--border-color);
+    }
+
+    .no-data {
+      text-align: center;
+      padding: 2rem;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    /* ── Print Styles ───────────────────────────────────── */
+    @media print {
+      body {
+        background: #ffffff;
+        color: #1a1a1a;
+        font-size: 11pt;
+      }
+
+      .report-container {
+        padding: 0;
+        max-width: none;
+      }
+
+      .cover-page {
+        border-bottom-color: #cccccc;
+        padding: 2rem 0;
+      }
+
+      .cover-title { color: #1a1a1a; }
+      .cover-subtitle { color: #555555; }
+      .cover-meta-value { color: #333333; }
+
+      .section-header { border-bottom-color: #cccccc; }
+      .section-title { color: #1a1a1a; }
+
+      .summary-card {
+        background: #f8f9fa;
+        border-left-color: #3b82f6;
+      }
+
+      .summary-card p { color: #333333; }
+
+      .detail-item {
+        background: #f8f9fa;
+        border-color: #dddddd;
+      }
+
+      .detail-label { color: #666666; }
+      .detail-value { color: #1a1a1a; }
+
+      .chart-container {
+        background: #f8f9fa;
+        border-color: #dddddd;
+      }
+
+      .findings-table thead th {
+        background: #f0f0f0;
+        border-bottom-color: #cccccc;
+        color: #333333;
+      }
+
+      .findings-table tbody td {
+        border-bottom-color: #eeeeee;
+        color: #333333;
+      }
+
+      .findings-table tbody tr:hover {
+        background: transparent;
+      }
+
+      .severity-badge {
+        border: 1px solid #cccccc;
+      }
+
+      .rec-card {
+        background: #f8f9fa;
+        border-color: #dddddd;
+      }
+
+      .rec-card-title { color: #1a1a1a; }
+      .rec-card-body { color: #555555; }
+
+      .methodology-text {
+        background: #f8f9fa;
+        border-color: #dddddd;
+        color: #555555;
+      }
+
+      .legend-label { color: #555555; }
+      .legend-count { color: #1a1a1a; }
+      .legend-pct { color: #888888; }
+
+      .report-footer { border-top-color: #cccccc; }
+      .footer-text { color: #888888; }
+
+      .integrity-hash {
+        background: #f0f0f0;
+        border-color: #cccccc;
+        color: #555555;
+      }
+    }
+
+    /* ── Responsive ──────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .report-container { padding: 1rem; }
+      .cover-title { font-size: 1.75rem; }
+      .chart-container { flex-direction: column; }
+      .details-grid { grid-template-columns: 1fr; }
+      .cover-meta { flex-direction: column; gap: 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="report-container">
+
+  <!-- ═══ Cover Page ═══ -->
+  <header class="cover-page">
+    <div class="cover-logo">SecureScan Pro X</div>
+    <h1 class="cover-title">{{ metadata.title | default('Assessment Report') }}</h1>
+    <p class="cover-subtitle">Comprehensive Security Assessment Findings and Recommendations</p>
+    <div class="cover-meta">
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Report ID</div>
+        <div class="cover-meta-value">{{ report_id }}</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Assessment</div>
+        <div class="cover-meta-value">{{ assessment.id | default('N/A') }}</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Generated</div>
+        <div class="cover-meta-value">{{ generated_at }}</div>
+      </div>
+      <div class="cover-meta-item">
+        <div class="cover-meta-label">Version</div>
+        <div class="cover-meta-value">{{ metadata.version | default('1.0') }}</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ═══ Executive Summary ═══ -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon" style="background: var(--severity-info-bg); color: var(--accent-blue);">
+        &#x1F4CB;
+      </div>
+      <h2 class="section-title">Executive Summary</h2>
+    </div>
+    <div class="summary-card">
+      <p>{{ executive_summary | default('No executive summary available.') }}</p>
+    </div>
+  </section>
+
+  <!-- ═══ Assessment Details ═══ -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon" style="background: rgba(6, 182, 212, 0.15); color: var(--accent-cyan);">
+        &#x1F4C4;
+      </div>
+      <h2 class="section-title">Assessment Details</h2>
+    </div>
+    <div class="details-grid">
+      <div class="detail-item">
+        <div class="detail-label">Status</div>
+        <div class="detail-value">{{ assessment.status | default('N/A') }}</div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-label">Priority</div>
+        <div class="detail-value">{{ assessment.priority | default('N/A') }}</div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-label">Targets</div>
+        <div class="detail-value">{{ assessment.target_count | default(0) }}</div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-label">Total Findings</div>
+        <div class="detail-value">{{ total_findings }}</div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-label">Started</div>
+        <div class="detail-value">{{ assessment.started_at | default('N/A') }}</div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-label">Completed</div>
+        <div class="detail-value">{{ assessment.completed_at | default('N/A') }}</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ Severity Distribution (SVG Donut Chart) ═══ -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon" style="background: rgba(239, 68, 68, 0.15); color: var(--severity-critical);">
+        &#x1F534;
+      </div>
+      <h2 class="section-title">Severity Distribution</h2>
+    </div>
+    <div class="chart-container">
+      <div class="donut-chart">
+        <svg width="180" height="180" viewBox="0 0 42 42" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="21" cy="21" r="15.91549431" fill="transparent" stroke="#334155" stroke-width="5"/>
+          {% set ns = namespace(offset=25) %}
+          {% for sev in ['critical', 'high', 'medium', 'low', 'info'] %}
+            {% set count = severity.get(sev, 0) %}
+            {% if total_findings > 0 %}
+              {% set pct = (count / total_findings) * 100 %}
+            {% else %}
+              {% set pct = 0 %}
+            {% endif %}
+            {% if pct > 0 %}
+              {% set colors = {'critical': '#ef4444', 'high': '#f97316', 'medium': '#eab308', 'low': '#22c55e', 'info': '#3b82f6'} %}
+              <circle
+                cx="21" cy="21" r="15.91549431"
+                fill="transparent"
+                stroke="{{ colors[sev] }}"
+                stroke-width="5"
+                stroke-dasharray="{{ pct }} {{ 100 - pct }}"
+                stroke-dashoffset="{{ ns.offset }}"
+                stroke-linecap="round"
+                opacity="0.9"
+              />
+              {% set ns.offset = ns.offset - pct %}
+            {% endif %}
+          {% endfor %}
+          <text x="21" y="20" text-anchor="middle" font-size="5" fill="#f1f5f9" font-weight="700" font-family="system-ui">{{ total_findings }}</text>
+          <text x="21" y="24.5" text-anchor="middle" font-size="2.2" fill="#94a3b8" font-family="system-ui">findings</text>
+        </svg>
+      </div>
+      <div class="severity-legend">
+        {% set colors = {'critical': '#ef4444', 'high': '#f97316', 'medium': '#eab308', 'low': '#22c55e', 'info': '#3b82f6'} %}
+        {% for sev in ['critical', 'high', 'medium', 'low', 'info'] %}
+          <div class="legend-item">
+            <div class="legend-color" style="background: {{ colors[sev] }};"></div>
+            <span class="legend-label">{{ sev | upper }}</span>
+            <span class="legend-count">{{ severity.get(sev, 0) }}</span>
+            <span class="legend-pct">{{ severity_pcts.get(sev, 0) }}%</span>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ Findings Table ═══ -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon" style="background: rgba(249, 115, 22, 0.15); color: var(--severity-high);">
+        &#x1F50D;
+      </div>
+      <h2 class="section-title">Findings ({{ findings | length }})</h2>
+    </div>
+    {% if findings %}
+    <div class="findings-table-wrapper">
+      <table class="findings-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Title</th>
+            <th>Severity</th>
+            <th>Category</th>
+            <th>Status</th>
+            <th>CVSS</th>
+            <th>CWE</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in findings %}
+          <tr>
+            <td style="font-family: var(--font-mono); color: var(--text-muted);">{{ loop.index }}</td>
+            <td style="font-weight: 600;">{{ f.title | default('Untitled') }}</td>
+            <td>
+              <span class="severity-badge severity-{{ f.severity | default('info') }}">
+                {{ f.severity | default('info') | upper }}
+              </span>
+            </td>
+            <td style="color: var(--text-secondary);">{{ f.category | default('N/A') }}</td>
+            <td style="color: var(--text-secondary);">{{ f.status | default('open') }}</td>
+            <td style="font-family: var(--font-mono); color: var(--text-secondary);">
+              {{ f.cvss_score | default('-') }}
+            </td>
+            <td style="font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-muted);">
+              {% if f.cwe_ids %}
+                {% for cwe in f.cwe_ids %}
+                  {{ cwe }}{% if not loop.last %}, {% endif %}
+                {% endfor %}
+              {% else %}
+                -
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="no-data">No findings recorded for this assessment.</div>
+    {% endif %}
+  </section>
+
+  <!-- ═══ Recommendations ═══ -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon" style="background: rgba(34, 197, 94, 0.15); color: var(--severity-low);">
+        &#x2705;
+      </div>
+      <h2 class="section-title">Recommendations</h2>
+    </div>
+    {% if recommendations %}
+    <div class="rec-list">
+      {% for rec in recommendations %}
+      <div class="rec-card">
+        <div class="rec-card-header">
+          <div class="rec-card-title">{{ rec.title | default('Recommendation') }}</div>
+          {% if rec.priority %}
+          <span class="severity-badge severity-{{ rec.priority }}">{{ rec.priority | upper }}</span>
+          {% endif %}
+        </div>
+        {% if rec.description %}
+        <div class="rec-card-body">{{ rec.description }}</div>
+        {% endif %}
+        {% if rec.suggested_actions %}
+        <div class="rec-card-actions">
+          <h4>Suggested Actions</h4>
+          <ol>
+            {% for action in rec.suggested_actions %}
+            <li>{{ action }}</li>
+            {% endfor %}
+          </ol>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="no-data">No recommendations generated.</div>
+    {% endif %}
+  </section>
+
+  <!-- ═══ Methodology ═══ -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon" style="background: rgba(6, 182, 212, 0.15); color: var(--accent-cyan);">
+        &#x1F4D6;
+      </div>
+      <h2 class="section-title">Methodology</h2>
+    </div>
+    <div class="methodology-text">
+      <p>
+        This report was generated using <strong>SecureScan Pro X</strong>, an automated
+        security assessment platform. The assessment was conducted following industry-standard
+        methodologies aligned with OWASP Testing Guide, NIST SP 800-115, and CIS Benchmarks.
+      </p>
+      <br>
+      <p>
+        Findings are classified using the <strong>Common Vulnerability Scoring System (CVSS) v3.1</strong>
+        and mapped to <strong>CWE identifiers</strong> where applicable. Severity levels follow
+        the standard scale: Critical (9.0-10.0), High (7.0-8.9), Medium (4.0-6.9),
+        Low (0.1-3.9), and Info (0.0).
+      </p>
+      <br>
+      <p>
+        Each finding has been validated and includes evidence collected during the assessment.
+        The report includes a SHA-256 integrity hash to verify that the content has not been
+        tampered with since generation.
+      </p>
+    </div>
+  </section>
+
+  <!-- ═══ Footer ═══ -->
+  <footer class="report-footer">
+    <p class="footer-text">
+      {{ appendix.report_format_note | default('Generated by SecureScan Pro X') }}
+      &middot; Tool Version: {{ appendix.tool_version | default('1.0') }}
+      &middot; Report ID: {{ report_id }}
+    </p>
+    <p class="footer-text" style="margin-top: 0.75rem;">SHA-256 Integrity Hash:</p>
+    <code class="integrity-hash" id="integrity-hash-placeholder">{{ integrity_hash }}</code>
+  </footer>
+
+</div>
+
+</body>
+</html>

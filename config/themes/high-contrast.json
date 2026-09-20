@@ -1,0 +1,48 @@
+{
+  "name": "high-contrast",
+  "label": "High Contrast",
+  "colors": {
+    "bg": {
+      "primary": "#000000",
+      "secondary": "#1a1a1a",
+      "tertiary": "#2d2d2d"
+    },
+    "surface": {
+      "primary": "#1a1a1a",
+      "secondary": "#2d2d2d",
+      "elevated": "#3d3d3d"
+    },
+    "text": {
+      "primary": "#ffffff",
+      "secondary": "#e0e0e0",
+      "muted": "#b0b0b0",
+      "inverse": "#000000"
+    },
+    "border": {
+      "primary": "#ffffff",
+      "secondary": "#e0e0e0",
+      "strong": "#ffffff"
+    },
+    "severity": {
+      "critical": "#ff4444",
+      "high": "#ff8800",
+      "medium": "#ffcc00",
+      "low": "#4488ff",
+      "info": "#cccccc"
+    },
+    "status": {
+      "success": "#44ff44",
+      "warning": "#ffcc00",
+      "error": "#ff4444",
+      "info": "#4488ff"
+    },
+    "accent": {
+      "primary": "#4488ff",
+      "secondary": "#aa66ff",
+      "tertiary": "#00cccc"
+    },
+    "focus": {
+      "ring": "#ffff00"
+    }
+  }
+}

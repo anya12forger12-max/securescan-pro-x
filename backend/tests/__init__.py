@@ -6,7 +6,7 @@ import pytest
 
 from app.services.workspace import InMemoryWorkspaceService
 from app.services.asset import InMemoryAssetService
-from app.services.assessment import InMemoryAssessmentService
+from app.services.assessment.orchestrator import InMemoryOrchestrator
 from app.services.audit import InMemoryAuditService
 from app.services.configuration import InMemoryConfigurationService
 from app.services.plugin import InMemoryPluginManager
@@ -25,9 +25,9 @@ def asset_service() -> InMemoryAssetService:
 
 
 @pytest.fixture
-def assessment_service() -> InMemoryAssessmentService:
-    """Create a fresh assessment service for testing."""
-    return InMemoryAssessmentService()
+def assessment_service() -> InMemoryOrchestrator:
+    """Create a fresh orchestrator for testing."""
+    return InMemoryOrchestrator()
 
 
 @pytest.fixture

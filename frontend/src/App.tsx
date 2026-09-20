@@ -1,107 +1,160 @@
 /**
- * SecureScan Pro X — Root Application Component
- *
- * Renders the main application with theme support and routing.
+ * SecureScan Pro X — Main Application
  */
-
-import React from "react";
+import React, { useEffect } from "react";
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate } from "react-router-dom";
 import { AppLayout } from "./components/layout/app-layout";
 import { Button } from "./components/ui/button";
-import { Card, CardHeader, CardBody } from "./components/ui/card";
-import { StatusBadge } from "./components/status/status-badge";
+import { ToastContainer } from "./components/ui/utility-components";
+import {
+  HomeIcon, SearchIcon, ServerIcon, GlobeIcon, ShieldIcon,
+  SettingsIcon, LogOutIcon, BarChartIcon, UserIcon,
+} from "./components/icons";
+import { LoginPage } from "./pages/LoginPage";
+import { DashboardPage } from "./pages/DashboardPage";
+import { ScannerPage } from "./pages/ScannerPage";
+import { WorkspacesPage } from "./pages/WorkspacesPage";
+import { AssetsPage } from "./pages/AssetsPage";
+import { AssessmentsPage } from "./pages/AssessmentsPage";
+import { SettingsPage } from "./pages/SettingsPage";
+import { useAuthStore, useUIStore } from "./stores";
+import { authApi } from "./utils/api";
 
-export function App(): JSX.Element {
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated, isLoading } = useAuthStore();
+  if (isLoading) return <div className="loading-screen">Loading...</div>;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
+
+function AppHeader() {
+  const user = useAuthStore((s) => s.user);
+  const logout = useAuthStore((s) => s.logout);
+  const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    try { await authApi.logout(); } catch { /* ok */ }
+    logout();
+    navigate("/login");
+  };
+
+  return (
+    <>
+      <div className="header-brand">
+        <ShieldIcon size={28} />
+        <h1>SecureScan Pro X</h1>
+      </div>
+      <div className="header-actions">
+        <div className="header-user">
+          <UserIcon size={18} />
+          <span>{user?.display_name || user?.username}</span>
+        </div>
+        <Button variant="ghost" size="sm" onClick={handleLogout} aria-label="Sign out">
+          Sign Out
+        </Button>
+      </div>
+    </>
+  );
+}
+
+function AppSidebar() {
+  const links = [
+    { to: "/", icon: <HomeIcon size={18} />, label: "Dashboard" },
+    { to: "/scanner", icon: <SearchIcon size={18} />, label: "Scanner" },
+    { to: "/workspaces", icon: <ServerIcon size={18} />, label: "Workspaces" },
+    { to: "/assets", icon: <GlobeIcon size={18} />, label: "Assets" },
+    { to: "/assessments", icon: <BarChartIcon size={18} />, label: "Assessments" },
+    { to: "/settings", icon: <SettingsIcon size={18} />, label: "Settings" },
+  ];
+
+  return (
+    <nav className="sidebar-nav" aria-label="Main navigation">
+      <ul className="sidebar-nav__list">
+        {links.map((link) => (
+          <li key={link.to}>
+            <NavLink
+              to={link.to}
+              end={link.to === "/"}
+              className={({ isActive }) =>
+                `sidebar-nav__link ${isActive ? "sidebar-nav__link--active" : ""}`
+              }
+            >
+              {link.icon}
+              <span>{link.label}</span>
+            </NavLink>
+          </li>
+        ))}
+      </ul>
+      <div className="sidebar-footer">
+        <p className="sidebar-version">v0.1.0</p>
+      </div>
+    </nav>
+  );
+}
+
+function AppShell() {
+  const notifications = useUIStore((s) => s.notifications);
+  const removeNotification = useUIStore((s) => s.removeNotification);
+
   return (
     <AppLayout
-      header={
-        <>
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--spacing-3)" }}>
-            <span style={{ fontSize: "var(--font-size-xl)", fontWeight: "var(--font-weight-bold)" }}>
-              SecureScan Pro X
-            </span>
-            <StatusBadge status="info" label="v0.1.0" size="sm" />
-          </div>
-          <div style={{ display: "flex", gap: "var(--spacing-2)" }}>
-            <Button variant="ghost" size="sm">Settings</Button>
-            <Button variant="ghost" size="sm">Help</Button>
-          </div>
-        </>
-      }
-      sidebar={
-        <nav aria-label="Main menu">
-          <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: "var(--spacing-1)" }}>
-            <li><Button variant="ghost" style={{ width: "100%", justifyContent: "flex-start" }}>Dashboard</Button></li>
-            <li><Button variant="ghost" style={{ width: "100%", justifyContent: "flex-start" }}>Workspaces</Button></li>
-            <li><Button variant="ghost" style={{ width: "100%", justifyContent: "flex-start" }}>Assets</Button></li>
-            <li><Button variant="ghost" style={{ width: "100%", justifyContent: "flex-start" }}>Assessments</Button></li>
-            <li><Button variant="ghost" style={{ width: "100%", justifyContent: "flex-start" }}>Findings</Button></li>
-            <li><Button variant="ghost" style={{ width: "100%", justifyContent: "flex-start" }}>Reports</Button></li>
-            <li><Button variant="ghost" style={{ width: "100%", justifyContent: "flex-start" }}>Plugins</Button></li>
-          </ul>
-        </nav>
-      }
+      header={<AppHeader />}
+      sidebar={<AppSidebar />}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-6)" }}>
-        <div>
-          <h1>Dashboard</h1>
-          <p style={{ color: "var(--text-secondary)", marginTop: "var(--spacing-2)" }}>
-            Welcome to SecureScan Pro X — Enterprise-Grade Defensive Security Assessment Platform
-          </p>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "var(--spacing-4)" }}>
-          <Card variant="elevated">
-            <CardHeader title="Workspaces" subtitle="Manage your assessment workspaces" />
-            <CardBody>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: "var(--font-size-3xl)", fontWeight: "var(--font-weight-bold)" }}>0</span>
-                <Button variant="primary" size="sm">Create Workspace</Button>
-              </div>
-            </CardBody>
-          </Card>
-
-          <Card variant="elevated">
-            <CardHeader title="Assets" subtitle="Assessable targets" />
-            <CardBody>
-              <span style={{ fontSize: "var(--font-size-3xl)", fontWeight: "var(--font-weight-bold)" }}>0</span>
-            </CardBody>
-          </Card>
-
-          <Card variant="elevated">
-            <CardHeader title="Assessments" subtitle="Security assessments" />
-            <CardBody>
-              <span style={{ fontSize: "var(--font-size-3xl)", fontWeight: "var(--font-weight-bold)" }}>0</span>
-            </CardBody>
-          </Card>
-
-          <Card variant="elevated">
-            <CardHeader title="Findings" subtitle="Security findings" />
-            <CardBody>
-              <div style={{ display: "flex", gap: "var(--spacing-3)" }}>
-                <StatusBadge status="critical" size="sm" />
-                <StatusBadge status="high" size="sm" />
-                <StatusBadge status="medium" size="sm" />
-                <StatusBadge status="low" size="sm" />
-              </div>
-            </CardBody>
-          </Card>
-        </div>
-
-        <Card>
-          <CardHeader
-            title="Getting Started"
-            subtitle="Follow these steps to begin your first security assessment"
-          />
-          <CardBody>
-            <ol style={{ paddingLeft: "var(--spacing-6)", display: "flex", flexDirection: "column", gap: "var(--spacing-3)" }}>
-              <li>Create a workspace to organize your assessments</li>
-              <li>Add assets (hosts, networks, web applications) to your workspace</li>
-              <li>Create an assessment targeting your assets</li>
-              <li>Review findings and generate reports</li>
-            </ol>
-          </CardBody>
-        </Card>
-      </div>
+      <Routes>
+        <Route path="/" element={<DashboardPage />} />
+        <Route path="/scanner" element={<ScannerPage />} />
+        <Route path="/workspaces" element={<WorkspacesPage />} />
+        <Route path="/assets" element={<AssetsPage />} />
+        <Route path="/assessments" element={<AssessmentsPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+      <ToastContainer toasts={notifications} onDismiss={removeNotification} />
     </AppLayout>
+  );
+}
+
+function AppContent() {
+  const { isAuthenticated, isLoading, setUser, setLoading } = useAuthStore();
+  const setTheme = useUIStore((s) => s.setTheme);
+  const theme = useUIStore((s) => s.theme);
+
+  useEffect(() => {
+    setTheme(theme);
+  }, []);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const user = await authApi.me();
+        setUser(user);
+      } catch {
+        setUser(null);
+      }
+    };
+    checkAuth();
+  }, []);
+
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/*"
+        element={
+          <ProtectedRoute>
+            <AppShell />
+          </ProtectedRoute>
+        }
+      />
+    </Routes>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AppContent />
+    </BrowserRouter>
   );
 }
