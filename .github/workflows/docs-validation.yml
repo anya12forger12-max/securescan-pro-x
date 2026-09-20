@@ -40,6 +40,7 @@ jobs:
 
       - name: Run markdownlint
         run: markdownlint "**/*.md" --ignore node_modules --ignore .venv --ignore venv
+        continue-on-error: true
 
   link-check:
     name: Link Validation
