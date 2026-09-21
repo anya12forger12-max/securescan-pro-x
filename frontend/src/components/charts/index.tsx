@@ -55,7 +55,13 @@ export function SeverityChart({ data }: { data: SeverityData }): JSX.Element {
   return (
     <div className="severity-chart">
       <div className="severity-chart__visual">
-        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`Findings: ${total} total`}>
+        <svg
+          width={size}
+          height={size}
+          viewBox={`0 0 ${size} ${size}`}
+          role="img"
+          aria-label={`Findings: ${total} total`}
+        >
           <circle
             cx={size / 2}
             cy={size / 2}
@@ -78,7 +84,13 @@ export function SeverityChart({ data }: { data: SeverityData }): JSX.Element {
               style={{ transition: "stroke-dasharray 0.5s ease" }}
             />
           ))}
-          <text x="50%" y="50%" textAnchor="middle" dominantBaseline="central" className="severity-chart__total">
+          <text
+            x="50%"
+            y="50%"
+            textAnchor="middle"
+            dominantBaseline="central"
+            className="severity-chart__total"
+          >
             {total}
           </text>
         </svg>

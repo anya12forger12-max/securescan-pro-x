@@ -29,7 +29,11 @@ export function AppLayout({
         {header}
       </header>
 
-      <nav className="app-sidebar" role="navigation" aria-label="Main navigation">
+      <nav
+        className="app-sidebar"
+        role="navigation"
+        aria-label="Main navigation"
+      >
         {sidebar}
       </nav>
 

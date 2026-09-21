@@ -6,13 +6,17 @@ import type { JSX } from "react";
 import { Button } from "../components/ui/button";
 import { Input, Textarea } from "../components/forms";
 import { Modal } from "../components/dialogs";
-import { EmptyState, LoadingSpinner } from "../components/ui/utility-components";
+import {
+  EmptyState,
+  LoadingSpinner,
+} from "../components/ui/utility-components";
 import { PlusIcon, ServerIcon, TrashIcon } from "../components/icons";
 import { workspaceApi } from "../utils/api";
 import { useWorkspaceStore, useUIStore } from "../stores";
 
 export function WorkspacesPage(): JSX.Element {
-  const { workspaces, isLoading, setWorkspaces, setLoading } = useWorkspaceStore();
+  const { workspaces, isLoading, setWorkspaces, setLoading } =
+    useWorkspaceStore();
   const addNotification = useUIStore((s) => s.addNotification);
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
@@ -24,11 +28,17 @@ export function WorkspacesPage(): JSX.Element {
       const data = await workspaceApi.list();
       setWorkspaces(data);
     } catch {
-      addNotification({ type: "error", title: "Error", message: "Failed to load workspaces" });
+      addNotification({
+        type: "error",
+        title: "Error",
+        message: "Failed to load workspaces",
+      });
     }
   }, [addNotification, setLoading, setWorkspaces]);
 
-  useEffect(() => { loadWorkspaces(); }, [loadWorkspaces]);
+  useEffect(() => {
+    loadWorkspaces();
+  }, [loadWorkspaces]);
 
   const createWorkspace = async () => {
     if (!newName.trim()) return;
@@ -38,9 +48,17 @@ export function WorkspacesPage(): JSX.Element {
       setNewDesc("");
       setShowCreate(false);
       loadWorkspaces();
-      addNotification({ type: "success", title: "Created", message: `Workspace "${newName}" created` });
+      addNotification({
+        type: "success",
+        title: "Created",
+        message: `Workspace "${newName}" created`,
+      });
     } catch (err: any) {
-      addNotification({ type: "error", title: "Error", message: err.detail || "Failed to create workspace" });
+      addNotification({
+        type: "error",
+        title: "Error",
+        message: err.detail || "Failed to create workspace",
+      });
     }
   };
 
@@ -49,9 +67,17 @@ export function WorkspacesPage(): JSX.Element {
     try {
       await workspaceApi.delete(id);
       loadWorkspaces();
-      addNotification({ type: "success", title: "Deleted", message: `Workspace "${name}" deleted` });
+      addNotification({
+        type: "success",
+        title: "Deleted",
+        message: `Workspace "${name}" deleted`,
+      });
     } catch (err: any) {
-      addNotification({ type: "error", title: "Error", message: err.detail || "Failed to delete" });
+      addNotification({
+        type: "error",
+        title: "Error",
+        message: err.detail || "Failed to delete",
+      });
     }
   };
 
@@ -85,9 +111,15 @@ export function WorkspacesPage(): JSX.Element {
                 <ServerIcon size={24} />
                 <h3>{ws.name}</h3>
               </div>
-              {ws.description && <p className="workspace-card__desc">{ws.description}</p>}
+              {ws.description && (
+                <p className="workspace-card__desc">{ws.description}</p>
+              )}
               <div className="workspace-card__actions">
-                <Button variant="ghost" size="sm" onClick={() => deleteWorkspace(ws.id, ws.name)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => deleteWorkspace(ws.id, ws.name)}
+                >
                   <TrashIcon size={14} /> Delete
                 </Button>
               </div>
@@ -96,7 +128,12 @@ export function WorkspacesPage(): JSX.Element {
         </div>
       )}
 
-      <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title="Create Workspace" size="sm">
+      <Modal
+        isOpen={showCreate}
+        onClose={() => setShowCreate(false)}
+        title="Create Workspace"
+        size="sm"
+      >
         <Input
           label="Name"
           value={newName}
@@ -111,8 +148,16 @@ export function WorkspacesPage(): JSX.Element {
           placeholder="Brief description"
         />
         <div className="modal-actions">
-          <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
-          <Button variant="primary" onClick={createWorkspace} disabled={!newName.trim()}>Create</Button>
+          <Button variant="ghost" onClick={() => setShowCreate(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={createWorkspace}
+            disabled={!newName.trim()}
+          >
+            Create
+          </Button>
         </div>
       </Modal>
     </div>

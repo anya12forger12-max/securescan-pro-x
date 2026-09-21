@@ -32,11 +32,11 @@
   --border-focus: var(--color-primary-500);
 
   /* Severity — colorblind safe palette (blue-orange based) */
-  --color-severity-critical: #cc79a7;  /* Pink — distinct from all others */
-  --color-severity-high: #e69f00;      /* Orange — safe for all types */
-  --color-severity-medium: #f0e442;    /* Yellow — safe for all types */
-  --color-severity-low: #0072b2;       /* Blue — safe for all types */
-  --color-severity-info: #999999;      /* Gray — always neutral */
+  --color-severity-critical: #cc79a7; /* Pink — distinct from all others */
+  --color-severity-high: #e69f00; /* Orange — safe for all types */
+  --color-severity-medium: #f0e442; /* Yellow — safe for all types */
+  --color-severity-low: #0072b2; /* Blue — safe for all types */
+  --color-severity-info: #999999; /* Gray — always neutral */
 
   /* Interactive */
   --interactive-primary: #0072b2;

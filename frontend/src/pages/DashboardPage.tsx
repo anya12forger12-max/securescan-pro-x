@@ -6,8 +6,19 @@ import type { JSX } from "react";
 import { useAuthStore } from "../stores";
 import { assessmentApi, workspaceApi } from "../utils/api";
 import { SeverityChart } from "../components/charts";
-import { StatCard, LoadingSpinner, EmptyState } from "../components/ui/utility-components";
-import { ShieldIcon, SearchIcon, GlobeIcon, ServerIcon, AlertTriangleIcon, ClockIcon } from "../components/icons";
+import {
+  StatCard,
+  LoadingSpinner,
+  EmptyState,
+} from "../components/ui/utility-components";
+import {
+  ShieldIcon,
+  SearchIcon,
+  GlobeIcon,
+  ServerIcon,
+  AlertTriangleIcon,
+  ClockIcon,
+} from "../components/icons";
 
 export function DashboardPage(): JSX.Element {
   const user = useAuthStore((s) => s.user);
@@ -17,7 +28,13 @@ export function DashboardPage(): JSX.Element {
     findings: 0,
     assets: 0,
   });
-  const [severityData, setSeverityData] = React.useState({ critical: 0, high: 0, medium: 0, low: 0, info: 0 });
+  const [severityData, setSeverityData] = React.useState({
+    critical: 0,
+    high: 0,
+    medium: 0,
+    low: 0,
+    info: 0,
+  });
   const [recentAssessments, setRecentAssessments] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
 
@@ -39,7 +56,10 @@ export function DashboardPage(): JSX.Element {
       setStats({
         workspaces: ws.length,
         assessments: as.length,
-        findings: as.reduce((sum: number, a: any) => sum + (a.finding_count || 0), 0),
+        findings: as.reduce(
+          (sum: number, a: any) => sum + (a.finding_count || 0),
+          0,
+        ),
         assets: 0,
       });
 
@@ -72,10 +92,30 @@ export function DashboardPage(): JSX.Element {
       </div>
 
       <div className="dashboard__stats">
-        <StatCard label="Workspaces" value={stats.workspaces} icon={<ServerIcon size={24} />} color="var(--accent-primary)" />
-        <StatCard label="Assessments" value={stats.assessments} icon={<SearchIcon size={24} />} color="var(--accent-secondary)" />
-        <StatCard label="Findings" value={stats.findings} icon={<AlertTriangleIcon size={24} />} color="var(--severity-high)" />
-        <StatCard label="Assets" value={stats.assets} icon={<GlobeIcon size={24} />} color="var(--accent-tertiary)" />
+        <StatCard
+          label="Workspaces"
+          value={stats.workspaces}
+          icon={<ServerIcon size={24} />}
+          color="var(--accent-primary)"
+        />
+        <StatCard
+          label="Assessments"
+          value={stats.assessments}
+          icon={<SearchIcon size={24} />}
+          color="var(--accent-secondary)"
+        />
+        <StatCard
+          label="Findings"
+          value={stats.findings}
+          icon={<AlertTriangleIcon size={24} />}
+          color="var(--severity-high)"
+        />
+        <StatCard
+          label="Assets"
+          value={stats.assets}
+          icon={<GlobeIcon size={24} />}
+          color="var(--accent-tertiary)"
+        />
       </div>
 
       <div className="dashboard__grid">

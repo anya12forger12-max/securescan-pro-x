@@ -21,7 +21,11 @@ export function SettingsPage(): JSX.Element {
   ];
 
   const handleLogout = async () => {
-    try { await authApi.logout(); } catch { /* ignore */ }
+    try {
+      await authApi.logout();
+    } catch {
+      /* ignore */
+    }
     logout();
   };
 
@@ -30,7 +34,9 @@ export function SettingsPage(): JSX.Element {
       <h1>Settings</h1>
 
       <div className="settings-section">
-        <h2><UserIcon size={20} /> Account</h2>
+        <h2>
+          <UserIcon size={20} /> Account
+        </h2>
         <div className="settings-card">
           <div className="settings-field">
             <span className="settings-label">Username</span>
@@ -48,7 +54,9 @@ export function SettingsPage(): JSX.Element {
       </div>
 
       <div className="settings-section">
-        <h2><ShieldIcon size={20} /> Appearance</h2>
+        <h2>
+          <ShieldIcon size={20} /> Appearance
+        </h2>
         <div className="settings-card">
           <Select
             label="Theme"

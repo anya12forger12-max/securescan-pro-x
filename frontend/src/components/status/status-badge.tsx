@@ -40,16 +40,15 @@ const assessmentStatusIcons: Partial<Record<AssessmentStatus, string>> = {
 
 function getIcon(status: string): string {
   if (status in severityIcons) return severityIcons[status as Severity];
-  if (status in findingStatusIcons) return findingStatusIcons[status as FindingStatus];
+  if (status in findingStatusIcons)
+    return findingStatusIcons[status as FindingStatus];
   if (status in assessmentStatusIcons)
     return assessmentStatusIcons[status as AssessmentStatus] ?? "●";
   return "●";
 }
 
 function getLabel(status: string): string {
-  return status
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export function StatusBadge({

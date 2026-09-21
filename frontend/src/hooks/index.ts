@@ -66,7 +66,10 @@ export function useFetch<T>(url: string | null) {
   return { data, loading, error };
 }
 
-export function useLocalStorage<T>(key: string, initial: T): [T, (v: T) => void] {
+export function useLocalStorage<T>(
+  key: string,
+  initial: T,
+): [T, (v: T) => void] {
   const [value, setValue] = useState<T>(() => {
     try {
       const item = localStorage.getItem(key);

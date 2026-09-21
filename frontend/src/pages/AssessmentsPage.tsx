@@ -6,8 +6,17 @@ import type { JSX } from "react";
 import { Button } from "../components/ui/button";
 import { Input, Textarea, Select } from "../components/forms";
 import { Modal } from "../components/dialogs";
-import { EmptyState, LoadingSpinner } from "../components/ui/utility-components";
-import { PlusIcon, SearchIcon, PlayIcon, StopIcon, ClockIcon } from "../components/icons";
+import {
+  EmptyState,
+  LoadingSpinner,
+} from "../components/ui/utility-components";
+import {
+  PlusIcon,
+  SearchIcon,
+  PlayIcon,
+  StopIcon,
+  ClockIcon,
+} from "../components/icons";
 import { assessmentApi } from "../utils/api";
 import { useUIStore } from "../stores";
 
@@ -32,7 +41,11 @@ export function AssessmentsPage(): JSX.Element {
   const [assessments, setAssessments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ name: "", description: "", priority: "normal" });
+  const [form, setForm] = useState({
+    name: "",
+    description: "",
+    priority: "normal",
+  });
   const addNotification = useUIStore((s) => s.addNotification);
 
   const loadAssessments = useCallback(async () => {
@@ -41,13 +54,19 @@ export function AssessmentsPage(): JSX.Element {
       const data = await assessmentApi.list();
       setAssessments(data);
     } catch {
-      addNotification({ type: "error", title: "Error", message: "Failed to load assessments" });
+      addNotification({
+        type: "error",
+        title: "Error",
+        message: "Failed to load assessments",
+      });
     } finally {
       setLoading(false);
     }
   }, [addNotification]);
 
-  useEffect(() => { loadAssessments(); }, [loadAssessments]);
+  useEffect(() => {
+    loadAssessments();
+  }, [loadAssessments]);
 
   const createAssessment = async () => {
     if (!form.name.trim()) return;
@@ -60,9 +79,17 @@ export function AssessmentsPage(): JSX.Element {
       setShowCreate(false);
       setForm({ name: "", description: "", priority: "normal" });
       loadAssessments();
-      addNotification({ type: "success", title: "Created", message: `Assessment "${form.name}" created` });
+      addNotification({
+        type: "success",
+        title: "Created",
+        message: `Assessment "${form.name}" created`,
+      });
     } catch (err: any) {
-      addNotification({ type: "error", title: "Error", message: err.detail || "Failed" });
+      addNotification({
+        type: "error",
+        title: "Error",
+        message: err.detail || "Failed",
+      });
     }
   };
 
@@ -70,9 +97,17 @@ export function AssessmentsPage(): JSX.Element {
     try {
       await assessmentApi.start(id);
       loadAssessments();
-      addNotification({ type: "success", title: "Started", message: "Assessment started" });
+      addNotification({
+        type: "success",
+        title: "Started",
+        message: "Assessment started",
+      });
     } catch (err: any) {
-      addNotification({ type: "error", title: "Error", message: err.detail || "Failed to start" });
+      addNotification({
+        type: "error",
+        title: "Error",
+        message: err.detail || "Failed to start",
+      });
     }
   };
 
@@ -80,9 +115,17 @@ export function AssessmentsPage(): JSX.Element {
     try {
       await assessmentApi.cancel(id);
       loadAssessments();
-      addNotification({ type: "info", title: "Cancelled", message: "Assessment cancelled" });
+      addNotification({
+        type: "info",
+        title: "Cancelled",
+        message: "Assessment cancelled",
+      });
     } catch (err: any) {
-      addNotification({ type: "error", title: "Error", message: err.detail || "Failed to cancel" });
+      addNotification({
+        type: "error",
+        title: "Error",
+        message: err.detail || "Failed to cancel",
+      });
     }
   };
 
@@ -109,23 +152,45 @@ export function AssessmentsPage(): JSX.Element {
             <div key={a.id} className="assessment-card">
               <div className="assessment-card__header">
                 <h3>{a.name}</h3>
-                <span className="status-badge" style={{ color: STATUS_COLORS[a.status] || "var(--text-secondary)" }}>
+                <span
+                  className="status-badge"
+                  style={{
+                    color: STATUS_COLORS[a.status] || "var(--text-secondary)",
+                  }}
+                >
                   {a.status}
                 </span>
               </div>
-              {a.description && <p className="assessment-card__desc">{a.description}</p>}
+              {a.description && (
+                <p className="assessment-card__desc">{a.description}</p>
+              )}
               <div className="assessment-card__meta">
-                <span><ClockIcon size={14} /> {new Date(a.created_at).toLocaleDateString()}</span>
-                <span className={`priority-badge priority-badge--${a.priority}`}>{a.priority}</span>
+                <span>
+                  <ClockIcon size={14} />{" "}
+                  {new Date(a.created_at).toLocaleDateString()}
+                </span>
+                <span
+                  className={`priority-badge priority-badge--${a.priority}`}
+                >
+                  {a.priority}
+                </span>
               </div>
               <div className="assessment-card__actions">
                 {(a.status === "draft" || a.status === "queued") && (
-                  <Button variant="primary" size="sm" onClick={() => startAssessment(a.id)}>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => startAssessment(a.id)}
+                  >
                     <PlayIcon size={14} /> Start
                   </Button>
                 )}
                 {a.status === "running" && (
-                  <Button variant="danger" size="sm" onClick={() => cancelAssessment(a.id)}>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => cancelAssessment(a.id)}
+                  >
                     <StopIcon size={14} /> Cancel
                   </Button>
                 )}
@@ -135,7 +200,12 @@ export function AssessmentsPage(): JSX.Element {
         </div>
       )}
 
-      <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title="New Assessment" size="md">
+      <Modal
+        isOpen={showCreate}
+        onClose={() => setShowCreate(false)}
+        title="New Assessment"
+        size="md"
+      >
         <Input
           label="Name"
           value={form.name}
@@ -155,8 +225,16 @@ export function AssessmentsPage(): JSX.Element {
           onChange={(v) => setForm({ ...form, priority: v })}
         />
         <div className="modal-actions">
-          <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
-          <Button variant="primary" onClick={createAssessment} disabled={!form.name.trim()}>Create</Button>
+          <Button variant="ghost" onClick={() => setShowCreate(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={createAssessment}
+            disabled={!form.name.trim()}
+          >
+            Create
+          </Button>
         </div>
       </Modal>
     </div>

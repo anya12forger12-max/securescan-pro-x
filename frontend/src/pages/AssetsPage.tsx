@@ -6,7 +6,10 @@ import type { JSX } from "react";
 import { Button } from "../components/ui/button";
 import { Input, Select } from "../components/forms";
 import { Modal } from "../components/dialogs";
-import { EmptyState, LoadingSpinner } from "../components/ui/utility-components";
+import {
+  EmptyState,
+  LoadingSpinner,
+} from "../components/ui/utility-components";
 import { PlusIcon, GlobeIcon, TrashIcon } from "../components/icons";
 import { assetApi } from "../utils/api";
 import { useUIStore } from "../stores";
@@ -23,7 +26,12 @@ export function AssetsPage(): JSX.Element {
   const [assets, setAssets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ name: "", assetType: "host", identifier: "", description: "" });
+  const [form, setForm] = useState({
+    name: "",
+    assetType: "host",
+    identifier: "",
+    description: "",
+  });
   const addNotification = useUIStore((s) => s.addNotification);
 
   const loadAssets = useCallback(async () => {
@@ -32,13 +40,19 @@ export function AssetsPage(): JSX.Element {
       const data = await assetApi.list();
       setAssets(data);
     } catch {
-      addNotification({ type: "error", title: "Error", message: "Failed to load assets" });
+      addNotification({
+        type: "error",
+        title: "Error",
+        message: "Failed to load assets",
+      });
     } finally {
       setLoading(false);
     }
   }, [addNotification]);
 
-  useEffect(() => { loadAssets(); }, [loadAssets]);
+  useEffect(() => {
+    loadAssets();
+  }, [loadAssets]);
 
   const createAsset = async () => {
     if (!form.name.trim() || !form.identifier.trim()) return;
@@ -51,9 +65,17 @@ export function AssetsPage(): JSX.Element {
       setShowCreate(false);
       setForm({ name: "", assetType: "host", identifier: "", description: "" });
       loadAssets();
-      addNotification({ type: "success", title: "Created", message: `Asset "${form.name}" created` });
+      addNotification({
+        type: "success",
+        title: "Created",
+        message: `Asset "${form.name}" created`,
+      });
     } catch (err: any) {
-      addNotification({ type: "error", title: "Error", message: err.detail || "Failed to create asset" });
+      addNotification({
+        type: "error",
+        title: "Error",
+        message: err.detail || "Failed to create asset",
+      });
     }
   };
 
@@ -62,9 +84,17 @@ export function AssetsPage(): JSX.Element {
     try {
       await assetApi.delete(id);
       loadAssets();
-      addNotification({ type: "success", title: "Deleted", message: `Asset "${name}" deleted` });
+      addNotification({
+        type: "success",
+        title: "Deleted",
+        message: `Asset "${name}" deleted`,
+      });
     } catch (err: any) {
-      addNotification({ type: "error", title: "Error", message: err.detail || "Failed to delete" });
+      addNotification({
+        type: "error",
+        title: "Error",
+        message: err.detail || "Failed to delete",
+      });
     }
   };
 
@@ -100,10 +130,20 @@ export function AssetsPage(): JSX.Element {
               {assets.map((a: any) => (
                 <tr key={a.id}>
                   <td>{a.name}</td>
-                  <td><span className={`type-badge type-badge--${a.asset_type}`}>{a.asset_type}</span></td>
-                  <td><code>{a.identifier}</code></td>
                   <td>
-                    <Button variant="ghost" size="sm" onClick={() => deleteAsset(a.id, a.name)}>
+                    <span className={`type-badge type-badge--${a.asset_type}`}>
+                      {a.asset_type}
+                    </span>
+                  </td>
+                  <td>
+                    <code>{a.identifier}</code>
+                  </td>
+                  <td>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => deleteAsset(a.id, a.name)}
+                    >
                       <TrashIcon size={14} />
                     </Button>
                   </td>
@@ -114,7 +154,12 @@ export function AssetsPage(): JSX.Element {
         </div>
       )}
 
-      <Modal isOpen={showCreate} onClose={() => setShowCreate(false)} title="Add Asset" size="md">
+      <Modal
+        isOpen={showCreate}
+        onClose={() => setShowCreate(false)}
+        title="Add Asset"
+        size="md"
+      >
         <Input
           label="Name"
           value={form.name}
@@ -134,8 +179,16 @@ export function AssetsPage(): JSX.Element {
           placeholder="e.g., 192.168.1.100 or https://example.com"
         />
         <div className="modal-actions">
-          <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
-          <Button variant="primary" onClick={createAsset} disabled={!form.name.trim() || !form.identifier.trim()}>Add</Button>
+          <Button variant="ghost" onClick={() => setShowCreate(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            onClick={createAsset}
+            disabled={!form.name.trim() || !form.identifier.trim()}
+          >
+            Add
+          </Button>
         </div>
       </Modal>
     </div>

@@ -66,13 +66,17 @@ export function LoginPage(): JSX.Element {
               {error}
             </p>
           )}
-          <Button type="submit" variant="primary" size="lg" loading={loading} className="login-btn">
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            loading={loading}
+            className="login-btn"
+          >
             Sign In
           </Button>
         </form>
-        <p className="login-demo">
-          Demo: admin / admin123!@#SecureScan
-        </p>
+        <p className="login-demo">Demo: admin / admin123!@#SecureScan</p>
       </div>
     </div>
   );

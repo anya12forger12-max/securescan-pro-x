@@ -16,7 +16,11 @@ export function LoadingSpinner({
   label?: string;
 }): JSX.Element {
   return (
-    <div className={clsx("spinner", `spinner--${size}`)} role="status" aria-label={label}>
+    <div
+      className={clsx("spinner", `spinner--${size}`)}
+      role="status"
+      aria-label={label}
+    >
       <span className="sr-only">{label}</span>
     </div>
   );
@@ -31,7 +35,12 @@ export interface EmptyStateProps {
   action?: React.ReactNode;
 }
 
-export function EmptyState({ icon, title, description, action }: EmptyStateProps): JSX.Element {
+export function EmptyState({
+  icon,
+  title,
+  description,
+  action,
+}: EmptyStateProps): JSX.Element {
   return (
     <div className="empty-state" role="status">
       {icon && <div className="empty-state__icon">{icon}</div>}
@@ -59,7 +68,13 @@ const toastIcons = {
   info: <CheckCircleIcon size={18} />,
 };
 
-export function Toast({ type, title, message, onClose, autoClose = 5000 }: ToastProps): JSX.Element {
+export function Toast({
+  type,
+  title,
+  message,
+  onClose,
+  autoClose = 5000,
+}: ToastProps): JSX.Element {
   useEffect(() => {
     if (autoClose > 0) {
       const timer = setTimeout(onClose, autoClose);
@@ -68,7 +83,11 @@ export function Toast({ type, title, message, onClose, autoClose = 5000 }: Toast
   }, [autoClose, onClose]);
 
   return (
-    <div className={clsx("toast", `toast--${type}`)} role="alert" aria-live="assertive">
+    <div
+      className={clsx("toast", `toast--${type}`)}
+      role="alert"
+      aria-live="assertive"
+    >
       <span className="toast__icon">{toastIcons[type]}</span>
       <div className="toast__content">
         <strong className="toast__title">{title}</strong>
@@ -85,7 +104,12 @@ export function ToastContainer({
   toasts,
   onDismiss,
 }: {
-  toasts: Array<{ id: string; type: "success" | "error" | "warning" | "info"; title: string; message: string }>;
+  toasts: Array<{
+    id: string;
+    type: "success" | "error" | "warning" | "info";
+    title: string;
+    message: string;
+  }>;
   onDismiss: (id: string) => void;
 }): JSX.Element {
   return (
@@ -119,11 +143,19 @@ export function ProgressBar({
   const percent = Math.min(100, Math.max(0, (value / max) * 100));
 
   return (
-    <div className="progress-wrapper" role="progressbar" aria-valuenow={value} aria-valuemin={0} aria-valuemax={max}>
+    <div
+      className="progress-wrapper"
+      role="progressbar"
+      aria-valuenow={value}
+      aria-valuemin={0}
+      aria-valuemax={max}
+    >
       {(label || showPercent) && (
         <div className="progress-header">
           {label && <span className="progress-label">{label}</span>}
-          {showPercent && <span className="progress-percent">{Math.round(percent)}%</span>}
+          {showPercent && (
+            <span className="progress-percent">{Math.round(percent)}%</span>
+          )}
         </div>
       )}
       <div className="progress-track">
@@ -149,14 +181,22 @@ export interface BreadcrumbItem {
   onClick?: () => void;
 }
 
-export function Breadcrumb({ items }: { items: BreadcrumbItem[] }): JSX.Element {
+export function Breadcrumb({
+  items,
+}: {
+  items: BreadcrumbItem[];
+}): JSX.Element {
   return (
     <nav aria-label="Breadcrumb" className="breadcrumb">
       <ol className="breadcrumb__list">
         {items.map((item, i) => (
           <li key={i} className="breadcrumb__item">
             {i < items.length - 1 && item.href ? (
-              <a href={item.href} className="breadcrumb__link" onClick={item.onClick}>
+              <a
+                href={item.href}
+                className="breadcrumb__link"
+                onClick={item.onClick}
+              >
                 {item.label}
               </a>
             ) : i < items.length - 1 ? (
@@ -212,7 +252,10 @@ export function Pagination({
         return (
           <button
             key={pageNum}
-            className={clsx("pagination__btn", pageNum === page && "pagination__btn--active")}
+            className={clsx(
+              "pagination__btn",
+              pageNum === page && "pagination__btn--active",
+            )}
             onClick={() => onPageChange(pageNum)}
             aria-label={`Page ${pageNum}`}
             aria-current={pageNum === page ? "page" : undefined}
@@ -267,9 +310,15 @@ export function StatCard({
 }): JSX.Element {
   return (
     <div className="stat-card">
-      {icon && <div className="stat-card__icon" style={{ color }}>{icon}</div>}
+      {icon && (
+        <div className="stat-card__icon" style={{ color }}>
+          {icon}
+        </div>
+      )}
       <div className="stat-card__content">
-        <span className="stat-card__value" style={{ color }}>{value}</span>
+        <span className="stat-card__value" style={{ color }}>
+          {value}
+        </span>
         <span className="stat-card__label">{label}</span>
       </div>
     </div>

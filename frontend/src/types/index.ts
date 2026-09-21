@@ -186,10 +186,7 @@ export type EvidenceType =
   | "imported_report";
 
 export type EvidenceClassification =
-  | "public"
-  | "internal"
-  | "confidential"
-  | "restricted";
+  "public" | "internal" | "confidential" | "restricted";
 
 export interface Evidence extends IDMixin {
   assessmentId: string;
@@ -368,11 +365,18 @@ export interface ApiError {
 
 // ── Theme ───────────────────────────────────────────────────────
 
-export type ThemeName = "light" | "dark" | "high-contrast" | "colorblind" | "minimal" | "professional";
+export type ThemeName =
+  | "light"
+  | "dark"
+  | "high-contrast"
+  | "colorblind"
+  | "minimal"
+  | "professional";
 
 // ── Plugin ──────────────────────────────────────────────────────
 
-export type PluginType = "check" | "report" | "knowledge" | "integration" | "ui";
+export type PluginType =
+  "check" | "report" | "knowledge" | "integration" | "ui";
 
 export interface PluginInfo {
   id: string;

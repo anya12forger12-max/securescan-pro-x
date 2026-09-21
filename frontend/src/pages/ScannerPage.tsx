@@ -7,10 +7,20 @@ import { clsx } from "clsx";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/forms";
 import { SeverityChart } from "../components/charts";
-import { SeverityBadge, LoadingSpinner, EmptyState } from "../components/ui/utility-components";
 import {
-  SearchIcon, GlobeIcon, LockIcon, ShieldIcon, AlertTriangleIcon,
-  CheckCircleIcon, TerminalIcon, PlayIcon,
+  SeverityBadge,
+  LoadingSpinner,
+  EmptyState,
+} from "../components/ui/utility-components";
+import {
+  SearchIcon,
+  GlobeIcon,
+  LockIcon,
+  ShieldIcon,
+  AlertTriangleIcon,
+  CheckCircleIcon,
+  TerminalIcon,
+  PlayIcon,
 } from "../components/icons";
 import { scanApi } from "../utils/api";
 import { useUIStore } from "../stores";
@@ -37,12 +47,42 @@ interface ScanResult {
   metadata: Record<string, unknown>;
 }
 
-const SCAN_TABS: Array<{ id: ScanType; label: string; icon: React.ReactNode; description: string }> = [
-  { id: "port", label: "Port Scan", icon: <TerminalIcon size={18} />, description: "Discover open ports and services" },
-  { id: "header", label: "Header Check", icon: <GlobeIcon size={18} />, description: "Check HTTP security headers" },
-  { id: "password", label: "Password Check", icon: <LockIcon size={18} />, description: "Evaluate password strength" },
-  { id: "ssl", label: "SSL Check", icon: <ShieldIcon size={18} />, description: "Analyze SSL/TLS configuration" },
-  { id: "full", label: "Full Scan", icon: <SearchIcon size={18} />, description: "Run all checks against a target" },
+const SCAN_TABS: Array<{
+  id: ScanType;
+  label: string;
+  icon: React.ReactNode;
+  description: string;
+}> = [
+  {
+    id: "port",
+    label: "Port Scan",
+    icon: <TerminalIcon size={18} />,
+    description: "Discover open ports and services",
+  },
+  {
+    id: "header",
+    label: "Header Check",
+    icon: <GlobeIcon size={18} />,
+    description: "Check HTTP security headers",
+  },
+  {
+    id: "password",
+    label: "Password Check",
+    icon: <LockIcon size={18} />,
+    description: "Evaluate password strength",
+  },
+  {
+    id: "ssl",
+    label: "SSL Check",
+    icon: <ShieldIcon size={18} />,
+    description: "Analyze SSL/TLS configuration",
+  },
+  {
+    id: "full",
+    label: "Full Scan",
+    icon: <SearchIcon size={18} />,
+    description: "Run all checks against a target",
+  },
 ];
 
 export function ScannerPage(): JSX.Element {
@@ -64,22 +104,38 @@ export function ScannerPage(): JSX.Element {
       let res: ScanResult;
       switch (activeTab) {
         case "port":
-          if (!target) { setError("Enter a target host"); setIsScanning(false); return; }
+          if (!target) {
+            setError("Enter a target host");
+            setIsScanning(false);
+            return;
+          }
           res = await scanApi.portScan(target);
           break;
         case "header":
-          if (!url) { setError("Enter a URL to check"); setIsScanning(false); return; }
+          if (!url) {
+            setError("Enter a URL to check");
+            setIsScanning(false);
+            return;
+          }
           res = await scanApi.headerCheck(url);
           break;
         case "password":
           res = await scanApi.passwordCheck(true);
           break;
         case "ssl":
-          if (!hostname) { setError("Enter a hostname"); setIsScanning(false); return; }
+          if (!hostname) {
+            setError("Enter a hostname");
+            setIsScanning(false);
+            return;
+          }
           res = await scanApi.sslCheck(hostname);
           break;
         case "full":
-          if (!target) { setError("Enter a target"); setIsScanning(false); return; }
+          if (!target) {
+            setError("Enter a target");
+            setIsScanning(false);
+            return;
+          }
           res = await scanApi.fullScan(target);
           break;
         default:
@@ -100,7 +156,8 @@ export function ScannerPage(): JSX.Element {
 
   const severityCounts = result?.findings.reduce(
     (acc, f) => {
-      acc[f.severity as keyof typeof acc] = (acc[f.severity as keyof typeof acc] || 0) + 1;
+      acc[f.severity as keyof typeof acc] =
+        (acc[f.severity as keyof typeof acc] || 0) + 1;
       return acc;
     },
     { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
@@ -110,7 +167,10 @@ export function ScannerPage(): JSX.Element {
     <div className="scanner-page">
       <div className="scanner-page__header">
         <h1>Security Scanner</h1>
-        <p>Run security checks against your targets. Only scan systems you own or have authorization to test.</p>
+        <p>
+          Run security checks against your targets. Only scan systems you own or
+          have authorization to test.
+        </p>
       </div>
 
       <div className="scanner-page__tabs" role="tablist">
@@ -119,8 +179,15 @@ export function ScannerPage(): JSX.Element {
             key={tab.id}
             role="tab"
             aria-selected={activeTab === tab.id}
-            className={clsx("scanner-tab", activeTab === tab.id && "scanner-tab--active")}
-            onClick={() => { setActiveTab(tab.id); setResult(null); setError(""); }}
+            className={clsx(
+              "scanner-tab",
+              activeTab === tab.id && "scanner-tab--active",
+            )}
+            onClick={() => {
+              setActiveTab(tab.id);
+              setResult(null);
+              setError("");
+            }}
           >
             {tab.icon}
             <span>{tab.label}</span>
@@ -165,7 +232,10 @@ export function ScannerPage(): JSX.Element {
         {activeTab === "password" && (
           <div className="scanner-form-row scanner-info-box">
             <AlertTriangleIcon size={20} />
-            <p>Demo mode: checks sample passwords to demonstrate the password strength checker.</p>
+            <p>
+              Demo mode: checks sample passwords to demonstrate the password
+              strength checker.
+            </p>
           </div>
         )}
 
@@ -182,7 +252,8 @@ export function ScannerPage(): JSX.Element {
           loading={isScanning}
           disabled={isScanning}
         >
-          <PlayIcon size={18} /> Run {SCAN_TABS.find((t) => t.id === activeTab)?.label}
+          <PlayIcon size={18} /> Run{" "}
+          {SCAN_TABS.find((t) => t.id === activeTab)?.label}
         </Button>
       </div>
 
@@ -221,7 +292,9 @@ export function ScannerPage(): JSX.Element {
                     <SeverityBadge severity={finding.severity} />
                     <h3 className="finding-card__title">{finding.title}</h3>
                   </div>
-                  <p className="finding-card__description">{finding.description}</p>
+                  <p className="finding-card__description">
+                    {finding.description}
+                  </p>
                   {finding.evidence && (
                     <div className="finding-card__evidence">
                       <strong>Evidence:</strong>

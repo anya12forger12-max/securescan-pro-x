@@ -2,13 +2,26 @@
  * SecureScan Pro X — Main Application
  */
 import React, { useEffect } from "react";
-import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate } from "react-router-dom";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  NavLink,
+  Navigate,
+  useNavigate,
+} from "react-router-dom";
 import { AppLayout } from "./components/layout/app-layout";
 import { Button } from "./components/ui/button";
 import { ToastContainer } from "./components/ui/utility-components";
 import {
-  HomeIcon, SearchIcon, ServerIcon, GlobeIcon, ShieldIcon,
-  SettingsIcon, BarChartIcon, UserIcon,
+  HomeIcon,
+  SearchIcon,
+  ServerIcon,
+  GlobeIcon,
+  ShieldIcon,
+  SettingsIcon,
+  BarChartIcon,
+  UserIcon,
 } from "./components/icons";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -33,7 +46,11 @@ function AppHeader() {
   const navigate = useNavigate();
 
   const handleLogout = async () => {
-    try { await authApi.logout(); } catch { /* ok */ }
+    try {
+      await authApi.logout();
+    } catch {
+      /* ok */
+    }
     logout();
     navigate("/login");
   };
@@ -49,7 +66,12 @@ function AppHeader() {
           <UserIcon size={18} />
           <span>{user?.display_name || user?.username}</span>
         </div>
-        <Button variant="ghost" size="sm" onClick={handleLogout} aria-label="Sign out">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleLogout}
+          aria-label="Sign out"
+        >
           Sign Out
         </Button>
       </div>
@@ -63,7 +85,11 @@ function AppSidebar() {
     { to: "/scanner", icon: <SearchIcon size={18} />, label: "Scanner" },
     { to: "/workspaces", icon: <ServerIcon size={18} />, label: "Workspaces" },
     { to: "/assets", icon: <GlobeIcon size={18} />, label: "Assets" },
-    { to: "/assessments", icon: <BarChartIcon size={18} />, label: "Assessments" },
+    {
+      to: "/assessments",
+      icon: <BarChartIcon size={18} />,
+      label: "Assessments",
+    },
     { to: "/settings", icon: <SettingsIcon size={18} />, label: "Settings" },
   ];
 
@@ -97,10 +123,7 @@ function AppShell() {
   const removeNotification = useUIStore((s) => s.removeNotification);
 
   return (
-    <AppLayout
-      header={<AppHeader />}
-      sidebar={<AppSidebar />}
-    >
+    <AppLayout header={<AppHeader />} sidebar={<AppSidebar />}>
       <Routes>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/scanner" element={<ScannerPage />} />

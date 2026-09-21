@@ -23,7 +23,8 @@ export function Input({
   type,
   ...props
 }: InputProps): JSX.Element {
-  const inputId = id || (label ? label.toLowerCase().replace(/\s+/g, "-") : undefined);
+  const inputId =
+    id || (label ? label.toLowerCase().replace(/\s+/g, "-") : undefined);
 
   if (type === "password") {
     return (
@@ -44,7 +45,12 @@ export function Input({
           {label}
         </label>
       )}
-      <div className={clsx("form-input-wrapper", error && "form-input-wrapper--error")}>
+      <div
+        className={clsx(
+          "form-input-wrapper",
+          error && "form-input-wrapper--error",
+        )}
+      >
         {icon && <span className="form-input-icon">{icon}</span>}
         <input
           id={inputId}
@@ -68,7 +74,13 @@ export function Input({
 
 type PasswordInputProps = Omit<InputProps, "type">;
 
-function PasswordInput({ label, error, id, className, ...props }: PasswordInputProps): JSX.Element {
+function PasswordInput({
+  label,
+  error,
+  id,
+  className,
+  ...props
+}: PasswordInputProps): JSX.Element {
   const [show, setShow] = useState(false);
   const inputId = id || "password";
 
@@ -79,7 +91,12 @@ function PasswordInput({ label, error, id, className, ...props }: PasswordInputP
           {label}
         </label>
       )}
-      <div className={clsx("form-input-wrapper", error && "form-input-wrapper--error")}>
+      <div
+        className={clsx(
+          "form-input-wrapper",
+          error && "form-input-wrapper--error",
+        )}
+      >
         <input
           id={inputId}
           className="form-input form-input--with-icon"
@@ -136,7 +153,8 @@ export function Select({
   id,
   className,
 }: SelectProps): JSX.Element {
-  const selectId = id || (label ? label.toLowerCase().replace(/\s+/g, "-") : undefined);
+  const selectId =
+    id || (label ? label.toLowerCase().replace(/\s+/g, "-") : undefined);
 
   return (
     <div className={clsx("form-group", className)}>
@@ -187,7 +205,8 @@ export function Textarea({
   className,
   ...props
 }: TextareaProps): JSX.Element {
-  const textareaId = id || (label ? label.toLowerCase().replace(/\s+/g, "-") : undefined);
+  const textareaId =
+    id || (label ? label.toLowerCase().replace(/\s+/g, "-") : undefined);
 
   return (
     <div className={clsx("form-group", className)}>
@@ -269,7 +288,8 @@ export function Switch({
   id,
   className,
 }: SwitchProps): JSX.Element {
-  const switchId = id || (label ? label.toLowerCase().replace(/\s+/g, "-") : "switch");
+  const switchId =
+    id || (label ? label.toLowerCase().replace(/\s+/g, "-") : "switch");
 
   return (
     <div className={clsx("form-switch-wrapper", className)}>

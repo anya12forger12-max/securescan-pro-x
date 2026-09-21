@@ -73,10 +73,15 @@ export const workspaceApi = {
 
 export const assetApi = {
   list: (workspaceId?: string) =>
-    api.get<any[]>(`/assets${workspaceId ? `?workspace_id=${workspaceId}` : ""}`),
+    api.get<any[]>(
+      `/assets${workspaceId ? `?workspace_id=${workspaceId}` : ""}`,
+    ),
   get: (id: string) => api.get<any>(`/assets/${id}`),
   create: (data: any, workspaceId?: string) =>
-    api.post<any>(`/assets${workspaceId ? `?workspace_id=${workspaceId}` : ""}`, data),
+    api.post<any>(
+      `/assets${workspaceId ? `?workspace_id=${workspaceId}` : ""}`,
+      data,
+    ),
   update: (id: string, data: any) => api.patch<any>(`/assets/${id}`, data),
   delete: (id: string) => api.delete<any>(`/assets/${id}`),
 };
@@ -102,8 +107,7 @@ export const assessmentApi = {
 export const scanApi = {
   portScan: (target: string, ports?: number[]) =>
     api.post<any>("/scans/port-scan", { target, ports }),
-  headerCheck: (url: string) =>
-    api.post<any>("/scans/header-check", { url }),
+  headerCheck: (url: string) => api.post<any>("/scans/header-check", { url }),
   passwordCheck: (demoMode = true) =>
     api.post<any>("/scans/password-check", { demo_mode: demoMode }),
   sslCheck: (hostname: string, port = 443) =>

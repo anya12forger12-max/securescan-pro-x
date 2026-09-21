@@ -9,7 +9,12 @@ interface IconProps {
   className?: string;
 }
 
-function icon(size: number, className: string, d: string, viewBox = "0 0 24 24"): JSX.Element {
+function icon(
+  size: number,
+  className: string,
+  d: string,
+  viewBox = "0 0 24 24",
+): JSX.Element {
   return (
     <svg
       width={size}
@@ -73,7 +78,10 @@ export const GlobeIcon = ({ size = 20, className = "" }: IconProps) =>
   iconPaths(size, className, [
     <circle key="c" cx="12" cy="12" r="10" />,
     <path key="p1" d="M2 12h20" />,
-    <path key="p2" d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />,
+    <path
+      key="p2"
+      d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"
+    />,
   ]);
 
 export const ServerIcon = ({ size = 20, className = "" }: IconProps) =>
@@ -86,7 +94,10 @@ export const ServerIcon = ({ size = 20, className = "" }: IconProps) =>
 
 export const AlertTriangleIcon = ({ size = 20, className = "" }: IconProps) =>
   iconPaths(size, className, [
-    <path key="p" d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />,
+    <path
+      key="p"
+      d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+    />,
     <line key="l1" x1="12" y1="9" x2="12" y2="13" />,
     <line key="l2" x1="12" y1="17" x2="12.01" y2="17" />,
   ]);
@@ -111,12 +122,19 @@ export const PlusIcon = ({ size = 20, className = "" }: IconProps) =>
   ]);
 
 export const EditIcon = ({ size = 20, className = "" }: IconProps) =>
-  icon(size, className, "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z");
+  icon(
+    size,
+    className,
+    "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z",
+  );
 
 export const TrashIcon = ({ size = 20, className = "" }: IconProps) =>
   iconPaths(size, className, [
     <polyline key="p" points="3 6 5 6 21 6" />,
-    <path key="p1" d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />,
+    <path
+      key="p1"
+      d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+    />,
   ]);
 
 export const DownloadIcon = ({ size = 20, className = "" }: IconProps) =>
@@ -140,14 +158,20 @@ export const EyeIcon = ({ size = 20, className = "" }: IconProps) =>
 
 export const EyeOffIcon = ({ size = 20, className = "" }: IconProps) =>
   iconPaths(size, className, [
-    <path key="p1" d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />,
+    <path
+      key="p1"
+      d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"
+    />,
     <line key="l1" x1="1" y1="1" x2="23" y2="23" />,
   ]);
 
 export const SettingsIcon = ({ size = 20, className = "" }: IconProps) =>
   iconPaths(size, className, [
     <circle key="c" cx="12" cy="12" r="3" />,
-    <path key="p" d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />,
+    <path
+      key="p"
+      d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
+    />,
   ]);
 
 export const HomeIcon = ({ size = 20, className = "" }: IconProps) =>
@@ -162,7 +186,10 @@ export const BarChartIcon = ({ size = 20, className = "" }: IconProps) =>
 
 export const FileTextIcon = ({ size = 20, className = "" }: IconProps) =>
   iconPaths(size, className, [
-    <path key="p1" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />,
+    <path
+      key="p1"
+      d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
+    />,
     <polyline key="pl" points="14 2 14 8 20 8" />,
     <line key="l1" x1="16" y1="13" x2="8" y2="13" />,
     <line key="l2" x1="16" y1="17" x2="8" y2="17" />,
