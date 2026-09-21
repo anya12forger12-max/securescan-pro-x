@@ -2,6 +2,7 @@
  * Login Page
  */
 import React, { useState } from "react";
+import type { JSX } from "react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/forms";
 import { ShieldIcon } from "../components/icons";

@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
@@ -27,6 +27,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models import TimestampMixin, UUIDMixin
+
+if TYPE_CHECKING:
+    from app.models import Finding, Workspace
 
 
 # ── Enums ──────────────────────────────────────────────────────────

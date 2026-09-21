@@ -2,8 +2,9 @@
  * Utility UI Components — Spinner, EmptyState, Toast, Progress, etc.
  */
 import React, { useEffect } from "react";
+import type { JSX } from "react";
 import { clsx } from "clsx";
-import { AlertTriangleIcon, CheckCircleIcon, XCircleIcon, InfoIcon } from "../icons";
+import { AlertTriangleIcon, CheckCircleIcon, XCircleIcon } from "../icons";
 
 // ── Loading Spinner ───────────────────────────────────────────
 

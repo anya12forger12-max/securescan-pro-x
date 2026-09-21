@@ -1,7 +1,7 @@
 /**
  * Severity Chart — SVG-based donut chart for finding severities
  */
-import React from "react";
+import type { JSX } from "react";
 
 interface SeverityData {
   critical: number;

@@ -1,12 +1,13 @@
 /**
  * Workspaces Page
  */
-import React, { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import type { JSX } from "react";
 import { Button } from "../components/ui/button";
 import { Input, Textarea } from "../components/forms";
 import { Modal } from "../components/dialogs";
 import { EmptyState, LoadingSpinner } from "../components/ui/utility-components";
-import { PlusIcon, ServerIcon, EditIcon, TrashIcon } from "../components/icons";
+import { PlusIcon, ServerIcon, TrashIcon } from "../components/icons";
 import { workspaceApi } from "../utils/api";
 import { useWorkspaceStore, useUIStore } from "../stores";
 
@@ -17,9 +18,7 @@ export function WorkspacesPage(): JSX.Element {
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
 
-  useEffect(() => { loadWorkspaces(); }, []);
-
-  const loadWorkspaces = async () => {
+  const loadWorkspaces = useCallback(async () => {
     setLoading(true);
     try {
       const data = await workspaceApi.list();
@@ -27,7 +26,9 @@ export function WorkspacesPage(): JSX.Element {
     } catch {
       addNotification({ type: "error", title: "Error", message: "Failed to load workspaces" });
     }
-  };
+  }, [addNotification, setLoading, setWorkspaces]);
+
+  useEffect(() => { loadWorkspaces(); }, [loadWorkspaces]);
 
   const createWorkspace = async () => {
     if (!newName.trim()) return;

@@ -8,11 +8,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import Boolean, Integer, select, String, Text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.database import Base
 from app.core.exceptions import DatabaseError
 from app.core.logging import get_logger
+from app.models import TimestampMixin, UUIDMixin
 from app.services.auth import UserRole
 from app.services.database.base import (
     BaseRepository,
@@ -35,11 +38,6 @@ class UserMixin:
 # alongside the existing in-memory auth dataclass. This allows
 # the database layer to persist users while the auth service
 # continues to work with its own dataclass for business logic.
-
-from sqlalchemy import Boolean, String, Text, Integer
-from sqlalchemy.orm import Mapped, mapped_column
-from app.core.database import Base
-from app.models import UUIDMixin, TimestampMixin
 
 
 class UserModel(Base, UUIDMixin, TimestampMixin):

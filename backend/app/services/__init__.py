@@ -34,7 +34,17 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "InMemoryVulnKnowledgeService": ("app.services.knowledge", "InMemoryVulnKnowledgeService"),
 }
 
-__all__ = list(_LAZY_IMPORTS)
+__all__ = [
+    "AssetService",
+    "AuditService",
+    "ConfigurationService",
+    "InMemoryOrchestrator",
+    "InMemoryVulnKnowledgeService",
+    "LoggingService",
+    "PluginManager",
+    "ReportGenerationService",
+    "WorkspaceService",
+]
 
 
 def __getattr__(name: str) -> object:

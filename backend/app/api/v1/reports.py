@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
+from pydantic import BaseModel, Field
 
 from app.core.exceptions import AssessmentNotFoundError
 from app.schemas import ErrorResponse
@@ -30,9 +31,6 @@ _report_service = ReportGenerationService()
 
 
 # ── Request Schemas ───────────────────────────────────────────────
-
-from pydantic import BaseModel, Field
-
 
 class GenerateReportRequest(BaseModel):
     """Schema for report generation requests."""

@@ -2,17 +2,18 @@
  * Scanner Page — Interactive vulnerability scanner with real-time results
  */
 import React, { useState } from "react";
+import type { JSX } from "react";
 import { clsx } from "clsx";
 import { Button } from "../components/ui/button";
-import { Input, Select, Textarea } from "../components/forms";
+import { Input } from "../components/forms";
 import { SeverityChart } from "../components/charts";
-import { SeverityBadge, LoadingSpinner, EmptyState, ProgressBar } from "../components/ui/utility-components";
+import { SeverityBadge, LoadingSpinner, EmptyState } from "../components/ui/utility-components";
 import {
   SearchIcon, GlobeIcon, LockIcon, ShieldIcon, AlertTriangleIcon,
   CheckCircleIcon, TerminalIcon, PlayIcon,
 } from "../components/icons";
 import { scanApi } from "../utils/api";
-import { useScanStore, useUIStore } from "../stores";
+import { useUIStore } from "../stores";
 
 type ScanType = "port" | "header" | "password" | "ssl" | "full";
 

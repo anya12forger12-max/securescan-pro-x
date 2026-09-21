@@ -2,11 +2,11 @@
  * SecureScan Pro X — Global Styles
  */
 
-@import "./design-system/tokens.css";
-@import "./design-system/themes/dark.css";
-@import "./design-system/themes/light.css";
-@import "./design-system/themes/high-contrast.css";
-@import "./design-system/themes/colorblind.css";
+@import "../design-system/tokens.css";
+@import "../design-system/themes/dark.css";
+@import "../design-system/themes/light.css";
+@import "../design-system/themes/high-contrast.css";
+@import "../design-system/themes/colorblind.css";
 @import "./components.css";
 
 /* ── Reset ─────────────────────────────────────────────────────── */

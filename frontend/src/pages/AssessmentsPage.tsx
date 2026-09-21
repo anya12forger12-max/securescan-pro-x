@@ -1,11 +1,12 @@
 /**
  * Assessments Page
  */
-import React, { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import type { JSX } from "react";
 import { Button } from "../components/ui/button";
 import { Input, Textarea, Select } from "../components/forms";
 import { Modal } from "../components/dialogs";
-import { EmptyState, LoadingSpinner, SeverityBadge } from "../components/ui/utility-components";
+import { EmptyState, LoadingSpinner } from "../components/ui/utility-components";
 import { PlusIcon, SearchIcon, PlayIcon, StopIcon, ClockIcon } from "../components/icons";
 import { assessmentApi } from "../utils/api";
 import { useUIStore } from "../stores";
@@ -34,9 +35,7 @@ export function AssessmentsPage(): JSX.Element {
   const [form, setForm] = useState({ name: "", description: "", priority: "normal" });
   const addNotification = useUIStore((s) => s.addNotification);
 
-  useEffect(() => { loadAssessments(); }, []);
-
-  const loadAssessments = async () => {
+  const loadAssessments = useCallback(async () => {
     setLoading(true);
     try {
       const data = await assessmentApi.list();
@@ -46,7 +45,9 @@ export function AssessmentsPage(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  };
+  }, [addNotification]);
+
+  useEffect(() => { loadAssessments(); }, [loadAssessments]);
 
   const createAssessment = async () => {
     if (!form.name.trim()) return;

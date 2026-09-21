@@ -2,7 +2,7 @@
  * Icon Components — SVG icons for SecureScan Pro X
  * All icons use aria-hidden="true" for screen readers.
  */
-import React from "react";
+import type { JSX } from "react";
 
 interface IconProps {
   size?: number;

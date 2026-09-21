@@ -8,7 +8,7 @@ import { Button } from "./components/ui/button";
 import { ToastContainer } from "./components/ui/utility-components";
 import {
   HomeIcon, SearchIcon, ServerIcon, GlobeIcon, ShieldIcon,
-  SettingsIcon, LogOutIcon, BarChartIcon, UserIcon,
+  SettingsIcon, BarChartIcon, UserIcon,
 } from "./components/icons";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -116,13 +116,13 @@ function AppShell() {
 }
 
 function AppContent() {
-  const { isAuthenticated, isLoading, setUser, setLoading } = useAuthStore();
+  const { setUser } = useAuthStore();
   const setTheme = useUIStore((s) => s.setTheme);
   const theme = useUIStore((s) => s.theme);
 
   useEffect(() => {
     setTheme(theme);
-  }, []);
+  }, [theme, setTheme]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -134,7 +134,7 @@ function AppContent() {
       }
     };
     checkAuth();
-  }, []);
+  }, [setUser]);
 
   return (
     <Routes>

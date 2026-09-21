@@ -1,7 +1,7 @@
 /**
  * Settings Page
  */
-import React from "react";
+import type { JSX } from "react";
 import { useAuthStore, useUIStore } from "../stores";
 import { authApi } from "../utils/api";
 import { Button } from "../components/ui/button";

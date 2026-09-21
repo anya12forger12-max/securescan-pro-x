@@ -2,6 +2,7 @@
  * Form Components — Input, Select, Textarea, Checkbox, Switch
  */
 import React, { useState } from "react";
+import type { JSX } from "react";
 import { clsx } from "clsx";
 import { EyeIcon, EyeOffIcon } from "../icons";
 
@@ -65,7 +66,7 @@ export function Input({
 
 // ── Password Input ────────────────────────────────────────────
 
-interface PasswordInputProps extends Omit<InputProps, "type"> {}
+type PasswordInputProps = Omit<InputProps, "type">;
 
 function PasswordInput({ label, error, id, className, ...props }: PasswordInputProps): JSX.Element {
   const [show, setShow] = useState(false);

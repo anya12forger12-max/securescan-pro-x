@@ -1,9 +1,10 @@
 /**
  * Assets Page
  */
-import React, { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import type { JSX } from "react";
 import { Button } from "../components/ui/button";
-import { Input, Select, Textarea } from "../components/forms";
+import { Input, Select } from "../components/forms";
 import { Modal } from "../components/dialogs";
 import { EmptyState, LoadingSpinner } from "../components/ui/utility-components";
 import { PlusIcon, GlobeIcon, TrashIcon } from "../components/icons";
@@ -25,9 +26,7 @@ export function AssetsPage(): JSX.Element {
   const [form, setForm] = useState({ name: "", assetType: "host", identifier: "", description: "" });
   const addNotification = useUIStore((s) => s.addNotification);
 
-  useEffect(() => { loadAssets(); }, []);
-
-  const loadAssets = async () => {
+  const loadAssets = useCallback(async () => {
     setLoading(true);
     try {
       const data = await assetApi.list();
@@ -37,7 +36,9 @@ export function AssetsPage(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  };
+  }, [addNotification]);
+
+  useEffect(() => { loadAssets(); }, [loadAssets]);
 
   const createAsset = async () => {
     if (!form.name.trim() || !form.identifier.trim()) return;

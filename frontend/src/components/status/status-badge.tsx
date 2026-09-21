@@ -5,7 +5,7 @@
  * Never relies on color alone — always includes icon and/or text.
  */
 
-import React from "react";
+import type { JSX } from "react";
 import { clsx } from "clsx";
 import type { Severity, FindingStatus, AssessmentStatus } from "../../types";
 
@@ -31,8 +31,7 @@ const findingStatusIcons: Record<FindingStatus, string> = {
   false_positive: "○",
 };
 
-const assessmentStatusIcons: Record<AssessmentStatus, string> = {
-  pending: "○",
+const assessmentStatusIcons: Partial<Record<AssessmentStatus, string>> = {
   running: "⟳",
   completed: "✓",
   failed: "✕",
@@ -42,7 +41,8 @@ const assessmentStatusIcons: Record<AssessmentStatus, string> = {
 function getIcon(status: string): string {
   if (status in severityIcons) return severityIcons[status as Severity];
   if (status in findingStatusIcons) return findingStatusIcons[status as FindingStatus];
-  if (status in assessmentStatusIcons) return assessmentStatusIcons[status as AssessmentStatus];
+  if (status in assessmentStatusIcons)
+    return assessmentStatusIcons[status as AssessmentStatus] ?? "●";
   return "●";
 }
 

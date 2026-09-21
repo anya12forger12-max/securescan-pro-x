@@ -2,10 +2,11 @@
  * Dashboard Page — Main overview with stats, charts, recent activity
  */
 import React, { useEffect } from "react";
-import { useAuthStore, useScanStore } from "../stores";
-import { authApi, assessmentApi, workspaceApi } from "../utils/api";
-import { SeverityChart, BarChart } from "../components/charts";
-import { StatCard, SeverityBadge, LoadingSpinner, EmptyState } from "../components/ui/utility-components";
+import type { JSX } from "react";
+import { useAuthStore } from "../stores";
+import { assessmentApi, workspaceApi } from "../utils/api";
+import { SeverityChart } from "../components/charts";
+import { StatCard, LoadingSpinner, EmptyState } from "../components/ui/utility-components";
 import { ShieldIcon, SearchIcon, GlobeIcon, ServerIcon, AlertTriangleIcon, ClockIcon } from "../components/icons";
 
 export function DashboardPage(): JSX.Element {

@@ -1,7 +1,8 @@
 /**
  * Modal and Dialog Components
  */
-import React, { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback } from "react";
+import type { JSX } from "react";
 import { clsx } from "clsx";
 import { XCircleIcon } from "../icons";
 import { Button } from "../ui/button";
