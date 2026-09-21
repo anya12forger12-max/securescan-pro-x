@@ -5,10 +5,11 @@ Provides CRUD, listing, and name-uniqueness checks for Workspace entities.
 
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import TYPE_CHECKING
 
-from app.core.exceptions import DatabaseError, WorkspaceExistsError, WorkspaceNotFoundError
+from sqlalchemy import select
+
+from app.core.exceptions import WorkspaceExistsError, WorkspaceNotFoundError
 from app.core.logging import get_logger
 from app.models import Workspace
 from app.services.database.base import (
@@ -18,6 +19,9 @@ from app.services.database.base import (
     PaginationParams,
     QueryFilters,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
@@ -46,9 +50,7 @@ class WorkspaceRepository(BaseRepository[Workspace]):
             WorkspaceExistsError: If name is already taken.
         """
         if await self.name_exists(name):
-            raise WorkspaceExistsError(
-                f"Workspace with name '{name}' already exists"
-            )
+            raise WorkspaceExistsError(f"Workspace with name '{name}' already exists")
 
         return await self.create(name=name, description=description, is_active=True)
 
@@ -60,9 +62,7 @@ class WorkspaceRepository(BaseRepository[Workspace]):
         """
         ws = await self.get(workspace_id)
         if ws is None:
-            raise WorkspaceNotFoundError(
-                f"Workspace '{workspace_id}' not found"
-            )
+            raise WorkspaceNotFoundError(f"Workspace '{workspace_id}' not found")
         return ws
 
     async def list_workspaces(
@@ -84,9 +84,7 @@ class WorkspaceRepository(BaseRepository[Workspace]):
             order_desc=True,
         )
         if active_only:
-            filters.filters.append(
-                FilterSpec(column="is_active", op="eq", value=True)
-            )
+            filters.filters.append(FilterSpec(column="is_active", op="eq", value=True))
         return await self.list(filters=filters, pagination=pagination)
 
     async def update_workspace(
@@ -107,9 +105,7 @@ class WorkspaceRepository(BaseRepository[Workspace]):
         if "name" in kwargs and kwargs["name"] != ws.name:
             new_name = kwargs["name"]
             if await self.name_exists(new_name, exclude_id=workspace_id):
-                raise WorkspaceExistsError(
-                    f"Workspace with name '{new_name}' already exists"
-                )
+                raise WorkspaceExistsError(f"Workspace with name '{new_name}' already exists")
 
         return await self.update(workspace_id, **kwargs)
 

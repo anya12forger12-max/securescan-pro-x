@@ -9,13 +9,13 @@ from __future__ import annotations
 import pytest
 
 from app.core.exceptions import AssessmentNotFoundError, ValidationError
-from app.services.assessment.profiles import (
-    BUILTIN_PROFILES,
-    InMemoryProfileService,
-)
 from app.services.assessment.policies import (
     BUILTIN_POLICIES,
     InMemoryPolicyService,
+)
+from app.services.assessment.profiles import (
+    BUILTIN_PROFILES,
+    InMemoryProfileService,
 )
 
 
@@ -30,7 +30,7 @@ class TestProfileService:
     @pytest.mark.asyncio
     async def test_builtin_profiles_loaded(self, service: InMemoryProfileService) -> None:
         """Built-in profiles are loaded on init."""
-        profiles, total = await service.list()
+        _profiles, total = await service.list()
         assert total == len(BUILTIN_PROFILES)
 
     @pytest.mark.asyncio
@@ -93,7 +93,7 @@ class TestProfileService:
         """Listing with offset and limit works."""
         await service.create(name="P1")
         await service.create(name="P2")
-        all_profiles, total = await service.list()
+        _all_profiles, total = await service.list()
         assert total >= len(BUILTIN_PROFILES) + 2
 
         page, page_total = await service.list(offset=0, limit=2)
@@ -112,7 +112,7 @@ class TestPolicyService:
     @pytest.mark.asyncio
     async def test_builtin_policies_loaded(self, service: InMemoryPolicyService) -> None:
         """Built-in policies are loaded on init."""
-        policies, total = await service.list()
+        _policies, total = await service.list()
         assert total == len(BUILTIN_POLICIES)
 
     @pytest.mark.asyncio
@@ -182,7 +182,9 @@ class TestPolicyService:
         assert violations == []
 
     @pytest.mark.asyncio
-    async def test_validate_assessment_plugin_restricted(self, service: InMemoryPolicyService) -> None:
+    async def test_validate_assessment_plugin_restricted(
+        self, service: InMemoryPolicyService
+    ) -> None:
         """Validation fails for restricted plugins."""
         policy = await service.create(
             name="Restricted",
@@ -197,7 +199,9 @@ class TestPolicyService:
         assert "not-allowed" in violations[0]
 
     @pytest.mark.asyncio
-    async def test_validate_assessment_approval_required(self, service: InMemoryPolicyService) -> None:
+    async def test_validate_assessment_approval_required(
+        self, service: InMemoryPolicyService
+    ) -> None:
         """Validation fails when approval is required but not granted."""
         policy = await service.create(
             name="Needs Approval",

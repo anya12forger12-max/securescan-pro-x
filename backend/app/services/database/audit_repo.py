@@ -6,11 +6,10 @@ Stores immutable audit trail entries for all security-relevant operations.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import Boolean, DateTime, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -23,6 +22,9 @@ from app.services.database.base import (
     PaginationParams,
     QueryFilters,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
@@ -40,9 +42,7 @@ class AuditLogModel(Base, UUIDMixin):
     )
     action: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    resource_type: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, index=True
-    )
+    resource_type: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     resource_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     details_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
@@ -139,25 +139,15 @@ class AuditRepository(BaseRepository[AuditLogModel]):
             order_desc=True,
         )
         if user_id:
-            filters.filters.append(
-                FilterSpec(column="user_id", op="eq", value=user_id)
-            )
+            filters.filters.append(FilterSpec(column="user_id", op="eq", value=user_id))
         if resource_type:
-            filters.filters.append(
-                FilterSpec(column="resource_type", op="eq", value=resource_type)
-            )
+            filters.filters.append(FilterSpec(column="resource_type", op="eq", value=resource_type))
         if action:
-            filters.filters.append(
-                FilterSpec(column="action", op="eq", value=action)
-            )
+            filters.filters.append(FilterSpec(column="action", op="eq", value=action))
         if success_only is not None:
-            filters.filters.append(
-                FilterSpec(column="success", op="eq", value=success_only)
-            )
+            filters.filters.append(FilterSpec(column="success", op="eq", value=success_only))
         if since:
-            filters.filters.append(
-                FilterSpec(column="timestamp", op="gte", value=since)
-            )
+            filters.filters.append(FilterSpec(column="timestamp", op="gte", value=since))
         return await self.list(filters=filters, pagination=pagination)
 
     async def get_event_count(self) -> int:
@@ -204,9 +194,7 @@ class AuditRepository(BaseRepository[AuditLogModel]):
             order_desc=True,
         )
         if since:
-            filters.filters.append(
-                FilterSpec(column="timestamp", op="gte", value=since)
-            )
+            filters.filters.append(FilterSpec(column="timestamp", op="gte", value=since))
         return await self.list(filters=filters, pagination=pagination)
 
     async def get_recent_by_user(
@@ -242,9 +230,7 @@ class AuditRepository(BaseRepository[AuditLogModel]):
         total_deleted = 0
         while True:
             stmt = (
-                sa_delete(AuditLogModel)
-                .where(AuditLogModel.timestamp < before)
-                .limit(batch_size)
+                sa_delete(AuditLogModel).where(AuditLogModel.timestamp < before).limit(batch_size)
             )
             result = await self.session.execute(stmt)
             batch = result.rowcount

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -13,6 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 @dataclass
 class RateLimitBucket:
     """A rate limit bucket tracking requests."""
+
     tokens: int
     last_refill: float
     max_tokens: int
@@ -66,16 +67,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if now - self._last_cleanup < self._cleanup_interval:
             return
         self._last_cleanup = now
-        expired = [
-            k for k, v in self._buckets.items()
-            if now - v.last_refill > 600
-        ]
+        expired = [k for k, v in self._buckets.items() if now - v.last_refill > 600]
         for k in expired:
             del self._buckets[k]
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.url.path in ("/health", "/docs", "/openapi.json"):
             return await call_next(request)
 

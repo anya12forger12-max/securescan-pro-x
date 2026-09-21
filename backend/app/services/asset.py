@@ -7,11 +7,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Any, Optional
 
 from app.core.exceptions import AssetExistsError, AssetNotFoundError
 from app.core.logging import get_logger
-from app.schemas import AssetCreate, AssetUpdate, AssetResponse
+from app.schemas import AssetCreate, AssetResponse, AssetUpdate
 
 logger = get_logger(__name__)
 
@@ -135,13 +134,9 @@ class InMemoryAssetService(AssetService):
         """
         # Check for duplicate identifier in same workspace
         for asset in self._assets.values():
-            if (
-                asset["workspace_id"] == workspace_id
-                and asset["identifier"] == data.identifier
-            ):
+            if asset["workspace_id"] == workspace_id and asset["identifier"] == data.identifier:
                 raise AssetExistsError(
-                    f"Asset with identifier '{data.identifier}' "
-                    f"already exists in workspace"
+                    f"Asset with identifier '{data.identifier}' already exists in workspace"
                 )
 
         self._counter += 1
@@ -204,16 +199,13 @@ class InMemoryAssetService(AssetService):
         Returns:
             Tuple of (list of assets, total count).
         """
-        all_assets = [
-            a for a in self._assets.values()
-            if a["workspace_id"] == workspace_id
-        ]
+        all_assets = [a for a in self._assets.values() if a["workspace_id"] == workspace_id]
 
         if asset_type is not None:
             all_assets = [a for a in all_assets if a["asset_type"] == asset_type]
 
         total = len(all_assets)
-        page = all_assets[offset: offset + limit]
+        page = all_assets[offset : offset + limit]
 
         return (
             [AssetResponse(**a) for a in page],

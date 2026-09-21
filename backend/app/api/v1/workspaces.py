@@ -46,7 +46,7 @@ async def create_workspace(data: WorkspaceCreate) -> WorkspaceResponse:
     try:
         return await _service.create(data)
     except WorkspaceExistsError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.get(
@@ -70,9 +70,7 @@ async def list_workspaces(
     Returns:
         List of workspaces.
     """
-    workspaces, _ = await _service.list(
-        active_only=active_only, offset=offset, limit=limit
-    )
+    workspaces, _ = await _service.list(active_only=active_only, offset=offset, limit=limit)
     return workspaces
 
 
@@ -100,7 +98,7 @@ async def get_workspace(workspace_id: str) -> WorkspaceResponse:
     try:
         return await _service.get(workspace_id)
     except WorkspaceNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @router.patch(
@@ -132,7 +130,7 @@ async def update_workspace(
     try:
         return await _service.update(workspace_id, data)
     except WorkspaceNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @router.delete(
@@ -156,4 +154,4 @@ async def delete_workspace(workspace_id: str) -> None:
     try:
         await _service.delete(workspace_id)
     except WorkspaceNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e

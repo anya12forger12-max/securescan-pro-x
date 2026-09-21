@@ -6,15 +6,13 @@ Provides CRUD, workspace-scoped listing, status updates, and lifecycle queries.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import (
     AssessmentNotFoundError,
-    DatabaseError,
 )
 from app.core.logging import get_logger
 from app.models import Assessment
@@ -25,6 +23,9 @@ from app.services.database.base import (
     PaginationParams,
     QueryFilters,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
@@ -95,9 +96,7 @@ class AssessmentRepository(BaseRepository[Assessment]):
             assessment = await self.get(assessment_id)
 
         if assessment is None:
-            raise AssessmentNotFoundError(
-                f"Assessment '{assessment_id}' not found"
-            )
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
         return assessment
 
     async def list_assessments(
@@ -124,9 +123,7 @@ class AssessmentRepository(BaseRepository[Assessment]):
             order_desc=True,
         )
         if status:
-            filters.filters.append(
-                FilterSpec(column="status", op="eq", value=status)
-            )
+            filters.filters.append(FilterSpec(column="status", op="eq", value=status))
         return await self.list(filters=filters, pagination=pagination)
 
     async def update_assessment(
@@ -182,9 +179,7 @@ class AssessmentRepository(BaseRepository[Assessment]):
             update_fields["completed_at"] = now
 
         await self.session.execute(
-            update(self.model)
-            .where(self.model.id == assessment_id)
-            .values(**update_fields)
+            update(self.model).where(self.model.id == assessment_id).values(**update_fields)
         )
         await self.session.flush()
 
@@ -204,9 +199,7 @@ class AssessmentRepository(BaseRepository[Assessment]):
     ) -> None:
         """Set the target count for an assessment."""
         await self.session.execute(
-            update(self.model)
-            .where(self.model.id == assessment_id)
-            .values(target_count=count)
+            update(self.model).where(self.model.id == assessment_id).values(target_count=count)
         )
         await self.session.flush()
 
@@ -217,9 +210,7 @@ class AssessmentRepository(BaseRepository[Assessment]):
     ) -> None:
         """Set the finding count for an assessment."""
         await self.session.execute(
-            update(self.model)
-            .where(self.model.id == assessment_id)
-            .values(finding_count=count)
+            update(self.model).where(self.model.id == assessment_id).values(finding_count=count)
         )
         await self.session.flush()
 
@@ -267,9 +258,6 @@ class AssessmentRepository(BaseRepository[Assessment]):
         """Return a count of assessments grouped by status."""
         from sqlalchemy import func
 
-        stmt = (
-            select(self.model.status, func.count())
-            .group_by(self.model.status)
-        )
+        stmt = select(self.model.status, func.count()).group_by(self.model.status)
         result = await self.session.execute(stmt)
         return {row[0]: row[1] for row in result.all()}

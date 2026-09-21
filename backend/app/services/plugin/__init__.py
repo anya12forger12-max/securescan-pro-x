@@ -11,7 +11,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 
 class PluginType(str, Enum):
@@ -189,6 +188,7 @@ class InMemoryPluginManager(PluginManager):
         plugin = self._plugins.get(plugin_id)
         if plugin is None:
             from app.core.exceptions import PluginNotFoundError
+
             raise PluginNotFoundError(f"Plugin '{plugin_id}' not found")
 
         plugin.status = PluginStatus.LOADED
@@ -209,13 +209,13 @@ class InMemoryPluginManager(PluginManager):
         plugin = self._plugins.get(plugin_id)
         if plugin is None:
             from app.core.exceptions import PluginNotFoundError
+
             raise PluginNotFoundError(f"Plugin '{plugin_id}' not found")
 
         if plugin.status != PluginStatus.LOADED:
             from app.core.exceptions import PluginLoadError
-            raise PluginLoadError(
-                f"Plugin '{plugin_id}' must be loaded before initialization"
-            )
+
+            raise PluginLoadError(f"Plugin '{plugin_id}' must be loaded before initialization")
 
         plugin.status = PluginStatus.INITIALIZED
         return plugin
@@ -244,6 +244,7 @@ class InMemoryPluginManager(PluginManager):
         plugin = self._plugins.get(plugin_id)
         if plugin is None:
             from app.core.exceptions import PluginNotFoundError
+
             raise PluginNotFoundError(f"Plugin '{plugin_id}' not found")
         return plugin
 
@@ -281,9 +282,7 @@ class InMemoryPluginManager(PluginManager):
         plugin = self._plugins.get(plugin_id)
         if plugin is None:
             return False
-        return all(
-            perm in granted_permissions for perm in plugin.permissions
-        )
+        return all(perm in granted_permissions for perm in plugin.permissions)
 
     def register_plugin(self, info: PluginInfo) -> None:
         """Register a plugin in memory (for testing).

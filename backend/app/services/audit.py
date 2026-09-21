@@ -186,7 +186,7 @@ class InMemoryAuditService(AuditService):
         if action is not None:
             filtered = [e for e in filtered if e.action == action]
 
-        return filtered[offset: offset + limit]
+        return filtered[offset : offset + limit]
 
     async def get_event_count(self) -> int:
         """Get total number of audit events.

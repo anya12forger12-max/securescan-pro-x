@@ -12,15 +12,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.services.configuration import ConfigurationService
-    from app.services.logging_service import LoggingService
-    from app.services.workspace import WorkspaceService
-    from app.services.asset import AssetService
     from app.services.assessment import InMemoryOrchestrator
-    from app.services.plugin import PluginManager
+    from app.services.asset import AssetService
     from app.services.audit import AuditService
-    from app.services.reports import ReportGenerationService
+    from app.services.configuration import ConfigurationService
     from app.services.knowledge import InMemoryVulnKnowledgeService
+    from app.services.logging_service import LoggingService
+    from app.services.plugin import PluginManager
+    from app.services.reports import ReportGenerationService
+    from app.services.workspace import WorkspaceService
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ConfigurationService": ("app.services.configuration", "ConfigurationService"),

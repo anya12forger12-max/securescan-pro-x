@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.workspace import InMemoryWorkspaceService
-from app.services.asset import InMemoryAssetService
 from app.services.assessment.orchestrator import InMemoryOrchestrator
+from app.services.asset import InMemoryAssetService
 from app.services.audit import InMemoryAuditService
 from app.services.configuration import InMemoryConfigurationService
 from app.services.plugin import InMemoryPluginManager
+from app.services.workspace import InMemoryWorkspaceService
 
 
 @pytest.fixture

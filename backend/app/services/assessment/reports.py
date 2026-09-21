@@ -172,10 +172,7 @@ def generate_markdown_report(report_data: dict[str, Any]) -> str:
         lines.append("## Timeline")
         lines.append("")
         for event in report_data["timeline"]:
-            lines.append(
-                f"- [{event.get('timestamp', 'N/A')}] "
-                f"{event.get('title', 'Event')}"
-            )
+            lines.append(f"- [{event.get('timestamp', 'N/A')}] {event.get('title', 'Event')}")
         lines.append("")
 
     lines.append("## Appendix")
@@ -206,19 +203,19 @@ def generate_html_report(report_data: dict[str, Any]) -> str:
     for f in findings:
         sev_class = f"sev-{f.get('severity', 'info')}"
         findings_rows += (
-            f'<tr><td>{f.get("title", "")}</td>'
+            f"<tr><td>{f.get('title', '')}</td>"
             f'<td class="{sev_class}">{f.get("severity", "")}</td>'
-            f'<td>{f.get("category", "")}</td>'
-            f'<td>{f.get("summary", "")}</td></tr>\n'
+            f"<td>{f.get('category', '')}</td>"
+            f"<td>{f.get('summary', '')}</td></tr>\n"
         )
 
     evidence_rows = ""
     for e in evidence:
         evidence_rows += (
-            f'<tr><td>{e.get("title", "")}</td>'
-            f'<td>{e.get("evidence_type", "")}</td>'
-            f'<td>{e.get("source", "")}</td>'
-            f'<td>{e.get("classification", "")}</td></tr>\n'
+            f"<tr><td>{e.get('title', '')}</td>"
+            f"<td>{e.get('evidence_type', '')}</td>"
+            f"<td>{e.get('source', '')}</td>"
+            f"<td>{e.get('classification', '')}</td></tr>\n"
         )
 
     html = f"""<!DOCTYPE html>
@@ -325,22 +322,32 @@ def generate_csv_report(report_data: dict[str, Any]) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
 
-    writer.writerow([
-        "Title", "Severity", "Category", "Confidence", "Status",
-        "Recommendation", "CVSS", "CWE IDs",
-    ])
+    writer.writerow(
+        [
+            "Title",
+            "Severity",
+            "Category",
+            "Confidence",
+            "Status",
+            "Recommendation",
+            "CVSS",
+            "CWE IDs",
+        ]
+    )
 
     for f in report_data.get("findings", []):
-        writer.writerow([
-            f.get("title", ""),
-            f.get("severity", ""),
-            f.get("category", ""),
-            f.get("confidence", ""),
-            f.get("status", ""),
-            f.get("recommendation", ""),
-            f.get("cvss_score", ""),
-            ", ".join(f.get("cwe_ids", [])),
-        ])
+        writer.writerow(
+            [
+                f.get("title", ""),
+                f.get("severity", ""),
+                f.get("category", ""),
+                f.get("confidence", ""),
+                f.get("status", ""),
+                f.get("recommendation", ""),
+                f.get("cvss_score", ""),
+                ", ".join(f.get("cwe_ids", [])),
+            ]
+        )
 
     return output.getvalue()
 
@@ -445,6 +452,7 @@ class InMemoryReportService(ReportService):
         report_id = f"report-{self._counter:08d}"
 
         import hashlib
+
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
         report = {
@@ -485,7 +493,4 @@ class InMemoryReportService(ReportService):
         """
         reports = self._reports.get(assessment_id, [])
         # Return metadata only (no content)
-        return [
-            {k: v for k, v in r.items() if k != "content"}
-            for r in reports
-        ]
+        return [{k: v for k, v in r.items() if k != "content"} for r in reports]

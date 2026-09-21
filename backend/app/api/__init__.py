@@ -8,7 +8,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import __version__, __app_name__
+from app import __app_name__, __version__
 from app.core.config import settings
 from app.core.logging import get_logger, setup_logging
 
@@ -21,10 +21,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("application.starting", version=__version__)
 
     from app.core.dependencies import init_services
+
     init_services()
 
     try:
         from app.core.database import init_database
+
         await init_database()
     except Exception:
         logger.warning("database_not_available", note="Running in in-memory mode")
@@ -34,9 +36,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("application.shutting_down")
     try:
         from app.core.database import close_database
+
         await close_database()
     except Exception:
-        pass
+        logger.warning("shutdown.close_database_failed")
     logger.info("application.stopped")
 
 
@@ -64,21 +67,27 @@ def create_app() -> FastAPI:
     )
 
     from app.utils.security_headers import SecurityHeadersMiddleware
+
     app.add_middleware(SecurityHeadersMiddleware)
 
     from app.utils.rate_limit import RateLimitMiddleware
+
     app.add_middleware(RateLimitMiddleware, requests_per_minute=100, burst_size=20)
 
     from app.utils.sanitization import InputSanitizationMiddleware
+
     app.add_middleware(InputSanitizationMiddleware)
 
     from app.utils.audit_middleware import AuditMiddleware
+
     app.add_middleware(AuditMiddleware)
 
     from app.api.v1 import router as v1_router
+
     app.include_router(v1_router, prefix="/api/v1")
 
     from app.api.v1.auth import router as auth_router
+
     app.include_router(auth_router, prefix="/api/v1")
 
     @app.get("/health", tags=["health"])

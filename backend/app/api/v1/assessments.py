@@ -32,20 +32,15 @@ from app.schemas.assessment import (
     AssessmentDashboardResponse,
     AssessmentNoteCreate,
     AssessmentNoteResponse,
-    AssessmentSearchRequest,
     AssessmentSearchResponse,
     AssessmentSearchResult,
     AssessmentStatisticsResponse,
     AssessmentTagCreate,
     AssessmentTagResponse,
-    AssessmentTargetCreate,
-    AssessmentTargetResponse,
     EvidenceCreate,
     EvidenceIntegrityResponse,
     EvidenceResponse,
-    HistoryEntryResponse,
     NormalizedFindingResponse,
-    PolicyValidationResponse,
     ReportGenerateRequest,
     ReportResponse,
     TimelineEventResponse,
@@ -53,9 +48,9 @@ from app.schemas.assessment import (
 from app.services.assessment import (
     EventBus,
     InMemoryEvidenceService,
+    InMemoryKnowledgeService,
     InMemoryOrchestrator,
     InMemoryReportService,
-    InMemoryKnowledgeService,
 )
 
 router = APIRouter()
@@ -130,10 +125,13 @@ async def list_assessments(
     """
     assessments = []
     for a in _orchestrator._assessments.values():
-        if a["workspace_id"] == workspace_id and not a.get("is_deleted"):
-            if status is None or a["status"] == status:
-                assessments.append(AssessmentResponse(**a))
-    return assessments[offset:offset + limit]
+        if (
+            a["workspace_id"] == workspace_id
+            and not a.get("is_deleted")
+            and (status is None or a["status"] == status)
+        ):
+            assessments.append(AssessmentResponse(**a))
+    return assessments[offset : offset + limit]
 
 
 @router.get(
@@ -154,7 +152,8 @@ async def get_dashboard(
         Dashboard summary data.
     """
     all_items = [
-        a for a in _orchestrator._assessments.values()
+        a
+        for a in _orchestrator._assessments.values()
         if a["workspace_id"] == workspace_id and not a.get("is_deleted")
     ]
 
@@ -163,13 +162,11 @@ async def get_dashboard(
         s = a["status"]
         status_counts[s] = status_counts.get(s, 0) + 1
 
-    total_findings = sum(a.get("finding_count", 0) for a in all_items)
+    sum(a.get("finding_count", 0) for a in all_items)
     total_evidence = sum(a.get("evidence_count", 0) for a in all_items)
 
     recent = sorted(all_items, key=lambda x: x.get("updated_at", ""), reverse=True)[:10]
-    upcoming = [
-        a for a in all_items if a["status"] in ("queued", "draft")
-    ][:5]
+    upcoming = [a for a in all_items if a["status"] in ("queued", "draft")][:5]
 
     return AssessmentDashboardResponse(
         total_assessments=len(all_items),
@@ -222,14 +219,16 @@ async def search_assessments(
         if a["workspace_id"] != workspace_id or a.get("is_deleted"):
             continue
         if q_lower in a["name"].lower() or q_lower in (a.get("description") or "").lower():
-            results.append(AssessmentSearchResult(
-                id=a["id"],
-                type="assessment",
-                title=a["name"],
-                summary=a.get("description"),
-                relevance_score=1.0,
-                source="assessments",
-            ))
+            results.append(
+                AssessmentSearchResult(
+                    id=a["id"],
+                    type="assessment",
+                    title=a["name"],
+                    summary=a.get("description"),
+                    relevance_score=1.0,
+                    source="assessments",
+                )
+            )
 
     for aid, findings in _orchestrator._findings.items():
         assessment = _orchestrator._assessments.get(aid, {})
@@ -237,17 +236,19 @@ async def search_assessments(
             continue
         for f in findings:
             if q_lower in f.get("title", "").lower():
-                results.append(AssessmentSearchResult(
-                    id=f["id"],
-                    type="finding",
-                    title=f["title"],
-                    summary=f.get("summary"),
-                    relevance_score=0.8,
-                    source="findings",
-                ))
+                results.append(
+                    AssessmentSearchResult(
+                        id=f["id"],
+                        type="finding",
+                        title=f["title"],
+                        summary=f.get("summary"),
+                        relevance_score=0.8,
+                        source="findings",
+                    )
+                )
 
     total = len(results)
-    page = results[offset:offset + limit]
+    page = results[offset : offset + limit]
 
     return AssessmentSearchResponse(
         query=q,
@@ -281,7 +282,7 @@ async def get_assessment(assessment_id: str) -> AssessmentResponse:
         result = await _orchestrator.get_assessment(assessment_id)
         return AssessmentResponse(**result)
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @router.patch(
@@ -310,7 +311,7 @@ async def update_assessment(
         assessment.update(update_data)
         return AssessmentResponse(**assessment)
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @router.delete(
@@ -333,7 +334,7 @@ async def delete_assessment(assessment_id: str) -> None:
         assessment = await _orchestrator.get_assessment(assessment_id)
         assessment["is_deleted"] = True
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 # ── Lifecycle Transitions ──────────────────────────────────────────
@@ -359,9 +360,9 @@ async def queue_assessment(assessment_id: str) -> AssessmentResponse:
         result = await _orchestrator.queue_assessment(assessment_id)
         return AssessmentResponse(**result)
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except AssessmentInvalidTransitionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post(
@@ -384,9 +385,9 @@ async def start_assessment(assessment_id: str) -> AssessmentResponse:
         result = await _orchestrator.start_assessment(assessment_id)
         return AssessmentResponse(**result)
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except AssessmentInvalidTransitionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post(
@@ -409,9 +410,9 @@ async def pause_assessment(assessment_id: str) -> AssessmentResponse:
         result = await _orchestrator.pause_assessment(assessment_id)
         return AssessmentResponse(**result)
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except AssessmentInvalidTransitionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post(
@@ -434,9 +435,9 @@ async def resume_assessment(assessment_id: str) -> AssessmentResponse:
         result = await _orchestrator.resume_assessment(assessment_id)
         return AssessmentResponse(**result)
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except AssessmentInvalidTransitionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post(
@@ -459,9 +460,9 @@ async def cancel_assessment(assessment_id: str) -> AssessmentResponse:
         result = await _orchestrator.cancel_assessment(assessment_id)
         return AssessmentResponse(**result)
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except AssessmentInvalidTransitionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post(
@@ -484,9 +485,9 @@ async def retry_assessment(assessment_id: str) -> AssessmentResponse:
         result = await _orchestrator.retry_assessment(assessment_id)
         return AssessmentResponse(**result)
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except AssessmentInvalidTransitionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post(
@@ -509,9 +510,9 @@ async def archive_assessment(assessment_id: str) -> AssessmentResponse:
         result = await _orchestrator.archive_assessment(assessment_id)
         return AssessmentResponse(**result)
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except AssessmentInvalidTransitionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 # ── Timeline & History ─────────────────────────────────────────────
@@ -535,17 +536,20 @@ async def get_timeline(assessment_id: str) -> list[TimelineEventResponse]:
     """
     try:
         events = await _orchestrator.get_timeline(assessment_id)
-        return [TimelineEventResponse(
-            id=f"tl-{i}",
-            assessment_id=assessment_id,
-            event_type=e.get("event_type", ""),
-            title=e.get("title", ""),
-            description=e.get("description"),
-            severity=e.get("severity"),
-            created_at=e.get("timestamp", ""),
-        ) for i, e in enumerate(events)]
+        return [
+            TimelineEventResponse(
+                id=f"tl-{i}",
+                assessment_id=assessment_id,
+                event_type=e.get("event_type", ""),
+                title=e.get("title", ""),
+                description=e.get("description"),
+                severity=e.get("severity"),
+                created_at=e.get("timestamp", ""),
+            )
+            for i, e in enumerate(events)
+        ]
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 # ── Statistics ─────────────────────────────────────────────────────
@@ -571,7 +575,7 @@ async def get_statistics(assessment_id: str) -> AssessmentStatisticsResponse:
         stats = await _orchestrator.get_statistics(assessment_id)
         return AssessmentStatisticsResponse(**stats)
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 # ── Findings ───────────────────────────────────────────────────────
@@ -602,9 +606,9 @@ async def add_finding(
         result = await _orchestrator.add_finding(assessment_id, data)
         return NormalizedFindingResponse(**result)
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 # ── Evidence ───────────────────────────────────────────────────────
@@ -679,7 +683,7 @@ async def add_evidence(
         )
         return EvidenceResponse(**result)
     except ValidationError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @router.get(
@@ -709,7 +713,7 @@ async def verify_evidence_integrity(
             is_valid=is_valid,
         )
     except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 # ── Reports ────────────────────────────────────────────────────────
@@ -750,9 +754,9 @@ async def generate_report(
         )
         return ReportResponse(**{k: v for k, v in report.items() if k != "content"})
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @router.get(
@@ -812,7 +816,7 @@ async def add_tag(
             created_at=assessment["updated_at"],
         )
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 # ── Notes ──────────────────────────────────────────────────────────
@@ -842,6 +846,7 @@ async def add_note(
     try:
         await _orchestrator.get_assessment(assessment_id)
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc)
         return AssessmentNoteResponse(
             id=f"note-{assessment_id}-1",
@@ -853,4 +858,4 @@ async def add_note(
             updated_at=now,
         )
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e

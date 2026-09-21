@@ -7,10 +7,9 @@ retention. Each evidence item carries an integrity hash for tamper detection.
 from __future__ import annotations
 
 import hashlib
-import json
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from app.core.exceptions import EvidenceNotFoundError, ValidationError
 from app.core.logging import get_logger
@@ -38,7 +37,7 @@ class EvidenceService(ABC):
         finding_id: str | None = None,
         tags: list[str] | None = None,
         retention_days: int = 365,
-        metadata: dict[str, Any] | None = None,
+        _metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Add a new evidence item to an assessment.
 
@@ -180,7 +179,7 @@ class InMemoryEvidenceService(EvidenceService):
         finding_id: str | None = None,
         tags: list[str] | None = None,
         retention_days: int = 365,
-        metadata: dict[str, Any] | None = None,
+        _metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Add a new evidence item to memory.
 
@@ -206,8 +205,7 @@ class InMemoryEvidenceService(EvidenceService):
         valid_types = {t.value for t in EvidenceType}
         if evidence_type not in valid_types:
             raise ValidationError(
-                f"Invalid evidence type '{evidence_type}'. "
-                f"Must be one of: {sorted(valid_types)}"
+                f"Invalid evidence type '{evidence_type}'. Must be one of: {sorted(valid_types)}"
             )
 
         valid_classifications = {c.value for c in EvidenceClassification}
@@ -289,7 +287,8 @@ class InMemoryEvidenceService(EvidenceService):
             Tuple of (list of evidence items, total count).
         """
         items = [
-            e for e in self._evidence.values()
+            e
+            for e in self._evidence.values()
             if e["assessment_id"] == assessment_id and not e["is_deleted"]
         ]
         if evidence_type is not None:
@@ -298,7 +297,7 @@ class InMemoryEvidenceService(EvidenceService):
             items = [e for e in items if e["classification"] == classification]
 
         total = len(items)
-        page = items[offset:offset + limit]
+        page = items[offset : offset + limit]
         return ([dict(e) for e in page], total)
 
     async def verify_integrity(self, evidence_id: str) -> bool:
@@ -353,6 +352,7 @@ class InMemoryEvidenceService(EvidenceService):
             Count of evidence items.
         """
         return sum(
-            1 for e in self._evidence.values()
+            1
+            for e in self._evidence.values()
             if e["assessment_id"] == assessment_id and not e["is_deleted"]
         )

@@ -12,8 +12,6 @@ results.
 
 from __future__ import annotations
 
-import asyncio
-import json
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -21,26 +19,17 @@ from typing import Any, Callable
 from app.core.exceptions import (
     AssessmentInvalidTransitionError,
     AssessmentNotFoundError,
-    AssessmentTimeoutError,
 )
 from app.core.logging import get_logger
 from app.models.assessment import (
-    AssessmentPriority,
     AssessmentStatus,
-    ReportFormat,
 )
 from app.services.assessment.lifecycle import (
-    ACTIVE_STATES,
-    TERMINAL_STATES,
-    can_pause,
-    can_retry,
-    get_next_states,
     get_progress_percent,
     is_active,
-    is_terminal,
     validate_transition,
 )
-from app.services.assessment.normalization import NormalizedFinding, normalize_findings_batch
+from app.services.assessment.normalization import normalize_findings_batch
 
 logger = get_logger(__name__)
 
@@ -511,9 +500,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
         """
         assessment = self._assessments.get(assessment_id)
         if assessment is None:
-            raise AssessmentNotFoundError(
-                f"Assessment '{assessment_id}' not found"
-            )
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
 
         current = AssessmentStatus(assessment["status"])
         validate_transition(current, target_status)
@@ -659,9 +646,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
         """
         assessment = self._assessments.get(assessment_id)
         if assessment is None:
-            raise AssessmentNotFoundError(
-                f"Assessment '{assessment_id}' not found"
-            )
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
 
         current = AssessmentStatus(assessment["status"])
 
@@ -712,9 +697,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
         """
         assessment = self._assessments.get(assessment_id)
         if assessment is None:
-            raise AssessmentNotFoundError(
-                f"Assessment '{assessment_id}' not found"
-            )
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
 
         # Resume to Running state
         self._transition(assessment_id, AssessmentStatus.RUNNING, "Resumed from pause")
@@ -750,9 +733,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
         """
         assessment = self._assessments.get(assessment_id)
         if assessment is None:
-            raise AssessmentNotFoundError(
-                f"Assessment '{assessment_id}' not found"
-            )
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
 
         if assessment["retry_count"] >= assessment["max_retries"]:
             raise AssessmentInvalidTransitionError(
@@ -780,9 +761,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
         """
         assessment = self._assessments.get(assessment_id)
         if assessment is None:
-            raise AssessmentNotFoundError(
-                f"Assessment '{assessment_id}' not found"
-            )
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
 
         # Transition to generating report then completed
         current = AssessmentStatus(assessment["status"])
@@ -823,9 +802,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
         """
         assessment = self._assessments.get(assessment_id)
         if assessment is None:
-            raise AssessmentNotFoundError(
-                f"Assessment '{assessment_id}' not found"
-            )
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
         return dict(assessment)
 
     async def get_timeline(self, assessment_id: str) -> list[dict[str, Any]]:
@@ -838,9 +815,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
             List of timeline events.
         """
         if assessment_id not in self._assessments:
-            raise AssessmentNotFoundError(
-                f"Assessment '{assessment_id}' not found"
-            )
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
         return list(self._timelines.get(assessment_id, []))
 
     async def add_finding(
@@ -861,9 +836,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
             AssessmentNotFoundError: If assessment does not exist.
         """
         if assessment_id not in self._assessments:
-            raise AssessmentNotFoundError(
-                f"Assessment '{assessment_id}' not found"
-            )
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
 
         normalized = normalize_findings_batch(
             [finding],
@@ -927,9 +900,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
             AssessmentNotFoundError: If assessment does not exist.
         """
         if assessment_id not in self._assessments:
-            raise AssessmentNotFoundError(
-                f"Assessment '{assessment_id}' not found"
-            )
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
 
         self._evidence_counter += 1
         now = datetime.now(timezone.utc)
@@ -971,9 +942,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
             Report metadata.
         """
         if assessment_id not in self._assessments:
-            raise AssessmentNotFoundError(
-                f"Assessment '{assessment_id}' not found"
-            )
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
 
         self._report_counter += 1
         assessment = self._assessments[assessment_id]
@@ -1017,9 +986,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
             Statistics including severity breakdown, duration, etc.
         """
         if assessment_id not in self._assessments:
-            raise AssessmentNotFoundError(
-                f"Assessment '{assessment_id}' not found"
-            )
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
 
         assessment = self._assessments[assessment_id]
         findings = self._findings.get(assessment_id, [])
@@ -1037,6 +1004,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
             completed = assessment["completed_at"]
             if isinstance(started, str):
                 from datetime import datetime as dt
+
                 started = dt.fromisoformat(started)
                 completed = dt.fromisoformat(completed)
             duration = (completed - started).total_seconds()
@@ -1074,9 +1042,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
                 self._record_timeline(
                     aid, "assessment.recovered", "Assessment recovered from interruption"
                 )
-                self._event_bus.publish(
-                    AssessmentEvent("assessment.recovered", aid)
-                )
+                self._event_bus.publish(AssessmentEvent("assessment.recovered", aid))
                 recovered.append(dict(assessment))
                 logger.info("orchestrator.recovered", assessment_id=aid)
 

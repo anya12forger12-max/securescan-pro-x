@@ -180,7 +180,7 @@ def _load_yaml_config(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        with open(path, encoding="utf-8") as f:
+        with path.open(encoding="utf-8") as f:
             content = yaml.safe_load(f)
             return content if isinstance(content, dict) else {}
     except (yaml.YAMLError, OSError):

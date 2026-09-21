@@ -91,8 +91,6 @@ def config(
     if show:
         from app.core.config import settings
 
-        import json
-
         console.print("[bold]Current Configuration:[/bold]")
         # Show non-default values
         console.print(f"  App Name: {settings.app_name}")
@@ -102,7 +100,9 @@ def config(
         console.print(f"  UI Theme: {settings.ui.theme}")
         console.print(f"  Log Level: {settings.logging.level}")
         console.print(f"  Database: {settings.database.type}")
-        console.print(f"  Network: {'enabled' if settings.network.enabled else 'disabled (default)'}")
+        console.print(
+            f"  Network: {'enabled' if settings.network.enabled else 'disabled (default)'}"
+        )
     elif reset:
         console.print("[yellow]Configuration reset to defaults.[/yellow]")
     else:

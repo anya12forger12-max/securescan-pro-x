@@ -18,7 +18,6 @@ from app.services.assessment.lifecycle import (
     get_next_states,
     get_progress_percent,
     is_active,
-    is_paused,
     is_terminal,
     validate_transition,
 )
@@ -63,9 +62,7 @@ class TestLifecycleStateMachine:
 
     def test_running_to_collecting_evidence(self) -> None:
         """Running → Collecting Evidence is valid."""
-        assert validate_transition(
-            AssessmentStatus.RUNNING, AssessmentStatus.COLLECTING_EVIDENCE
-        )
+        assert validate_transition(AssessmentStatus.RUNNING, AssessmentStatus.COLLECTING_EVIDENCE)
 
     def test_running_to_paused(self) -> None:
         """Running → Paused is valid."""
@@ -127,7 +124,7 @@ class TestLifecycleStateMachine:
     def test_archived_is_terminal(self) -> None:
         """Archived is a terminal state."""
         assert is_terminal(AssessmentStatus.ARCHIVED)
-        assert TERMINAL_STATES == {AssessmentStatus.ARCHIVED, AssessmentStatus.CANCELLED}
+        assert {AssessmentStatus.ARCHIVED, AssessmentStatus.CANCELLED} == TERMINAL_STATES
 
     def test_cancelled_is_terminal(self) -> None:
         """Cancelled is a terminal state."""

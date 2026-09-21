@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
-
 from fastapi import Cookie, Depends, HTTPException, status
 
-from app.services.auth import AuthService, InMemoryAuthService, User, UserRole
-from app.services.workspace import WorkspaceService, InMemoryWorkspaceService
+from app.services.assessment.evidence import EvidenceService, InMemoryEvidenceService
+from app.services.assessment.knowledge import InMemoryKnowledgeService, KnowledgeService
+from app.services.assessment.orchestrator import AssessmentOrchestrator, InMemoryOrchestrator
+from app.services.assessment.policies import InMemoryPolicyService, PolicyService
+from app.services.assessment.profiles import InMemoryProfileService, ProfileService
+from app.services.assessment.reports import InMemoryReportService, ReportService
 from app.services.asset import AssetService, InMemoryAssetService
 from app.services.audit import AuditService, InMemoryAuditService
+from app.services.auth import AuthService, InMemoryAuthService, User, UserRole
 from app.services.configuration import ConfigurationService, InMemoryConfigurationService
 from app.services.plugin import InMemoryPluginManager, PluginManager
-from app.services.assessment.orchestrator import AssessmentOrchestrator, InMemoryOrchestrator
-from app.services.assessment.evidence import EvidenceService, InMemoryEvidenceService
-from app.services.assessment.reports import ReportService, InMemoryReportService
-from app.services.assessment.profiles import ProfileService, InMemoryProfileService
-from app.services.assessment.policies import PolicyService, InMemoryPolicyService
-from app.services.assessment.knowledge import KnowledgeService, InMemoryKnowledgeService
+from app.services.workspace import InMemoryWorkspaceService, WorkspaceService
 
 _auth_service: AuthService | None = None
 _workspace_service: WorkspaceService | None = None

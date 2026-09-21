@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import secrets
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any
 
 from passlib.context import CryptContext
 
@@ -80,7 +78,11 @@ class AuthService(ABC):
 
     @abstractmethod
     async def login(
-        self, username: str, password: str, ip_address: str | None = None, user_agent: str | None = None
+        self,
+        username: str,
+        password: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
     ) -> AuthResult: ...
 
     @abstractmethod
@@ -132,6 +134,7 @@ class InMemoryAuthService(AuthService):
 
     def _hash_token(self, token: str) -> str:
         import hashlib
+
         return hashlib.sha256(token.encode()).hexdigest()
 
     def _validate_password_strength(self, password: str) -> str | None:
@@ -194,7 +197,11 @@ class InMemoryAuthService(AuthService):
         return AuthResult(success=True, user=user)
 
     async def login(
-        self, username: str, password: str, ip_address: str | None = None, user_agent: str | None = None
+        self,
+        username: str,
+        password: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
     ) -> AuthResult:
         user_id = self._users_by_username.get(username)
         if not user_id:

@@ -7,10 +7,9 @@ tags, notes, attachments, logs, and metrics.
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 
 from sqlalchemy import (
     Boolean,
@@ -21,16 +20,11 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models import TimestampMixin, UUIDMixin
-
-if TYPE_CHECKING:
-    from app.models import Finding, Workspace
-
+from app.models import Finding, TimestampMixin, UUIDMixin, Workspace
 
 # ── Enums ──────────────────────────────────────────────────────────
 
@@ -125,36 +119,24 @@ class Assessment(Base, UUIDMixin, TimestampMixin):
 
     # Profile and policy references
     profile_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("assessment_profiles.id", ondelete="SET NULL"),
+        String(36),
+        ForeignKey("assessment_profiles.id", ondelete="SET NULL"),
         nullable=True,
     )
     policy_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("assessment_policies.id", ondelete="SET NULL"),
+        String(36),
+        ForeignKey("assessment_policies.id", ondelete="SET NULL"),
         nullable=True,
     )
 
     # Lifecycle timestamps
-    queued_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    started_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    paused_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    archived_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    cancelled_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    failed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    queued_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Counters
     target_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -171,9 +153,7 @@ class Assessment(Base, UUIDMixin, TimestampMixin):
     config_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
-    workspace: Mapped["Workspace"] = relationship(
-        "Workspace", back_populates="assessments"
-    )
+    workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="assessments")
     profile: Mapped[Optional["AssessmentProfile"]] = relationship(
         "AssessmentProfile", back_populates="assessments"
     )
@@ -245,12 +225,14 @@ class AssessmentJob(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assessment_jobs"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
     plugin_id: Mapped[str] = mapped_column(String(255), nullable=False)
     target_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("assessment_targets.id", ondelete="SET NULL"),
+        String(36),
+        ForeignKey("assessment_targets.id", ondelete="SET NULL"),
         nullable=True,
     )
     status: Mapped[str] = mapped_column(
@@ -260,20 +242,14 @@ class AssessmentJob(Base, UUIDMixin, TimestampMixin):
     )
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=300, nullable=False)
-    started_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     result_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="jobs"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="jobs")
     target: Mapped[Optional["AssessmentTarget"]] = relationship(
         "AssessmentTarget", back_populates="jobs"
     )
@@ -292,7 +268,8 @@ class AssessmentTarget(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assessment_targets"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
     asset_id: Mapped[str] = mapped_column(
@@ -307,12 +284,8 @@ class AssessmentTarget(Base, UUIDMixin, TimestampMixin):
     )
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="targets"
-    )
-    jobs: Mapped[list["AssessmentJob"]] = relationship(
-        "AssessmentJob", back_populates="target"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="targets")
+    jobs: Mapped[list["AssessmentJob"]] = relationship("AssessmentJob", back_populates="target")
 
 
 # ── Assessment Profile ─────────────────────────────────────────────
@@ -333,23 +306,15 @@ class AssessmentProfile(Base, UUIDMixin, TimestampMixin):
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=3600, nullable=False)
     concurrency_limit: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
-    evidence_collection: Mapped[bool] = mapped_column(
-        Boolean, default=True, nullable=False
-    )
-    reporting_style: Mapped[str] = mapped_column(
-        String(50), default="standard", nullable=False
-    )
-    notification_rules_json: Mapped[Optional[str]] = mapped_column(
-        Text, nullable=True
-    )
+    evidence_collection: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    reporting_style: Mapped[str] = mapped_column(String(50), default="standard", nullable=False)
+    notification_rules_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     plugin_ids_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     policy_ids_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     config_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
-    assessments: Mapped[list["Assessment"]] = relationship(
-        "Assessment", back_populates="profile"
-    )
+    assessments: Mapped[list["Assessment"]] = relationship("Assessment", back_populates="profile")
 
 
 # ── Assessment Policy ──────────────────────────────────────────────
@@ -368,33 +333,19 @@ class AssessmentPolicy(Base, UUIDMixin, TimestampMixin):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    max_runtime_seconds: Mapped[int] = mapped_column(
-        Integer, default=7200, nullable=False
-    )
+    max_runtime_seconds: Mapped[int] = mapped_column(Integer, default=7200, nullable=False)
     max_memory_mb: Mapped[int] = mapped_column(Integer, default=1024, nullable=False)
     max_cpu_percent: Mapped[int] = mapped_column(Integer, default=80, nullable=False)
-    logging_level: Mapped[str] = mapped_column(
-        String(20), default="info", nullable=False
-    )
+    logging_level: Mapped[str] = mapped_column(String(20), default="info", nullable=False)
     retention_days: Mapped[int] = mapped_column(Integer, default=90, nullable=False)
-    export_allowed: Mapped[bool] = mapped_column(
-        Boolean, default=True, nullable=False
-    )
-    approval_required: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
-    evidence_storage: Mapped[str] = mapped_column(
-        String(50), default="local", nullable=False
-    )
-    allowed_plugin_ids_json: Mapped[Optional[str]] = mapped_column(
-        Text, nullable=True
-    )
+    export_allowed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    approval_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    evidence_storage: Mapped[str] = mapped_column(String(50), default="local", nullable=False)
+    allowed_plugin_ids_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     config_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
-    assessments: Mapped[list["Assessment"]] = relationship(
-        "Assessment", back_populates="policy"
-    )
+    assessments: Mapped[list["Assessment"]] = relationship("Assessment", back_populates="policy")
 
 
 # ── Evidence ───────────────────────────────────────────────────────
@@ -410,7 +361,8 @@ class Evidence(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "evidence"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
     finding_id: Mapped[Optional[str]] = mapped_column(
@@ -435,9 +387,7 @@ class Evidence(Base, UUIDMixin, TimestampMixin):
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="evidence_items"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="evidence_items")
     finding: Mapped[Optional["Finding"]] = relationship("Finding")
 
 
@@ -453,7 +403,8 @@ class Recommendation(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "recommendations"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
     finding_id: Mapped[Optional[str]] = mapped_column(
@@ -472,15 +423,11 @@ class Recommendation(Base, UUIDMixin, TimestampMixin):
     suggested_actions_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     references_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     verification_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    learning_resources_json: Mapped[Optional[str]] = mapped_column(
-        Text, nullable=True
-    )
+    learning_resources_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     glossary_links_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="recommendations"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="recommendations")
     finding: Mapped[Optional["Finding"]] = relationship("Finding")
 
 
@@ -493,7 +440,8 @@ class AssessmentTimelineEvent(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assessment_timeline_events"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -504,9 +452,7 @@ class AssessmentTimelineEvent(Base, UUIDMixin, TimestampMixin):
     metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="timeline_events"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="timeline_events")
 
 
 # ── Assessment History ─────────────────────────────────────────────
@@ -518,7 +464,8 @@ class AssessmentHistory(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assessment_history"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
     from_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -528,9 +475,7 @@ class AssessmentHistory(Base, UUIDMixin, TimestampMixin):
     metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="history_entries"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="history_entries")
 
 
 # ── Assessment Metadata ────────────────────────────────────────────
@@ -542,7 +487,8 @@ class AssessmentMetadata(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assessment_metadata"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
     key: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -550,9 +496,7 @@ class AssessmentMetadata(Base, UUIDMixin, TimestampMixin):
     namespace: Mapped[str] = mapped_column(String(100), default="default", nullable=False)
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="metadata_entries"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="metadata_entries")
 
 
 # ── Assessment Tag ────────────────────────────────────────────────
@@ -564,15 +508,14 @@ class AssessmentTag(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assessment_tags"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
     tag: Mapped[str] = mapped_column(String(100), nullable=False)
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="tags"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="tags")
 
 
 # ── Assessment Note ────────────────────────────────────────────────
@@ -584,7 +527,8 @@ class AssessmentNote(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assessment_notes"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
     author: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -592,9 +536,7 @@ class AssessmentNote(Base, UUIDMixin, TimestampMixin):
     is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="notes"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="notes")
 
 
 # ── Assessment Attachment ──────────────────────────────────────────
@@ -606,7 +548,8 @@ class AssessmentAttachment(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assessment_attachments"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -617,9 +560,7 @@ class AssessmentAttachment(Base, UUIDMixin, TimestampMixin):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="attachments"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="attachments")
 
 
 # ── Assessment Log ─────────────────────────────────────────────────
@@ -631,7 +572,8 @@ class AssessmentLog(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assessment_logs"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
     level: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -640,9 +582,7 @@ class AssessmentLog(Base, UUIDMixin, TimestampMixin):
     details_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="log_entries"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="log_entries")
 
 
 # ── Assessment Metric ──────────────────────────────────────────────
@@ -654,7 +594,8 @@ class AssessmentMetric(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assessment_metrics"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
     metric_name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -663,9 +604,7 @@ class AssessmentMetric(Base, UUIDMixin, TimestampMixin):
     tags_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="metrics"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="metrics")
 
 
 # ── Assessment Report ──────────────────────────────────────────────
@@ -677,12 +616,11 @@ class AssessmentReport(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assessment_reports"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
         nullable=False,
     )
-    format: Mapped[str] = mapped_column(
-        Enum(ReportFormat, native_enum=False), nullable=False
-    )
+    format: Mapped[str] = mapped_column(Enum(ReportFormat, native_enum=False), nullable=False)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     storage_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     file_size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -690,9 +628,7 @@ class AssessmentReport(Base, UUIDMixin, TimestampMixin):
     generated_by: Mapped[str] = mapped_column(String(255), default="system", nullable=False)
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="reports"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="reports")
 
 
 # ── Assessment Statistics (materialized summary) ───────────────────
@@ -704,8 +640,10 @@ class AssessmentStatistics(Base, UUIDMixin, TimestampMixin):
     __tablename__ = "assessment_statistics"
 
     assessment_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("assessments_v2.id", ondelete="CASCADE"),
-        nullable=False, unique=True,
+        String(36),
+        ForeignKey("assessments_v2.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
     )
     total_findings: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     critical_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

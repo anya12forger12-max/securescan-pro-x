@@ -115,7 +115,7 @@ class TestEvidenceService:
         await service.add("a1", "metadata", "Meta 1")
         await service.add("a2", "log", "Log 2")
 
-        items, total = await service.list_by_assessment("a1")
+        _items, total = await service.list_by_assessment("a1")
         assert total == 2
 
     @pytest.mark.asyncio
@@ -179,29 +179,33 @@ class TestFindingNormalization:
 
     def test_normalize_basic_finding(self) -> None:
         """Normalizing a basic finding succeeds."""
-        result = normalize_finding({
-            "title": "Test Finding",
-            "severity": "high",
-            "category": "test",
-        })
+        result = normalize_finding(
+            {
+                "title": "Test Finding",
+                "severity": "high",
+                "category": "test",
+            }
+        )
         assert result.title == "Test Finding"
         assert result.severity == "high"
         assert result.confidence == 0.5  # default
 
     def test_normalize_with_all_fields(self) -> None:
         """Normalizing a finding with all fields works."""
-        result = normalize_finding({
-            "title": "Full Finding",
-            "summary": "Detailed summary",
-            "severity": "critical",
-            "confidence": 0.95,
-            "category": "security",
-            "status": "confirmed",
-            "recommendation": "Fix this",
-            "references": ["https://example.com"],
-            "cvss_score": 9.8,
-            "cwe_ids": ["CWE-79"],
-        })
+        result = normalize_finding(
+            {
+                "title": "Full Finding",
+                "summary": "Detailed summary",
+                "severity": "critical",
+                "confidence": 0.95,
+                "category": "security",
+                "status": "confirmed",
+                "recommendation": "Fix this",
+                "references": ["https://example.com"],
+                "cvss_score": 9.8,
+                "cwe_ids": ["CWE-79"],
+            }
+        )
         assert result.title == "Full Finding"
         assert result.summary == "Detailed summary"
         assert result.severity == "critical"
@@ -212,38 +216,46 @@ class TestFindingNormalization:
     def test_normalize_invalid_severity(self) -> None:
         """Normalizing with invalid severity raises error."""
         with pytest.raises(ValueError):
-            normalize_finding({
-                "title": "Bad",
-                "severity": "invalid",
-                "category": "test",
-            })
+            normalize_finding(
+                {
+                    "title": "Bad",
+                    "severity": "invalid",
+                    "category": "test",
+                }
+            )
 
     def test_normalize_out_of_range_confidence(self) -> None:
         """Normalizing with out-of-range confidence raises error."""
         with pytest.raises(ValueError):
-            normalize_finding({
-                "title": "Bad",
-                "severity": "info",
-                "confidence": 1.5,
-                "category": "test",
-            })
+            normalize_finding(
+                {
+                    "title": "Bad",
+                    "severity": "info",
+                    "confidence": 1.5,
+                    "category": "test",
+                }
+            )
 
     def test_normalize_empty_title(self) -> None:
         """Normalizing with empty title raises error."""
         with pytest.raises(ValueError):
-            normalize_finding({
-                "title": "  ",
-                "severity": "info",
-                "category": "test",
-            })
+            normalize_finding(
+                {
+                    "title": "  ",
+                    "severity": "info",
+                    "category": "test",
+                }
+            )
 
     def test_normalize_batch(self) -> None:
         """Batch normalization filters invalid findings."""
-        results = normalize_findings_batch([
-            {"title": "Good", "severity": "high", "category": "test"},
-            {"title": "Bad", "severity": "invalid", "category": "test"},
-            {"title": "Also Good", "severity": "low", "category": "test"},
-        ])
+        results = normalize_findings_batch(
+            [
+                {"title": "Good", "severity": "high", "category": "test"},
+                {"title": "Bad", "severity": "invalid", "category": "test"},
+                {"title": "Also Good", "severity": "low", "category": "test"},
+            ]
+        )
         assert len(results) == 2
 
     def test_finding_to_dict(self) -> None:

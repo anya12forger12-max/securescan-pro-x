@@ -6,10 +6,9 @@ Provides CRUD, full-text search, severity filtering, and aggregate statistics.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
 
 from app.core.exceptions import DatabaseError
 from app.core.logging import get_logger
@@ -21,6 +20,9 @@ from app.services.database.base import (
     PaginationParams,
     QueryFilters,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
@@ -74,7 +76,7 @@ class FindingRepository(BaseRepository[Finding]):
             category: Finding category.
             recommendation: Remediation guidance.
             evidence: Evidence text.
-            cvss_score: CVSS v3 score (0.0 – 10.0).
+            cvss_score: CVSS v3 score (0.0 - 10.0).
             cwe_ids: Comma-separated CWE identifiers.
 
         Returns:
@@ -135,17 +137,11 @@ class FindingRepository(BaseRepository[Finding]):
             order_desc=False,
         )
         if severity:
-            filters.filters.append(
-                FilterSpec(column="severity", op="eq", value=severity)
-            )
+            filters.filters.append(FilterSpec(column="severity", op="eq", value=severity))
         if status:
-            filters.filters.append(
-                FilterSpec(column="status", op="eq", value=status)
-            )
+            filters.filters.append(FilterSpec(column="status", op="eq", value=status))
         if category:
-            filters.filters.append(
-                FilterSpec(column="category", op="eq", value=category)
-            )
+            filters.filters.append(FilterSpec(column="category", op="eq", value=category))
         return await self.list(filters=filters, pagination=pagination)
 
     async def list_by_asset(
@@ -218,7 +214,7 @@ class FindingRepository(BaseRepository[Finding]):
         Returns:
             PaginatedResult of matching Findings.
         """
-        filters = QueryFilters(
+        QueryFilters(
             order_by="created_at",
             order_desc=True,
         )
@@ -302,9 +298,7 @@ class FindingRepository(BaseRepository[Finding]):
             order_desc=True,
         )
         if assessment_id:
-            filters.filters.append(
-                FilterSpec(column="assessment_id", op="eq", value=assessment_id)
-            )
+            filters.filters.append(FilterSpec(column="assessment_id", op="eq", value=assessment_id))
         return await self.list(filters=filters, pagination=pagination)
 
     async def list_high_and_critical(
@@ -325,9 +319,7 @@ class FindingRepository(BaseRepository[Finding]):
             order_desc=True,
         )
         if assessment_id:
-            filters.filters.append(
-                FilterSpec(column="assessment_id", op="eq", value=assessment_id)
-            )
+            filters.filters.append(FilterSpec(column="assessment_id", op="eq", value=assessment_id))
         return await self.list(filters=filters, pagination=pagination)
 
     # ── Statistics / aggregation ────────────────────────────────────
@@ -346,9 +338,7 @@ class FindingRepository(BaseRepository[Finding]):
         Returns:
             FindingStatistics dataclass.
         """
-        base = select(self.model).where(
-            self.model.assessment_id == assessment_id
-        )
+        base = select(self.model).where(self.model.assessment_id == assessment_id)
         result = await self.session.execute(base)
         findings = list(result.scalars().all())
 
@@ -406,10 +396,7 @@ class FindingRepository(BaseRepository[Finding]):
         Returns:
             Dict mapping severity name to count.
         """
-        stmt = (
-            select(self.model.severity, func.count())
-            .group_by(self.model.severity)
-        )
+        stmt = select(self.model.severity, func.count()).group_by(self.model.severity)
         if assessment_id:
             stmt = stmt.where(self.model.assessment_id == assessment_id)
         result = await self.session.execute(stmt)
@@ -420,10 +407,7 @@ class FindingRepository(BaseRepository[Finding]):
         assessment_id: str | None = None,
     ) -> dict[str, int]:
         """Return status counts using a single aggregation query."""
-        stmt = (
-            select(self.model.status, func.count())
-            .group_by(self.model.status)
-        )
+        stmt = select(self.model.status, func.count()).group_by(self.model.status)
         if assessment_id:
             stmt = stmt.where(self.model.assessment_id == assessment_id)
         result = await self.session.execute(stmt)
@@ -452,9 +436,7 @@ class FindingRepository(BaseRepository[Finding]):
         return await self.count(
             QueryFilters(
                 filters=[
-                    FilterSpec(
-                        column="assessment_id", op="eq", value=assessment_id
-                    ),
+                    FilterSpec(column="assessment_id", op="eq", value=assessment_id),
                 ]
             )
         )

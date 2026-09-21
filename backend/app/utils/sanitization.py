@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import html
 import re
+from typing import TYPE_CHECKING
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.requests import Request
 from starlette.responses import Response
 
+if TYPE_CHECKING:
+    from starlette.requests import Request
 
 _XSS_PATTERNS = [
     re.compile(r"<script\b", re.IGNORECASE),
@@ -26,9 +28,7 @@ _XSS_PATTERNS = [
 class InputSanitizationMiddleware(BaseHTTPMiddleware):
     """Sanitizes request inputs to prevent XSS and injection attacks."""
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.method in ("GET", "HEAD", "OPTIONS"):
             return await call_next(request)
 

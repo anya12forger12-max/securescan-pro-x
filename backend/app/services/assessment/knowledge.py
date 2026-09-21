@@ -8,8 +8,7 @@ This is a framework-only module; no external knowledge base is queried.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
-
+from typing import Any
 
 # ── Knowledge Entry ────────────────────────────────────────────────
 
@@ -186,13 +185,13 @@ class InMemoryKnowledgeService(KnowledgeService):
             Matching knowledge entries.
         """
         results = [
-            e for e in self._entries.values()
-            if e.category.lower() == finding_category.lower()
+            e for e in self._entries.values() if e.category.lower() == finding_category.lower()
         ]
         if severity is not None:
             # Filter by metadata severity if present
             results = [
-                e for e in results
+                e
+                for e in results
                 if e.metadata.get("severity") == severity or not e.metadata.get("severity")
             ]
         return results
@@ -209,10 +208,7 @@ class InMemoryKnowledgeService(KnowledgeService):
         Returns:
             Matching entries.
         """
-        return [
-            e for e in self._entries.values()
-            if e.category.lower() == category.lower()
-        ]
+        return [e for e in self._entries.values() if e.category.lower() == category.lower()]
 
     async def add_entry(
         self,

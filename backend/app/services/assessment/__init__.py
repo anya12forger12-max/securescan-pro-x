@@ -26,22 +26,22 @@ from app.services.assessment.knowledge import (
 )
 from app.services.assessment.lifecycle import (
     ACTIVE_STATES,
-    TERMINAL_STATES,
     ALLOWED_TRANSITIONS,
+    TERMINAL_STATES,
+    can_pause,
+    can_retry,
     get_next_states,
     get_progress_percent,
     is_active,
     is_paused,
     is_terminal,
-    can_pause,
-    can_retry,
     validate_transition,
 )
 from app.services.assessment.normalization import (
     NormalizedFinding,
+    finding_to_dict,
     normalize_finding,
     normalize_findings_batch,
-    finding_to_dict,
 )
 from app.services.assessment.orchestrator import (
     AssessmentEvent,
@@ -72,49 +72,49 @@ __all__ = [
     "ACTIVE_STATES",
     "ALLOWED_TRANSITIONS",
     "TERMINAL_STATES",
+    # Orchestrator
+    "AssessmentEvent",
+    "AssessmentOrchestrator",
+    # Correlation
+    "CorrelationEngine",
+    "CorrelationResult",
+    "CorrelationRule",
+    "EventBus",
+    # Evidence
+    "EvidenceService",
+    "InMemoryEvidenceService",
+    # Knowledge
+    "InMemoryKnowledgeService",
+    "InMemoryOrchestrator",
+    # Policies
+    "InMemoryPolicyService",
+    # Profiles
+    "InMemoryProfileService",
+    # Reports
+    "InMemoryReportService",
+    "KnowledgeEntry",
+    "KnowledgeService",
+    "NoOpCorrelationEngine",
+    # Normalization
+    "NormalizedFinding",
+    "PolicyService",
+    "ProfileService",
+    "ReportService",
+    "build_report_data",
+    "can_pause",
+    "can_retry",
+    "compute_evidence_hash",
+    "finding_to_dict",
+    "generate_csv_report",
+    "generate_html_report",
+    "generate_json_report",
+    "generate_markdown_report",
     "get_next_states",
     "get_progress_percent",
     "is_active",
     "is_paused",
     "is_terminal",
-    "can_pause",
-    "can_retry",
-    "validate_transition",
-    # Orchestrator
-    "AssessmentEvent",
-    "AssessmentOrchestrator",
-    "EventBus",
-    "InMemoryOrchestrator",
-    # Evidence
-    "EvidenceService",
-    "InMemoryEvidenceService",
-    "compute_evidence_hash",
-    # Normalization
-    "NormalizedFinding",
-    "finding_to_dict",
     "normalize_finding",
     "normalize_findings_batch",
-    # Profiles
-    "InMemoryProfileService",
-    "ProfileService",
-    # Policies
-    "InMemoryPolicyService",
-    "PolicyService",
-    # Reports
-    "InMemoryReportService",
-    "ReportService",
-    "build_report_data",
-    "generate_csv_report",
-    "generate_html_report",
-    "generate_json_report",
-    "generate_markdown_report",
-    # Correlation
-    "CorrelationEngine",
-    "CorrelationResult",
-    "CorrelationRule",
-    "NoOpCorrelationEngine",
-    # Knowledge
-    "InMemoryKnowledgeService",
-    "KnowledgeEntry",
-    "KnowledgeService",
+    "validate_transition",
 ]

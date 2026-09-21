@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import secrets
 import string
+from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-import base64
 
 
 def generate_api_key(length: int = 48) -> str:
@@ -48,7 +49,7 @@ def compute_hash(data: bytes, algorithm: str = "sha256") -> str:
 def compute_file_hash(file_path: str, algorithm: str = "sha256") -> str:
     """Compute a hash of a file."""
     h = hashlib.new(algorithm)
-    with open(file_path, "rb") as f:
+    with Path(file_path).open("rb") as f:
         while chunk := f.read(8192):
             h.update(chunk)
     return h.hexdigest()
@@ -77,9 +78,11 @@ class TokenManager:
     def encrypt_dict(self, data: dict[str, Any]) -> str:
         """Encrypt a dictionary as JSON."""
         import json
+
         return self.encrypt(json.dumps(data))
 
     def decrypt_dict(self, token: str) -> dict[str, Any]:
         """Decrypt a token to a dictionary."""
         import json
+
         return json.loads(self.decrypt(token))

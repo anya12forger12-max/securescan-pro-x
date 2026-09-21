@@ -45,7 +45,7 @@ async def create_asset(
     try:
         return await _service.create(workspace_id, data)
     except AssetExistsError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.get(
@@ -104,7 +104,7 @@ async def get_asset(asset_id: str) -> AssetResponse:
     try:
         return await _service.get(asset_id)
     except AssetNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @router.patch(
@@ -132,7 +132,7 @@ async def update_asset(
     try:
         return await _service.update(asset_id, data)
     except AssetNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @router.delete(
@@ -156,4 +156,4 @@ async def delete_asset(asset_id: str) -> None:
     try:
         await _service.delete(asset_id)
     except AssetNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e

@@ -15,7 +15,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-
 # ── Correlation Rule ───────────────────────────────────────────────
 
 
@@ -102,8 +101,8 @@ class CorrelationEngine(ABC):
     @abstractmethod
     async def correlate_findings(
         self,
-        findings: list[dict[str, Any]],
-        rules: list[CorrelationRule] | None = None,
+        _findings: list[dict[str, Any]],
+        _rules: list[CorrelationRule] | None = None,
     ) -> list[CorrelationResult]:
         """Analyze findings and produce correlations.
 
@@ -134,8 +133,8 @@ class CorrelationEngine(ABC):
     @abstractmethod
     async def find_recurring(
         self,
-        current_findings: list[dict[str, Any]],
-        historical_assessment_ids: list[str] | None = None,
+        _current_findings: list[dict[str, Any]],
+        _historical_assessment_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Identify findings that recur across assessments.
 
@@ -151,8 +150,8 @@ class CorrelationEngine(ABC):
     @abstractmethod
     async def associate_evidence(
         self,
-        findings: list[dict[str, Any]],
-        evidence: list[dict[str, Any]],
+        _findings: list[dict[str, Any]],
+        _evidence: list[dict[str, Any]],
     ) -> dict[str, list[str]]:
         """Associate evidence items with findings based on relevance.
 
@@ -200,8 +199,8 @@ class NoOpCorrelationEngine(CorrelationEngine):
 
     async def correlate_findings(
         self,
-        findings: list[dict[str, Any]],
-        rules: list[CorrelationRule] | None = None,
+        _findings: list[dict[str, Any]],
+        _rules: list[CorrelationRule] | None = None,
     ) -> list[CorrelationResult]:
         """No-op: returns empty correlations.
 
@@ -230,8 +229,8 @@ class NoOpCorrelationEngine(CorrelationEngine):
 
     async def find_recurring(
         self,
-        current_findings: list[dict[str, Any]],
-        historical_assessment_ids: list[str] | None = None,
+        _current_findings: list[dict[str, Any]],
+        _historical_assessment_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """No-op: returns empty recurring findings.
 
@@ -246,8 +245,8 @@ class NoOpCorrelationEngine(CorrelationEngine):
 
     async def associate_evidence(
         self,
-        findings: list[dict[str, Any]],
-        evidence: list[dict[str, Any]],
+        _findings: list[dict[str, Any]],
+        _evidence: list[dict[str, Any]],
     ) -> dict[str, list[str]]:
         """No-op: returns empty associations.
 

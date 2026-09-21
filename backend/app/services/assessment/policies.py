@@ -6,7 +6,6 @@ export controls, approval workflows, and plugin permissions.
 
 from __future__ import annotations
 
-import json
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
@@ -322,11 +321,12 @@ class InMemoryPolicyService(PolicyService):
             Tuple of (policies, total).
         """
         policies = [
-            p for p in self._policies.values()
+            p
+            for p in self._policies.values()
             if not p["is_deleted"] and (include_builtin or not p["is_builtin"])
         ]
         total = len(policies)
-        page = policies[offset:offset + limit]
+        page = policies[offset : offset + limit]
         return ([dict(p) for p in page], total)
 
     async def update(
@@ -348,10 +348,18 @@ class InMemoryPolicyService(PolicyService):
             raise AssessmentNotFoundError(f"Policy '{policy_id}' not found")
 
         updatable = {
-            "name", "description", "max_runtime_seconds", "max_memory_mb",
-            "max_cpu_percent", "logging_level", "retention_days",
-            "export_allowed", "approval_required", "evidence_storage",
-            "allowed_plugin_ids", "config",
+            "name",
+            "description",
+            "max_runtime_seconds",
+            "max_memory_mb",
+            "max_cpu_percent",
+            "logging_level",
+            "retention_days",
+            "export_allowed",
+            "approval_required",
+            "evidence_storage",
+            "allowed_plugin_ids",
+            "config",
         }
         for key, value in kwargs.items():
             if key in updatable:
@@ -404,13 +412,11 @@ class InMemoryPolicyService(PolicyService):
                     violations.append(f"Plugin '{pid}' is not permitted by policy")
 
         # Check export rules
-        if not policy.get("export_allowed", True):
-            if assessment_config.get("export_format"):
-                violations.append("Export is not permitted by this policy")
+        if not policy.get("export_allowed", True) and assessment_config.get("export_format"):
+            violations.append("Export is not permitted by this policy")
 
         # Check approval requirements
-        if policy.get("approval_required", False):
-            if not assessment_config.get("approved", False):
-                violations.append("Assessment requires approval per policy")
+        if policy.get("approval_required", False) and not assessment_config.get("approved", False):
+            violations.append("Assessment requires approval per policy")
 
         return (len(violations) == 0, violations)

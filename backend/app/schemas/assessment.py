@@ -12,7 +12,6 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-
 # ── Assessment Schemas ─────────────────────────────────────────────
 
 
@@ -235,9 +234,7 @@ class EvidenceCreate(BaseModel):
     content: Optional[str] = None
     source: str = Field("manual", max_length=255)
     collector: str = Field("system", max_length=255)
-    classification: str = Field(
-        "internal", pattern="^(public|internal|confidential|restricted)$"
-    )
+    classification: str = Field("internal", pattern="^(public|internal|confidential|restricted)$")
     finding_id: Optional[str] = None
     tags: list[str] = Field(default_factory=list)
     retention_days: int = Field(365, ge=1)

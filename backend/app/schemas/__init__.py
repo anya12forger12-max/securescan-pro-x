@@ -7,8 +7,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-
 # ── Base Schemas ───────────────────────────────────────────────────
+
 
 class BaseSchema(BaseModel):
     """Base schema with common configuration."""
@@ -25,6 +25,7 @@ class IDMixin(BaseSchema):
 
 
 # ── Workspace Schemas ──────────────────────────────────────────────
+
 
 class WorkspaceCreate(BaseModel):
     """Schema for creating a workspace."""
@@ -50,6 +51,7 @@ class WorkspaceResponse(IDMixin):
 
 
 # ── Asset Schemas ──────────────────────────────────────────────────
+
 
 class AssetCreate(BaseModel):
     """Schema for creating an asset."""
@@ -80,6 +82,7 @@ class AssetResponse(IDMixin):
 
 # ── Assessment Schemas ─────────────────────────────────────────────
 
+
 class AssessmentCreate(BaseModel):
     """Schema for creating an assessment."""
 
@@ -109,6 +112,7 @@ class AssessmentResponse(IDMixin):
 
 
 # ── Finding Schemas ────────────────────────────────────────────────
+
 
 class FindingCreate(BaseModel):
     """Schema for creating a finding."""
@@ -148,6 +152,7 @@ class FindingResponse(IDMixin):
 
 # ── Pagination ─────────────────────────────────────────────────────
 
+
 class PaginatedResponse(BaseModel):
     """Generic paginated response."""
 
@@ -160,6 +165,7 @@ class PaginatedResponse(BaseModel):
 
 # ── Health ─────────────────────────────────────────────────────────
 
+
 class HealthResponse(BaseModel):
     """Health check response."""
 
@@ -170,6 +176,7 @@ class HealthResponse(BaseModel):
 
 
 # ── Error ──────────────────────────────────────────────────────────
+
 
 class ErrorResponse(BaseModel):
     """Error response."""

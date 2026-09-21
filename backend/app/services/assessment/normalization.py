@@ -45,13 +45,10 @@ class NormalizedFinding:
         valid_severities = {"critical", "high", "medium", "low", "info"}
         if self.severity not in valid_severities:
             raise ValueError(
-                f"Invalid severity '{self.severity}'. "
-                f"Must be one of: {sorted(valid_severities)}"
+                f"Invalid severity '{self.severity}'. Must be one of: {sorted(valid_severities)}"
             )
         if not 0.0 <= self.confidence <= 1.0:
-            raise ValueError(
-                f"Confidence {self.confidence} out of range [0.0, 1.0]"
-            )
+            raise ValueError(f"Confidence {self.confidence} out of range [0.0, 1.0]")
         if not self.title.strip():
             raise ValueError("Finding title must not be empty")
 

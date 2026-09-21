@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING, ClassVar
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.requests import Request
-from starlette.responses import Response
 
 from app.core.logging import get_logger
+
+if TYPE_CHECKING:
+    from starlette.requests import Request
+    from starlette.responses import Response
 
 logger = get_logger(__name__)
 
@@ -16,11 +19,11 @@ logger = get_logger(__name__)
 class AuditMiddleware(BaseHTTPMiddleware):
     """Logs all API requests for audit trail."""
 
-    SKIP_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}
+    SKIP_PATHS: ClassVar[frozenset[str]] = frozenset(
+        {"/health", "/docs", "/openapi.json", "/redoc"}
+    )
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.url.path in self.SKIP_PATHS:
             return await call_next(request)
 

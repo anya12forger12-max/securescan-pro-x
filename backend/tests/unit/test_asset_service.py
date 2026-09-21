@@ -18,9 +18,7 @@ class TestAssetService:
         return InMemoryAssetService()
 
     @pytest.mark.asyncio
-    async def test_create_asset_success(
-        self, service: InMemoryAssetService
-    ) -> None:
+    async def test_create_asset_success(self, service: InMemoryAssetService) -> None:
         """Creating an asset with valid data succeeds."""
         data = AssetCreate(
             name="Web Server",
@@ -35,9 +33,7 @@ class TestAssetService:
         assert result.workspace_id == "ws-1"
 
     @pytest.mark.asyncio
-    async def test_create_asset_duplicate_identifier(
-        self, service: InMemoryAssetService
-    ) -> None:
+    async def test_create_asset_duplicate_identifier(self, service: InMemoryAssetService) -> None:
         """Creating an asset with duplicate identifier in same workspace raises error."""
         data = AssetCreate(
             name="Server 1",
@@ -65,9 +61,7 @@ class TestAssetService:
         assert result.workspace_id == "ws-2"
 
     @pytest.mark.asyncio
-    async def test_get_asset_success(
-        self, service: InMemoryAssetService
-    ) -> None:
+    async def test_get_asset_success(self, service: InMemoryAssetService) -> None:
         """Getting an existing asset returns it."""
         data = AssetCreate(
             name="Test Asset",
@@ -80,17 +74,13 @@ class TestAssetService:
         assert result.name == "Test Asset"
 
     @pytest.mark.asyncio
-    async def test_get_asset_not_found(
-        self, service: InMemoryAssetService
-    ) -> None:
+    async def test_get_asset_not_found(self, service: InMemoryAssetService) -> None:
         """Getting a nonexistent asset raises error."""
         with pytest.raises(AssetNotFoundError):
             await service.get("nonexistent-id")
 
     @pytest.mark.asyncio
-    async def test_list_by_workspace(
-        self, service: InMemoryAssetService
-    ) -> None:
+    async def test_list_by_workspace(self, service: InMemoryAssetService) -> None:
         """Listing assets by workspace returns correct results."""
         await service.create(
             "ws-1",
@@ -105,16 +95,14 @@ class TestAssetService:
             AssetCreate(name="A3", asset_type="host", identifier="2.2.2.2"),
         )
 
-        assets, total = await service.list_by_workspace("ws-1")
+        _assets, total = await service.list_by_workspace("ws-1")
         assert total == 2
 
-        assets, total = await service.list_by_workspace("ws-2")
+        _assets, total = await service.list_by_workspace("ws-2")
         assert total == 1
 
     @pytest.mark.asyncio
-    async def test_list_by_workspace_with_type_filter(
-        self, service: InMemoryAssetService
-    ) -> None:
+    async def test_list_by_workspace_with_type_filter(self, service: InMemoryAssetService) -> None:
         """Filtering by asset type returns correct results."""
         await service.create(
             "ws-1",
@@ -125,16 +113,12 @@ class TestAssetService:
             AssetCreate(name="N1", asset_type="network", identifier="10.0.0.0/8"),
         )
 
-        assets, total = await service.list_by_workspace(
-            "ws-1", asset_type="host"
-        )
+        assets, total = await service.list_by_workspace("ws-1", asset_type="host")
         assert total == 1
         assert assets[0].name == "H1"
 
     @pytest.mark.asyncio
-    async def test_update_asset_success(
-        self, service: InMemoryAssetService
-    ) -> None:
+    async def test_update_asset_success(self, service: InMemoryAssetService) -> None:
         """Updating an existing asset succeeds."""
         created = await service.create(
             "ws-1",
@@ -148,9 +132,7 @@ class TestAssetService:
         assert updated.name == "Updated"
 
     @pytest.mark.asyncio
-    async def test_delete_asset_success(
-        self, service: InMemoryAssetService
-    ) -> None:
+    async def test_delete_asset_success(self, service: InMemoryAssetService) -> None:
         """Deleting an existing asset succeeds."""
         created = await service.create(
             "ws-1",

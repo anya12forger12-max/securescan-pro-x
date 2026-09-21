@@ -49,7 +49,9 @@ class TestEventBus:
         bus = EventBus()
         received: list[AssessmentEvent] = []
 
-        callback = lambda e: received.append(e)
+        def callback(e):
+            return received.append(e)
+
         bus.subscribe("test", callback)
         bus.unsubscribe("test", callback)
         bus.publish(AssessmentEvent("test", "id-1"))
@@ -203,12 +205,15 @@ class TestOrchestrator:
     async def test_add_finding(self, orch: InMemoryOrchestrator) -> None:
         """Adding a finding succeeds."""
         created = await orch.create_assessment("ws-1", "Test")
-        finding = await orch.add_finding(created["id"], {
-            "title": "Test Finding",
-            "severity": "high",
-            "category": "test",
-            "summary": "A test finding",
-        })
+        finding = await orch.add_finding(
+            created["id"],
+            {
+                "title": "Test Finding",
+                "severity": "high",
+                "category": "test",
+                "summary": "A test finding",
+            },
+        )
         assert finding["title"] == "Test Finding"
         assert finding["severity"] == "high"
 
@@ -220,11 +225,14 @@ class TestOrchestrator:
     async def test_add_evidence(self, orch: InMemoryOrchestrator) -> None:
         """Adding evidence succeeds."""
         created = await orch.create_assessment("ws-1", "Test")
-        evidence = await orch.add_evidence(created["id"], {
-            "title": "Test Evidence",
-            "evidence_type": "structured_data",
-            "source": "test",
-        })
+        evidence = await orch.add_evidence(
+            created["id"],
+            {
+                "title": "Test Evidence",
+                "evidence_type": "structured_data",
+                "source": "test",
+            },
+        )
         assert evidence["title"] == "Test Evidence"
         assert evidence["evidence_type"] == "structured_data"
 
@@ -232,11 +240,14 @@ class TestOrchestrator:
     async def test_generate_report(self, orch: InMemoryOrchestrator) -> None:
         """Generating a report succeeds."""
         created = await orch.create_assessment("ws-1", "Test")
-        await orch.add_finding(created["id"], {
-            "title": "Finding",
-            "severity": "medium",
-            "category": "test",
-        })
+        await orch.add_finding(
+            created["id"],
+            {
+                "title": "Finding",
+                "severity": "medium",
+                "category": "test",
+            },
+        )
         report = await orch.generate_report(created["id"], format="json")
         assert report["format"] == "json"
         assert report["finding_count"] == 1
@@ -245,16 +256,22 @@ class TestOrchestrator:
     async def test_statistics(self, orch: InMemoryOrchestrator) -> None:
         """Statistics are computed correctly."""
         created = await orch.create_assessment("ws-1", "Test")
-        await orch.add_finding(created["id"], {
-            "title": "Critical",
-            "severity": "critical",
-            "category": "test",
-        })
-        await orch.add_finding(created["id"], {
-            "title": "Low",
-            "severity": "low",
-            "category": "test",
-        })
+        await orch.add_finding(
+            created["id"],
+            {
+                "title": "Critical",
+                "severity": "critical",
+                "category": "test",
+            },
+        )
+        await orch.add_finding(
+            created["id"],
+            {
+                "title": "Low",
+                "severity": "low",
+                "category": "test",
+            },
+        )
         await orch.add_evidence(created["id"], {"title": "Ev1"})
 
         stats = await orch.get_statistics(created["id"])
@@ -281,7 +298,7 @@ class TestOrchestrator:
         events: list[AssessmentEvent] = []
         bus.subscribe("*", lambda e: events.append(e))
 
-        created = await orch.create_assessment("ws-1", "Test")
+        await orch.create_assessment("ws-1", "Test")
         assert any(e.event_type == "assessment.created" for e in events)
 
     @pytest.mark.asyncio
@@ -297,7 +314,6 @@ class TestOrchestrator:
     @pytest.mark.asyncio
     async def test_full_lifecycle(self, orch: InMemoryOrchestrator) -> None:
         """Full lifecycle: create → queue → start → complete."""
-        from app.models.assessment import AssessmentStatus
 
         created = await orch.create_assessment("ws-1", "Full Lifecycle")
         assessment_id = created["id"]

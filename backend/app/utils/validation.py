@@ -5,12 +5,8 @@ from __future__ import annotations
 import ipaddress
 import re
 import urllib.parse
-from typing import Any
 
-
-VALID_HOSTNAME_PATTERN = re.compile(
-    r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63})*\.?$"
-)
+VALID_HOSTNAME_PATTERN = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63})*\.?$")
 VALID_ASSET_TYPES = {"host", "network", "web", "cloud", "container"}
 VALID_SEVERITIES = {"critical", "high", "medium", "low", "info"}
 VALID_FINDING_STATUSES = {"open", "confirmed", "mitigated", "accepted", "false_positive"}
@@ -136,7 +132,5 @@ def parse_port_list(port_string: str) -> list[int]:
 
 def validate_email(email: str) -> bool:
     """Validate an email address format."""
-    pattern = re.compile(
-        r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
-    )
+    pattern = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
     return bool(pattern.match(email))

@@ -5,10 +5,11 @@ Provides CRUD, workspace-scoped listing, and identifier uniqueness checks.
 
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import TYPE_CHECKING
 
-from app.core.exceptions import AssetExistsError, AssetNotFoundError, DatabaseError
+from sqlalchemy import select
+
+from app.core.exceptions import AssetExistsError, AssetNotFoundError
 from app.core.logging import get_logger
 from app.models import Asset
 from app.services.database.base import (
@@ -18,6 +19,9 @@ from app.services.database.base import (
     PaginationParams,
     QueryFilters,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
@@ -53,8 +57,7 @@ class AssetRepository(BaseRepository[Asset]):
         """
         if await self.identifier_exists_in_workspace(workspace_id, identifier):
             raise AssetExistsError(
-                f"Asset with identifier '{identifier}' "
-                f"already exists in workspace '{workspace_id}'"
+                f"Asset with identifier '{identifier}' already exists in workspace '{workspace_id}'"
             )
 
         return await self.create(
@@ -100,9 +103,7 @@ class AssetRepository(BaseRepository[Asset]):
             order_desc=True,
         )
         if asset_type:
-            filters.filters.append(
-                FilterSpec(column="asset_type", op="eq", value=asset_type)
-            )
+            filters.filters.append(FilterSpec(column="asset_type", op="eq", value=asset_type))
         return await self.list(filters=filters, pagination=pagination)
 
     async def list_assets_by_workspace(

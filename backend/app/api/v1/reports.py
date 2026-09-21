@@ -15,11 +15,9 @@ from pydantic import BaseModel, Field
 
 from app.core.exceptions import AssessmentNotFoundError
 from app.schemas import ErrorResponse
-from app.services.assessment import InMemoryOrchestrator, EventBus
-from app.services.assessment.reports import build_report_data
+from app.services.assessment import EventBus, InMemoryOrchestrator
 from app.services.reports import (
     ReportGenerationService,
-    ReportMetadata,
 )
 
 router = APIRouter()
@@ -31,6 +29,7 @@ _report_service = ReportGenerationService()
 
 
 # ── Request Schemas ───────────────────────────────────────────────
+
 
 class GenerateReportRequest(BaseModel):
     """Schema for report generation requests."""
@@ -117,7 +116,7 @@ async def generate_report(
     try:
         assessment = await _orchestrator.get_assessment(data.assessment_id)
     except AssessmentNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
     findings = _orchestrator._findings.get(data.assessment_id, [])
     evidence_items = _orchestrator._evidence.get(data.assessment_id, [])
@@ -131,7 +130,7 @@ async def generate_report(
             evidence=evidence_items,
         )
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
     return ReportDetailResponse(**metadata.to_dict())
 

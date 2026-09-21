@@ -23,20 +23,18 @@ class TestNoOpCorrelationEngine:
         return NoOpCorrelationEngine()
 
     @pytest.mark.asyncio
-    async def test_correlate_findings_returns_empty(
-        self, engine: NoOpCorrelationEngine
-    ) -> None:
+    async def test_correlate_findings_returns_empty(self, engine: NoOpCorrelationEngine) -> None:
         """Correlation returns empty list."""
-        result = await engine.correlate_findings([
-            {"title": "Finding 1", "severity": "high"},
-            {"title": "Finding 2", "severity": "high"},
-        ])
+        result = await engine.correlate_findings(
+            [
+                {"title": "Finding 1", "severity": "high"},
+                {"title": "Finding 2", "severity": "high"},
+            ]
+        )
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_deduplicate_returns_same(
-        self, engine: NoOpCorrelationEngine
-    ) -> None:
+    async def test_deduplicate_returns_same(self, engine: NoOpCorrelationEngine) -> None:
         """Deduplication returns all findings unchanged."""
         findings = [
             {"title": "Finding 1"},
@@ -46,27 +44,19 @@ class TestNoOpCorrelationEngine:
         assert len(result) == 2
 
     @pytest.mark.asyncio
-    async def test_find_recurring_returns_empty(
-        self, engine: NoOpCorrelationEngine
-    ) -> None:
+    async def test_find_recurring_returns_empty(self, engine: NoOpCorrelationEngine) -> None:
         """Recurring check returns empty list."""
         result = await engine.find_recurring([{"title": "Test"}])
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_associate_evidence_returns_empty(
-        self, engine: NoOpCorrelationEngine
-    ) -> None:
+    async def test_associate_evidence_returns_empty(self, engine: NoOpCorrelationEngine) -> None:
         """Evidence association returns empty mapping."""
-        result = await engine.associate_evidence(
-            [{"id": "f1"}], [{"id": "e1"}]
-        )
+        result = await engine.associate_evidence([{"id": "f1"}], [{"id": "e1"}])
         assert result == {}
 
     @pytest.mark.asyncio
-    async def test_add_and_list_rules(
-        self, engine: NoOpCorrelationEngine
-    ) -> None:
+    async def test_add_and_list_rules(self, engine: NoOpCorrelationEngine) -> None:
         """Rules can be added and listed."""
         rule = CorrelationRule(
             id="r1",

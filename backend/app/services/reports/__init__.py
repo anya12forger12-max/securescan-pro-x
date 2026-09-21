@@ -17,6 +17,7 @@ import io
 import json
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -121,10 +122,7 @@ class HTMLReportGenerator(ReportGenerator):
                 Defaults to backend/templates/.
         """
         if template_dir is None:
-            import os
-            template_dir = os.path.join(
-                os.path.dirname(__file__), "..", "..", "..", "templates"
-            )
+            template_dir = str(Path(__file__).resolve().parent.parent.parent / "templates")
         self._env = Environment(
             loader=FileSystemLoader(template_dir),
             autoescape=select_autoescape(["html"]),
@@ -162,9 +160,7 @@ class HTMLReportGenerator(ReportGenerator):
         total_findings = sum(severity.values())
         severity_pcts = {}
         for sev, count in severity.items():
-            severity_pcts[sev] = (
-                round(count / total_findings * 100, 1) if total_findings > 0 else 0
-            )
+            severity_pcts[sev] = round(count / total_findings * 100, 1) if total_findings > 0 else 0
 
         template = self._env.get_template("report.html")
         content = template.render(
@@ -187,9 +183,7 @@ class HTMLReportGenerator(ReportGenerator):
         integrity_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
         content = content.replace('id="integrity-hash-placeholder"', "")
-        content = content.replace(
-            "{{ integrity_hash }}", integrity_hash
-        )
+        content = content.replace("{{ integrity_hash }}", integrity_hash)
 
         logger.info(
             "html_report.generated",
@@ -308,8 +302,8 @@ class MarkdownReportGenerator(ReportGenerator):
 
         lines.append("## Assessment Details")
         lines.append("")
-        lines.append(f"| Field | Value |")
-        lines.append(f"|-------|-------|")
+        lines.append("| Field | Value |")
+        lines.append("|-------|-------|")
         lines.append(f"| ID | `{assessment.get('id', 'N/A')}` |")
         lines.append(f"| Status | {assessment.get('status', 'N/A')} |")
         lines.append(f"| Priority | {assessment.get('priority', 'N/A')} |")
@@ -321,7 +315,17 @@ class MarkdownReportGenerator(ReportGenerator):
         lines.append("## Severity Distribution")
         lines.append("")
         for sev, count in severity.items():
-            indicator = "🔴" if sev == "critical" else "🟠" if sev == "high" else "🟡" if sev == "medium" else "🟢" if sev == "low" else "🔵"
+            indicator = (
+                "🔴"
+                if sev == "critical"
+                else "🟠"
+                if sev == "high"
+                else "🟡"
+                if sev == "medium"
+                else "🟢"
+                if sev == "low"
+                else "🔵"
+            )
             lines.append(f"- {indicator} **{sev.upper()}:** {count}")
         lines.append("")
 
@@ -458,40 +462,41 @@ class CSVReportGenerator(ReportGenerator):
         output = io.StringIO()
         writer = csv.writer(output)
 
-        writer.writerow([
-            "Report ID",
-            "Assessment ID",
-            "Title",
-            "Severity",
-            "Category",
-            "Status",
-            "Confidence",
-            "CVSS Score",
-            "CWE IDs",
-            "Recommendation",
-            "Summary",
-        ])
+        writer.writerow(
+            [
+                "Report ID",
+                "Assessment ID",
+                "Title",
+                "Severity",
+                "Category",
+                "Status",
+                "Confidence",
+                "CVSS Score",
+                "CWE IDs",
+                "Recommendation",
+                "Summary",
+            ]
+        )
 
         for f in report_data.get("findings", []):
             cwe_ids = f.get("cwe_ids", [])
-            if isinstance(cwe_ids, list):
-                cwe_str = ", ".join(cwe_ids)
-            else:
-                cwe_str = str(cwe_ids)
+            cwe_str = ", ".join(cwe_ids) if isinstance(cwe_ids, list) else str(cwe_ids)
 
-            writer.writerow([
-                report_id,
-                assessment_id,
-                f.get("title", ""),
-                f.get("severity", ""),
-                f.get("category", ""),
-                f.get("status", ""),
-                f.get("confidence", ""),
-                f.get("cvss_score", ""),
-                cwe_str,
-                f.get("recommendation", ""),
-                f.get("summary", ""),
-            ])
+            writer.writerow(
+                [
+                    report_id,
+                    assessment_id,
+                    f.get("title", ""),
+                    f.get("severity", ""),
+                    f.get("category", ""),
+                    f.get("status", ""),
+                    f.get("confidence", ""),
+                    f.get("cvss_score", ""),
+                    cwe_str,
+                    f.get("recommendation", ""),
+                    f.get("summary", ""),
+                ]
+            )
 
         content = output.getvalue()
         integrity_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -657,11 +662,7 @@ class ReportGenerationService:
         """
         if assessment_id is not None:
             report_ids = self._reports_by_assessment.get(assessment_id, [])
-            return [
-                self._reports[rid].to_dict()
-                for rid in report_ids
-                if rid in self._reports
-            ]
+            return [self._reports[rid].to_dict() for rid in report_ids if rid in self._reports]
 
         return [m.to_dict() for m in self._reports.values()]
 
@@ -678,9 +679,7 @@ class ReportGenerationService:
         if metadata is None:
             return None
 
-        computed_hash = hashlib.sha256(
-            metadata.content.encode("utf-8")
-        ).hexdigest()
+        computed_hash = hashlib.sha256(metadata.content.encode("utf-8")).hexdigest()
         is_valid = computed_hash == metadata.integrity_hash
 
         if not is_valid:

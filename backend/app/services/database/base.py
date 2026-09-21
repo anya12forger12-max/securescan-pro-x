@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Generic, Sequence, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Sequence, Type, TypeVar
 
-from sqlalchemy import Select, func, select, delete as sa_delete
+from sqlalchemy import Select, func, select
+from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, InstrumentedAttribute
 
 from app.core.exceptions import DatabaseError
 from app.core.logging import get_logger
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
@@ -156,9 +159,7 @@ class BaseRepository(Generic[ModelType]):
         instance = await self.get(id)
         if instance is None:
             error_cls = exc_cls or DatabaseError
-            raise error_cls(
-                f"{self.model.__tablename__} '{id}' not found"
-            )
+            raise error_cls(f"{self.model.__tablename__} '{id}' not found")
         return instance
 
     async def get_multi(
@@ -396,9 +397,7 @@ class BaseRepository(Generic[ModelType]):
         """Resolve a column name to the SQLAlchemy instrumented attribute."""
         column = getattr(self.model, name, None)
         if column is None:
-            raise DatabaseError(
-                f"Column '{name}' does not exist on {self.model.__tablename__}"
-            )
+            raise DatabaseError(f"Column '{name}' does not exist on {self.model.__tablename__}")
         return column
 
     # ── Transaction helpers ─────────────────────────────────────────

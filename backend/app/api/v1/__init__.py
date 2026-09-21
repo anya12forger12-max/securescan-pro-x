@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1.workspaces import router as workspaces_router
-from app.api.v1.assets import router as assets_router
 from app.api.v1.assessments import router as assessments_router
-from app.api.v1.scans import router as scans_router
+from app.api.v1.assets import router as assets_router
 from app.api.v1.reports import router as reports_router
+from app.api.v1.scans import router as scans_router
+from app.api.v1.workspaces import router as workspaces_router
 
 router = APIRouter()
 

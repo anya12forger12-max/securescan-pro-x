@@ -95,8 +95,7 @@ class DefaultRiskEngine(RiskEngine):
             severity_counts[sev] = severity_counts.get(sev, 0) + 1
 
         weighted_sum = sum(
-            SEVERITY_WEIGHTS.get(sev, 0) * count
-            for sev, count in severity_counts.items()
+            SEVERITY_WEIGHTS.get(sev, 0) * count for sev, count in severity_counts.items()
         )
         max_possible = len(findings) * 10
         base_score = (weighted_sum / max(max_possible, 1)) * 10
@@ -217,31 +216,43 @@ class DefaultCorrelationEngine(CorrelationEngine):
                     reasoning=[f"Correlated {len(cat_findings)} findings in category '{cat}'"],
                 )
 
-                correlated.append(CorrelatedFinding(
-                    primary_finding_id=primary.get("id", ""),
-                    related_finding_ids=related_ids,
-                    correlation_type="category_cluster",
-                    combined_severity=combined_sev,
-                    risk_score=score,
-                    description=f"Multiple findings in category '{cat}' suggest a systemic issue.",
-                ))
+                correlated.append(
+                    CorrelatedFinding(
+                        primary_finding_id=primary.get("id", ""),
+                        related_finding_ids=related_ids,
+                        correlation_type="category_cluster",
+                        combined_severity=combined_sev,
+                        risk_score=score,
+                        description=(
+                            f"Multiple findings in category '{cat}' suggest a systemic issue."
+                        ),
+                    )
+                )
 
-        high_findings = [f for f in findings if f.get("severity", "").lower() in ("critical", "high")]
+        high_findings = [
+            f for f in findings if f.get("severity", "").lower() in ("critical", "high")
+        ]
         if len(high_findings) >= 3:
             ids = [f.get("id", "") for f in high_findings]
-            combined_sev = "critical" if any(f.get("severity") == "critical" for f in high_findings) else "high"
-            correlated.append(CorrelatedFinding(
-                primary_finding_id=ids[0],
-                related_finding_ids=ids[1:],
-                correlation_type="severity_cluster",
-                combined_severity=combined_sev,
-                risk_score=RiskScore(
-                    overall_score=8.5,
-                    risk_level=RiskLevel.CRITICAL,
-                    reasoning=[f"{len(high_findings)} high/critical findings cluster"],
-                ),
-                description=f"Cluster of {len(high_findings)} high/critical severity findings.",
-            ))
+            combined_sev = (
+                "critical"
+                if any(f.get("severity") == "critical" for f in high_findings)
+                else "high"
+            )
+            correlated.append(
+                CorrelatedFinding(
+                    primary_finding_id=ids[0],
+                    related_finding_ids=ids[1:],
+                    correlation_type="severity_cluster",
+                    combined_severity=combined_sev,
+                    risk_score=RiskScore(
+                        overall_score=8.5,
+                        risk_level=RiskLevel.CRITICAL,
+                        reasoning=[f"{len(high_findings)} high/critical findings cluster"],
+                    ),
+                    description=f"Cluster of {len(high_findings)} high/critical severity findings.",
+                )
+            )
 
         return correlated
 

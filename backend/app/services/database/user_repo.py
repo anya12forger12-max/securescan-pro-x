@@ -6,10 +6,9 @@ Stores user credentials, roles, MFA state, and lockout information.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, Integer, select, String, Text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import Boolean, Integer, String, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -24,6 +23,9 @@ from app.services.database.base import (
     PaginationParams,
     QueryFilters,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
@@ -49,9 +51,7 @@ class UserModel(Base, UUIDMixin, TimestampMixin):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    role: Mapped[str] = mapped_column(
-        String(20), default=UserRole.VIEWER.value, nullable=False
-    )
+    role: Mapped[str] = mapped_column(String(20), default=UserRole.VIEWER.value, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     mfa_secret: Mapped[str | None] = mapped_column(String(256), nullable=True)
@@ -149,13 +149,9 @@ class UserRepository(BaseRepository[UserModel]):
             order_desc=True,
         )
         if active_only:
-            filters.filters.append(
-                FilterSpec(column="is_active", op="eq", value=True)
-            )
+            filters.filters.append(FilterSpec(column="is_active", op="eq", value=True))
         if role:
-            filters.filters.append(
-                FilterSpec(column="role", op="eq", value=role)
-            )
+            filters.filters.append(FilterSpec(column="role", op="eq", value=role))
         return await self.list(filters=filters, pagination=pagination)
 
     async def update_user(
@@ -192,7 +188,7 @@ class UserRepository(BaseRepository[UserModel]):
     async def record_login(
         self,
         user_id: str,
-        ip_address: str | None = None,
+        _ip_address: str | None = None,
     ) -> UserModel:
         """Record a successful login — resets failed attempts and sets last_login_at."""
         now = datetime.now(timezone.utc).isoformat()
@@ -242,9 +238,7 @@ class UserRepository(BaseRepository[UserModel]):
 
     async def disable_mfa(self, user_id: str) -> UserModel:
         """Disable MFA for a user."""
-        return await self.update_user(
-            user_id, mfa_enabled=False, mfa_secret=None
-        )
+        return await self.update_user(user_id, mfa_enabled=False, mfa_secret=None)
 
     async def delete_user(self, user_id: str) -> None:
         """Permanently delete a user."""

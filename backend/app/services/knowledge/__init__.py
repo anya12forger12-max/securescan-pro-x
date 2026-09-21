@@ -144,9 +144,7 @@ class VulnKnowledgeService(ABC):
         ...
 
     @abstractmethod
-    async def get_compliance_mappings(
-        self, framework: str
-    ) -> dict[str, list[str]]:
+    async def get_compliance_mappings(self, framework: str) -> dict[str, list[str]]:
         """Get compliance framework mappings.
 
         Args:
@@ -316,7 +314,7 @@ def _build_default_entries() -> list[VulnKnowledgeEntry]:
             ],
             examples=[
                 '<img src="https://bank.com/transfer?to=attacker&amount=1000">',
-                'Forged form auto-submitting to change email address',
+                "Forged form auto-submitting to change email address",
             ],
             impact="Unauthorized state changes, account modification, fund transfers",
             effort="Low",
@@ -532,7 +530,8 @@ def _build_default_entries() -> list[VulnKnowledgeEntry]:
             nist_controls=["AU-2", "AU-3", "AU-6", "SI-4"],
             cis_benchmarks=["4.1.1", "4.1.2"],
             remediation=[
-                "Log all authentication events, access control failures, and input validation errors",
+                "Log all authentication events, access control failures, "
+                "and input validation errors",
                 "Implement centralized log aggregation and correlation",
                 "Set up real-time alerting for suspicious patterns",
                 "Ensure logs are tamper-proof with append-only storage",
@@ -816,7 +815,7 @@ def _build_default_entries() -> list[VulnKnowledgeEntry]:
                 "https://cwe.mitre.org/data/definitions/120.html",
             ],
             examples=[
-                'strcpy(buffer, user_input) with input > buffer size',
+                "strcpy(buffer, user_input) with input > buffer size",
                 "Stack-based overflow with shellcode injection",
             ],
             impact="Remote code execution, denial of service, privilege escalation",
@@ -1225,9 +1224,7 @@ class InMemoryVulnKnowledgeService(VulnKnowledgeService):
         """
         return self._entries.get(entry_id)
 
-    async def get_compliance_mappings(
-        self, framework: str
-    ) -> dict[str, list[str]]:
+    async def get_compliance_mappings(self, framework: str) -> dict[str, list[str]]:
         """Get compliance framework mappings.
 
         Args:

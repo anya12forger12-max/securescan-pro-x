@@ -103,6 +103,7 @@ ignore = [
     "A001",    # exception classes intentionally named after builtins (PermissionError, ImportError)
     "A002",    # `id`/`format` are idiomatic argument names in this domain code
     "B008",    # FastAPI `Depends()`/`Query()` defaults are the framework's sanctioned idiom
+    "TC003",   # SQLAlchemy/pydantic resolve deferred `Mapped[...]`/field annotations at runtime and need real imports
 ]
 
 [tool.ruff.lint.isort]
@@ -120,12 +121,6 @@ no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 show_error_codes = true
-
-[[tool.mypy.overrides]]
-module = [
-    "tests.*",
-]
-disallow_untyped_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -164,3 +159,6 @@ show_missing = true
 [tool.bandit]
 exclude_dirs = ["tests"]
 skips = ["B101"]
+
+[tool.ruff.lint.per-file-ignores]
+"app/services/assessment/reports.py" = ["E501"]  # embedded CSS stylesheet template

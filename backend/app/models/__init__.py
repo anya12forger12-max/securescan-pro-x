@@ -52,6 +52,7 @@ class UUIDMixin:
 
 # ── Workspace ──────────────────────────────────────────────────────
 
+
 class Workspace(Base, UUIDMixin, TimestampMixin):
     """A workspace groups related assessments and assets."""
 
@@ -71,6 +72,7 @@ class Workspace(Base, UUIDMixin, TimestampMixin):
 
 
 # ── Asset ──────────────────────────────────────────────────────────
+
 
 class Asset(Base, UUIDMixin, TimestampMixin):
     """An asset represents an assessable target (host, network, etc.)."""
@@ -97,6 +99,7 @@ class Asset(Base, UUIDMixin, TimestampMixin):
 
 # ── Assessment ─────────────────────────────────────────────────────
 
+
 class Assessment(Base, UUIDMixin, TimestampMixin):
     """An assessment represents a security evaluation session."""
 
@@ -119,25 +122,20 @@ class Assessment(Base, UUIDMixin, TimestampMixin):
         default="pending",
         nullable=False,
     )
-    started_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    completed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     target_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     finding_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # Relationships
-    workspace: Mapped["Workspace"] = relationship(
-        "Workspace", back_populates="assessments"
-    )
+    workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="assessments")
     findings: Mapped[list["Finding"]] = relationship(
         "Finding", back_populates="assessment", cascade="all, delete-orphan"
     )
 
 
 # ── Finding ────────────────────────────────────────────────────────
+
 
 class Finding(Base, UUIDMixin, TimestampMixin):
     """A finding represents a security observation from an assessment."""
@@ -168,7 +166,5 @@ class Finding(Base, UUIDMixin, TimestampMixin):
     )
 
     # Relationships
-    assessment: Mapped["Assessment"] = relationship(
-        "Assessment", back_populates="findings"
-    )
+    assessment: Mapped["Assessment"] = relationship("Assessment", back_populates="findings")
     asset: Mapped[Optional["Asset"]] = relationship("Asset", back_populates="findings")

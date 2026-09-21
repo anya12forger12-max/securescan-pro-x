@@ -13,6 +13,7 @@ class SecureScanError(Exception):
 
 # ── Configuration Errors ──────────────────────────────────────────
 
+
 class ConfigurationError(SecureScanError):
     """Raised when configuration is invalid or missing."""
 
@@ -22,6 +23,7 @@ class ConfigurationNotFoundError(ConfigurationError):
 
 
 # ── Database Errors ───────────────────────────────────────────────
+
 
 class DatabaseError(SecureScanError):
     """Raised when a database operation fails."""
@@ -37,6 +39,7 @@ class MigrationError(DatabaseError):
 
 # ── Workspace Errors ──────────────────────────────────────────────
 
+
 class WorkspaceError(SecureScanError):
     """Raised when a workspace operation fails."""
 
@@ -51,6 +54,7 @@ class WorkspaceExistsError(WorkspaceError):
 
 # ── Asset Errors ──────────────────────────────────────────────────
 
+
 class AssetError(SecureScanError):
     """Raised when an asset operation fails."""
 
@@ -64,6 +68,7 @@ class AssetExistsError(AssetError):
 
 
 # ── Assessment Errors ─────────────────────────────────────────────
+
 
 class AssessmentError(SecureScanError):
     """Raised when an assessment operation fails."""
@@ -91,6 +96,7 @@ class AssessmentConflictError(AssessmentError):
 
 # ── Evidence Errors ────────────────────────────────────────────────
 
+
 class EvidenceError(SecureScanError):
     """Raised when an evidence operation fails."""
 
@@ -105,6 +111,7 @@ class EvidenceIntegrityError(EvidenceError):
 
 # ── Report Errors ──────────────────────────────────────────────────
 
+
 class ReportError(SecureScanError):
     """Raised when a report operation fails."""
 
@@ -118,6 +125,7 @@ class ReportFormatError(ReportError):
 
 
 # ── Plugin Errors ─────────────────────────────────────────────────
+
 
 class PluginError(SecureScanError):
     """Raised when a plugin operation fails."""
@@ -145,6 +153,7 @@ class PluginSandboxError(PluginError):
 
 # ── Permission Errors ─────────────────────────────────────────────
 
+
 class PermissionError(SecureScanError):
     """Raised when a permission check fails."""
 
@@ -159,11 +168,13 @@ class SessionExpiredError(AuthenticationError):
 
 # ── Validation Errors ─────────────────────────────────────────────
 
+
 class ValidationError(SecureScanError):
     """Raised when input validation fails."""
 
 
 # ── Export Errors ──────────────────────────────────────────────────
+
 
 class ExportError(SecureScanError):
     """Raised when an export operation fails."""
@@ -174,6 +185,7 @@ class ImportError(SecureScanError):
 
 
 # ── Backup Errors ─────────────────────────────────────────────────
+
 
 class BackupError(SecureScanError):
     """Raised when a backup operation fails."""

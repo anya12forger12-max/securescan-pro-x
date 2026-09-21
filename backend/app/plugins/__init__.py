@@ -79,7 +79,7 @@ class BasePlugin(ABC):
     def status(self) -> PluginStatus:
         return self._status
 
-    async def initialize(self, context: PluginContext) -> bool:
+    async def initialize(self, _context: PluginContext) -> bool:
         self._status = PluginStatus.ACTIVE
         self._loaded_at = datetime.now(timezone.utc).isoformat()
         return True
@@ -108,9 +108,7 @@ class PluginManager(ABC):
     async def deactivate(self, plugin_id: str) -> bool: ...
 
     @abstractmethod
-    async def execute(
-        self, plugin_id: str, context: PluginContext
-    ) -> PluginResult: ...
+    async def execute(self, plugin_id: str, context: PluginContext) -> PluginResult: ...
 
     @abstractmethod
     def list_plugins(self) -> list[dict[str, Any]]: ...
@@ -151,7 +149,7 @@ class InMemoryPluginManager(PluginManager):
             return False
         try:
             module = importlib.import_module(manifest.entry_point)
-            plugin_class = getattr(module, "Plugin")
+            plugin_class = module.Plugin
             instance = plugin_class(manifest)
             context = PluginContext(plugin_id=plugin_id)
             if await instance.initialize(context):
@@ -172,9 +170,7 @@ class InMemoryPluginManager(PluginManager):
         self._plugin_status[plugin_id] = PluginStatus.INACTIVE
         return True
 
-    async def execute(
-        self, plugin_id: str, context: PluginContext
-    ) -> PluginResult:
+    async def execute(self, plugin_id: str, context: PluginContext) -> PluginResult:
         start = time.time()
         manifest = self._plugins.get(plugin_id)
         if not manifest:
@@ -198,12 +194,14 @@ class InMemoryPluginManager(PluginManager):
             result = PluginResult(success=False, error=str(e))
 
         result.duration_seconds = time.time() - start
-        self._execution_log.append({
-            "plugin_id": plugin_id,
-            "success": result.success,
-            "duration": result.duration_seconds,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        self._execution_log.append(
+            {
+                "plugin_id": plugin_id,
+                "success": result.success,
+                "duration": result.duration_seconds,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         return result
 
     def list_plugins(self) -> list[dict[str, Any]]:

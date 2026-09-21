@@ -9,7 +9,6 @@ from __future__ import annotations
 import pytest
 
 from app.core.exceptions import AssessmentNotFoundError
-from app.schemas import AssessmentCreate, AssessmentUpdate
 from app.services.assessment.orchestrator import InMemoryOrchestrator
 
 
@@ -22,9 +21,7 @@ class TestAssessmentService:
         return InMemoryOrchestrator()
 
     @pytest.mark.asyncio
-    async def test_create_assessment_success(
-        self, service: InMemoryOrchestrator
-    ) -> None:
+    async def test_create_assessment_success(self, service: InMemoryOrchestrator) -> None:
         """Creating an assessment with valid data succeeds."""
         result = await service.create_assessment(
             workspace_id="ws-1",
@@ -38,26 +35,20 @@ class TestAssessmentService:
         assert result["workspace_id"] == "ws-1"
 
     @pytest.mark.asyncio
-    async def test_get_assessment_success(
-        self, service: InMemoryOrchestrator
-    ) -> None:
+    async def test_get_assessment_success(self, service: InMemoryOrchestrator) -> None:
         """Getting an existing assessment returns it."""
         created = await service.create_assessment("ws-1", name="Test Assessment")
         result = await service.get_assessment(created["id"])
         assert result["name"] == "Test Assessment"
 
     @pytest.mark.asyncio
-    async def test_get_assessment_not_found(
-        self, service: InMemoryOrchestrator
-    ) -> None:
+    async def test_get_assessment_not_found(self, service: InMemoryOrchestrator) -> None:
         """Getting a nonexistent assessment raises error."""
         with pytest.raises(AssessmentNotFoundError):
             await service.get_assessment("nonexistent-id")
 
     @pytest.mark.asyncio
-    async def test_start_assessment(
-        self, service: InMemoryOrchestrator
-    ) -> None:
+    async def test_start_assessment(self, service: InMemoryOrchestrator) -> None:
         """Starting an assessment transitions to completed (demo mode)."""
         created = await service.create_assessment("ws-1", name="To Start")
         result = await service.start_assessment(created["id"])
@@ -66,30 +57,17 @@ class TestAssessmentService:
         assert result["completed_at"] is not None
 
     @pytest.mark.asyncio
-    async def test_cancel_assessment(
-        self, service: InMemoryOrchestrator
-    ) -> None:
+    async def test_cancel_assessment(self, service: InMemoryOrchestrator) -> None:
         """Cancelling an assessment transitions to cancelled."""
         created = await service.create_assessment("ws-1", name="To Cancel")
         result = await service.cancel_assessment(created["id"])
         assert result["status"] == "cancelled"
 
     @pytest.mark.asyncio
-    async def test_update_assessment(
-        self, service: InMemoryOrchestrator
-    ) -> None:
+    async def test_update_assessment(self, service: InMemoryOrchestrator) -> None:
         """Updating an assessment succeeds."""
         created = await service.create_assessment("ws-1", name="Original")
         assessment = await service.get_assessment(created["id"])
         assessment["name"] = "Updated"
         updated = await service.get_assessment(created["id"])
         assert updated["name"] == "Original"  # Not persisted in this simple test
-
-    @pytest.mark.asyncio
-    async def test_cancel_assessment(
-        self, service: InMemoryOrchestrator
-    ) -> None:
-        """Cancelling a draft assessment moves it to cancelled state."""
-        created = await service.create_assessment("ws-1", name="To Cancel")
-        result = await service.cancel_assessment(created["id"])
-        assert result["status"] == "cancelled"

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import socket
 import ssl
 import time
 from abc import ABC, abstractmethod
@@ -17,12 +16,34 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 COMMON_PORTS: dict[int, str] = {
-    21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS",
-    80: "HTTP", 110: "POP3", 111: "RPCBind", 135: "MSRPC", 139: "NetBIOS",
-    143: "IMAP", 443: "HTTPS", 445: "SMB", 993: "IMAPS", 995: "POP3S",
-    1723: "PPTP", 3306: "MySQL", 3389: "RDP", 5432: "PostgreSQL", 5900: "VNC",
-    6379: "Redis", 8080: "HTTP-Proxy", 8443: "HTTPS-Alt", 27017: "MongoDB",
-    9200: "Elasticsearch", 5601: "Kibana", 8000: "HTTP-Alt", 8888: "HTTP-Alt",
+    21: "FTP",
+    22: "SSH",
+    23: "Telnet",
+    25: "SMTP",
+    53: "DNS",
+    80: "HTTP",
+    110: "POP3",
+    111: "RPCBind",
+    135: "MSRPC",
+    139: "NetBIOS",
+    143: "IMAP",
+    443: "HTTPS",
+    445: "SMB",
+    993: "IMAPS",
+    995: "POP3S",
+    1723: "PPTP",
+    3306: "MySQL",
+    3389: "RDP",
+    5432: "PostgreSQL",
+    5900: "VNC",
+    6379: "Redis",
+    8080: "HTTP-Proxy",
+    8443: "HTTPS-Alt",
+    27017: "MongoDB",
+    9200: "Elasticsearch",
+    5601: "Kibana",
+    8000: "HTTP-Alt",
+    8888: "HTTP-Alt",
 }
 
 
@@ -143,12 +164,21 @@ class InMemoryScanEngine(ScanEngine):
                 elapsed = (time.time() - start) * 1000
                 writer.close()
                 await writer.wait_closed()
-                return PortResult(port=port, service=service, state="open", response_time_ms=elapsed)
-            except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
+                return PortResult(
+                    port=port, service=service, state="open", response_time_ms=elapsed
+                )
+            except (
+                asyncio.TimeoutError,
+                ConnectionRefusedError,
+                OSError,
+            ):
                 elapsed = (time.time() - start) * 1000
-                if isinstance(e := (asyncio.TimeoutError, ConnectionRefusedError, OSError), type):
-                    pass
-                return PortResult(port=port, service=service, state="closed", response_time_ms=elapsed)
+                return PortResult(
+                    port=port,
+                    service=service,
+                    state="closed",
+                    response_time_ms=elapsed,
+                )
 
     async def run_port_scan(
         self, target: str, ports: list[int] | None = None, timeout: float = 3.0
@@ -181,15 +211,23 @@ class InMemoryScanEngine(ScanEngine):
                 elif pr.port in (80, 443, 8080, 8443):
                     severity = "low"
 
-                scan_result.findings.append(ScanFinding(
-                    id=f"port-{pr.port}",
-                    title=f"Open port {pr.port} ({pr.service})",
-                    description=f"Port {pr.port} is open running {pr.service}.",
-                    severity=severity,
-                    category="network",
-                    evidence=f"Port {pr.port}: {pr.state}, response time: {pr.response_time_ms:.1f}ms",
-                    recommendation=f"Verify that {pr.service} on port {pr.port} is intentionally exposed and properly secured.",
-                ))
+                scan_result.findings.append(
+                    ScanFinding(
+                        id=f"port-{pr.port}",
+                        title=f"Open port {pr.port} ({pr.service})",
+                        description=f"Port {pr.port} is open running {pr.service}.",
+                        severity=severity,
+                        category="network",
+                        evidence=(
+                            f"Port {pr.port}: {pr.state}, response time: "
+                            f"{pr.response_time_ms:.1f}ms"
+                        ),
+                        recommendation=(
+                            f"Verify that {pr.service} on port {pr.port} is intentionally exposed "
+                            f"and properly secured."
+                        ),
+                    )
+                )
 
             scan_result.metadata["open_port_count"] = len(open_ports)
             scan_result.metadata["scanned_port_count"] = len(ports)
@@ -279,32 +317,39 @@ class InMemoryScanEngine(ScanEngine):
                                 except (ValueError, IndexError):
                                     status_str = "weak"
                                     severity = "low"
-                        elif header_lower == "content-security-policy":
-                            if "unsafe-inline" in value or "unsafe-eval" in value:
-                                status_str = "weak"
-                                severity = "low"
+                        elif header_lower == "content-security-policy" and (
+                            "unsafe-inline" in value or "unsafe-eval" in value
+                        ):
+                            status_str = "weak"
+                            severity = "low"
 
-                        scan_result.findings.append(ScanFinding(
-                            id=f"header-{header_lower}",
-                            title=f"{header_name} header: {status_str}",
-                            description=f"The {header_name} header is present and {status_str}.",
-                            severity=severity,
-                            category="headers",
-                            evidence=f"{header_name}: {value[:200]}",
-                            recommendation="" if status_str == "good" else config["rec"],
-                            cwe_id=config["cwe"],
-                        ))
+                        scan_result.findings.append(
+                            ScanFinding(
+                                id=f"header-{header_lower}",
+                                title=f"{header_name} header: {status_str}",
+                                description=(
+                                    f"The {header_name} header is present and {status_str}."
+                                ),
+                                severity=severity,
+                                category="headers",
+                                evidence=f"{header_name}: {value[:200]}",
+                                recommendation="" if status_str == "good" else config["rec"],
+                                cwe_id=config["cwe"],
+                            )
+                        )
                     else:
-                        scan_result.findings.append(ScanFinding(
-                            id=f"header-{header_lower}",
-                            title=f"Missing {header_name} header",
-                            description=f"The {header_name} header is not set.",
-                            severity=config["severity"],
-                            category="headers",
-                            evidence=f"Header '{header_name}' not found in response.",
-                            recommendation=config["rec"],
-                            cwe_id=config["cwe"],
-                        ))
+                        scan_result.findings.append(
+                            ScanFinding(
+                                id=f"header-{header_lower}",
+                                title=f"Missing {header_name} header",
+                                description=f"The {header_name} header is not set.",
+                                severity=config["severity"],
+                                category="headers",
+                                evidence=f"Header '{header_name}' not found in response.",
+                                recommendation=config["rec"],
+                                cwe_id=config["cwe"],
+                            )
+                        )
 
                 scan_result.status = ScanStatus.COMPLETED
 
@@ -337,25 +382,56 @@ class InMemoryScanEngine(ScanEngine):
         ]
 
         common_passwords = {
-            "password", "123456", "12345678", "qwerty", "abc123",
-            "monkey", "master", "dragon", "login", "princess",
-            "football", "shadow", "sunshine", "trustno1", "iloveyou",
-            "batman", "access", "hello", "charlie", "letmein",
-            "welcome", "password1", "admin", "passw0rd", "p@ssw0rd",
+            "password",
+            "123456",
+            "12345678",
+            "qwerty",
+            "abc123",
+            "monkey",
+            "master",
+            "dragon",
+            "login",
+            "princess",
+            "football",
+            "shadow",
+            "sunshine",
+            "trustno1",
+            "iloveyou",
+            "batman",
+            "access",
+            "hello",
+            "charlie",
+            "letmein",
+            "welcome",
+            "password1",
+            "admin",
+            "passw0rd",
+            "p@ssw0rd",
         }
 
         for pwd, note in demo_passwords:
             score, strength, issues = self._check_password_strength(pwd, common_passwords)
-            scan_result.findings.append(ScanFinding(
-                id=f"pwd-demo-{note[:20]}",
-                title=f"Password strength: {strength} - {note}",
-                description=f"Demo password analysis: {', '.join(issues)}",
-                severity="critical" if score < 20 else "high" if score < 40 else "medium" if score < 60 else "low",
-                category="password",
-                evidence=f"Score: {score}/100. Issues: {', '.join(issues)}",
-                recommendation="Use passwords with 16+ characters, mixed case, numbers, and symbols.",
-                metadata={"score": score, "strength": strength, "demo": True},
-            ))
+            scan_result.findings.append(
+                ScanFinding(
+                    id=f"pwd-demo-{note[:20]}",
+                    title=f"Password strength: {strength} - {note}",
+                    description=f"Demo password analysis: {', '.join(issues)}",
+                    severity=(
+                        "critical"
+                        if score < 20
+                        else "high"
+                        if score < 40
+                        else "medium"
+                        if score < 60
+                        else "low"
+                    ),
+                    category="password",
+                    evidence=f"Score: {score}/100. Issues: {', '.join(issues)}",
+                    recommendation="Use passwords with 16+ characters, mixed case, "
+                    "numbers, and symbols.",
+                    metadata={"score": score, "strength": strength, "demo": True},
+                )
+            )
 
         scan_result.evidence.append("Password check completed in demo mode")
         scan_result.status = ScanStatus.COMPLETED
@@ -405,7 +481,7 @@ class InMemoryScanEngine(ScanEngine):
         for pattern in ["123456", "abcdef", "qwerty", "asdfgh", "zxcvbn"]:
             if pattern in password.lower():
                 score = max(0, score - 20)
-                issues.append(f"Contains keyboard/sequential pattern")
+                issues.append("Contains keyboard/sequential pattern")
                 break
 
         for i in range(len(password) - 2):
@@ -436,7 +512,9 @@ class InMemoryScanEngine(ScanEngine):
         return score, strength, issues
 
     async def run_ssl_check(self, hostname: str, port: int = 443) -> ScanResult:
-        scan_result = ScanResult(scan_type="ssl_check", target=f"{hostname}:{port}", status=ScanStatus.RUNNING)
+        scan_result = ScanResult(
+            scan_type="ssl_check", target=f"{hostname}:{port}", status=ScanStatus.RUNNING
+        )
         scan_result.started_at = datetime.now(timezone.utc).isoformat()
 
         try:
@@ -453,7 +531,7 @@ class InMemoryScanEngine(ScanEngine):
                 cipher = ssl_object.cipher()
 
                 not_after = cert.get("notAfter", "")
-                not_before = cert.get("notBefore", "")
+                cert.get("notBefore", "")
                 issuer = dict(x[0] for x in cert.get("issuer", ()))
                 subject = dict(x[0] for x in cert.get("subject", ()))
 
@@ -461,8 +539,10 @@ class InMemoryScanEngine(ScanEngine):
                 days_left = 0
                 if not_after:
                     from email.utils import parsedate_to_datetime
+
                     expiry = parsedate_to_datetime(not_after)
-                    days_left = (expiry.replace(tzinfo=None) - datetime.utcnow()).days
+                    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+                    days_left = (expiry.replace(tzinfo=None) - now_utc).days
                     cert_valid = days_left > 0
 
                 weak_protocols = ["TLSv1", "TLSv1.1", "SSLv3", "SSLv2"]
@@ -475,68 +555,84 @@ class InMemoryScanEngine(ScanEngine):
                 issues = []
                 if is_weak_protocol:
                     issues.append(f"Weak protocol: {protocol}")
-                    scan_result.findings.append(ScanFinding(
-                        id="ssl-weak-protocol",
-                        title=f"Weak SSL/TLS protocol: {protocol}",
-                        description=f"Server supports {protocol} which has known vulnerabilities.",
-                        severity="high",
-                        category="ssl",
-                        cwe_id="CWE-327",
-                        recommendation="Disable TLS 1.0/1.1 and SSLv3. Use TLS 1.2+ only.",
-                    ))
+                    scan_result.findings.append(
+                        ScanFinding(
+                            id="ssl-weak-protocol",
+                            title=f"Weak SSL/TLS protocol: {protocol}",
+                            description=(
+                                f"Server supports {protocol} which has known vulnerabilities."
+                            ),
+                            severity="high",
+                            category="ssl",
+                            cwe_id="CWE-327",
+                            recommendation="Disable TLS 1.0/1.1 and SSLv3. Use TLS 1.2+ only.",
+                        )
+                    )
 
                 if is_weak_cipher:
                     issues.append(f"Weak cipher: {cipher_name}")
-                    scan_result.findings.append(ScanFinding(
-                        id="ssl-weak-cipher",
-                        title=f"Weak cipher suite: {cipher_name}",
-                        description=f"Server uses cipher suite {cipher_name} with known weaknesses.",
-                        severity="high",
-                        category="ssl",
-                        cwe_id="CWE-327",
-                        recommendation="Use strong cipher suites (AES-256-GCM, ChaCha20).",
-                    ))
+                    scan_result.findings.append(
+                        ScanFinding(
+                            id="ssl-weak-cipher",
+                            title=f"Weak cipher suite: {cipher_name}",
+                            description=(
+                                f"Server uses cipher suite {cipher_name} with known weaknesses."
+                            ),
+                            severity="high",
+                            category="ssl",
+                            cwe_id="CWE-327",
+                            recommendation="Use strong cipher suites (AES-256-GCM, ChaCha20).",
+                        )
+                    )
 
                 if not cert_valid:
                     issues.append("Certificate expired")
-                    scan_result.findings.append(ScanFinding(
-                        id="ssl-expired-cert",
-                        title="SSL certificate expired",
-                        description="The SSL certificate has expired.",
-                        severity="critical",
-                        category="ssl",
-                        cwe_id="CWE-295",
-                        recommendation="Renew the SSL certificate immediately.",
-                    ))
+                    scan_result.findings.append(
+                        ScanFinding(
+                            id="ssl-expired-cert",
+                            title="SSL certificate expired",
+                            description="The SSL certificate has expired.",
+                            severity="critical",
+                            category="ssl",
+                            cwe_id="CWE-295",
+                            recommendation="Renew the SSL certificate immediately.",
+                        )
+                    )
                 elif days_left < 30:
-                    scan_result.findings.append(ScanFinding(
-                        id="ssl-expiring-cert",
-                        title=f"SSL certificate expires in {days_left} days",
-                        description="The SSL certificate will expire soon.",
-                        severity="medium",
-                        category="ssl",
-                        cwe_id="CWE-295",
-                        recommendation="Renew the SSL certificate before it expires.",
-                    ))
+                    scan_result.findings.append(
+                        ScanFinding(
+                            id="ssl-expiring-cert",
+                            title=f"SSL certificate expires in {days_left} days",
+                            description="The SSL certificate will expire soon.",
+                            severity="medium",
+                            category="ssl",
+                            cwe_id="CWE-295",
+                            recommendation="Renew the SSL certificate before it expires.",
+                        )
+                    )
 
-                scan_result.evidence.extend([
-                    f"Protocol: {protocol}",
-                    f"Cipher: {cipher_name}",
-                    f"Certificate issuer: {issuer.get('organizationName', 'Unknown')}",
-                    f"Certificate subject: {subject.get('commonName', 'Unknown')}",
-                    f"Expires: {not_after} ({days_left} days)",
-                    f"Valid: {cert_valid}",
-                ])
+                scan_result.evidence.extend(
+                    [
+                        f"Protocol: {protocol}",
+                        f"Cipher: {cipher_name}",
+                        f"Certificate issuer: {issuer.get('organizationName', 'Unknown')}",
+                        f"Certificate subject: {subject.get('commonName', 'Unknown')}",
+                        f"Expires: {not_after} ({days_left} days)",
+                        f"Valid: {cert_valid}",
+                    ]
+                )
 
-                scan_result.metadata.update({
-                    "protocol": protocol,
-                    "cipher": cipher_name,
-                    "issuer": issuer,
-                    "subject": subject,
-                    "expires": not_after,
-                    "days_until_expiry": days_left,
-                    "certificate_valid": cert_valid,
-                })
+                scan_result.metadata.update(
+                    {
+                        "protocol": protocol,
+                        "cipher": cipher_name,
+                        "issuer": issuer,
+                        "subject": subject,
+                        "expires": not_after,
+                        "days_until_expiry": days_left,
+                        "certificate_valid": cert_valid,
+                    }
+                )
 
             writer.close()
             await writer.wait_closed()

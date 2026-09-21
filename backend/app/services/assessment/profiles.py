@@ -6,10 +6,9 @@ to run, evidence collection settings, reporting style, and concurrency limits.
 
 from __future__ import annotations
 
-import json
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from app.core.exceptions import AssessmentNotFoundError, ValidationError
 from app.core.logging import get_logger
@@ -320,11 +319,12 @@ class InMemoryProfileService(ProfileService):
             Tuple of (profiles, total count).
         """
         profiles = [
-            p for p in self._profiles.values()
+            p
+            for p in self._profiles.values()
             if not p["is_deleted"] and (include_builtin or not p["is_builtin"])
         ]
         total = len(profiles)
-        page = profiles[offset:offset + limit]
+        page = profiles[offset : offset + limit]
         return ([dict(p) for p in page], total)
 
     async def update(
@@ -349,9 +349,16 @@ class InMemoryProfileService(ProfileService):
             raise AssessmentNotFoundError(f"Profile '{profile_id}' not found")
 
         updatable = {
-            "name", "description", "timeout_seconds", "concurrency_limit",
-            "evidence_collection", "reporting_style", "notification_rules",
-            "plugin_ids", "policy_ids", "config",
+            "name",
+            "description",
+            "timeout_seconds",
+            "concurrency_limit",
+            "evidence_collection",
+            "reporting_style",
+            "notification_rules",
+            "plugin_ids",
+            "policy_ids",
+            "config",
         }
         for key, value in kwargs.items():
             if key in updatable:

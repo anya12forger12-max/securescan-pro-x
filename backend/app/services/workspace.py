@@ -8,14 +8,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Optional
 
 from app.core.exceptions import (
     WorkspaceExistsError,
     WorkspaceNotFoundError,
 )
 from app.core.logging import get_logger
-from app.schemas import WorkspaceCreate, WorkspaceUpdate, WorkspaceResponse
+from app.schemas import WorkspaceCreate, WorkspaceResponse, WorkspaceUpdate
 
 logger = get_logger(__name__)
 
@@ -131,9 +130,7 @@ class InMemoryWorkspaceService(WorkspaceService):
         # Check for duplicate name
         for ws in self._workspaces.values():
             if ws["name"] == data.name:
-                raise WorkspaceExistsError(
-                    f"Workspace with name '{data.name}' already exists"
-                )
+                raise WorkspaceExistsError(f"Workspace with name '{data.name}' already exists")
 
         self._counter += 1
         now = datetime.now(timezone.utc)
@@ -171,9 +168,7 @@ class InMemoryWorkspaceService(WorkspaceService):
         """
         ws = self._workspaces.get(workspace_id)
         if ws is None:
-            raise WorkspaceNotFoundError(
-                f"Workspace '{workspace_id}' not found"
-            )
+            raise WorkspaceNotFoundError(f"Workspace '{workspace_id}' not found")
         return WorkspaceResponse(**ws)
 
     async def list(
@@ -198,7 +193,7 @@ class InMemoryWorkspaceService(WorkspaceService):
             all_workspaces = [ws for ws in all_workspaces if ws["is_active"]]
 
         total = len(all_workspaces)
-        page = all_workspaces[offset: offset + limit]
+        page = all_workspaces[offset : offset + limit]
 
         return (
             [WorkspaceResponse(**ws) for ws in page],
@@ -224,9 +219,7 @@ class InMemoryWorkspaceService(WorkspaceService):
         """
         ws = self._workspaces.get(workspace_id)
         if ws is None:
-            raise WorkspaceNotFoundError(
-                f"Workspace '{workspace_id}' not found"
-            )
+            raise WorkspaceNotFoundError(f"Workspace '{workspace_id}' not found")
 
         update_data = data.model_dump(exclude_unset=True)
         ws.update(update_data)
@@ -250,9 +243,7 @@ class InMemoryWorkspaceService(WorkspaceService):
             WorkspaceNotFoundError: If workspace does not exist.
         """
         if workspace_id not in self._workspaces:
-            raise WorkspaceNotFoundError(
-                f"Workspace '{workspace_id}' not found"
-            )
+            raise WorkspaceNotFoundError(f"Workspace '{workspace_id}' not found")
 
         del self._workspaces[workspace_id]
         logger.info("workspace.deleted", workspace_id=workspace_id)

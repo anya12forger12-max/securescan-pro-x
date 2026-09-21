@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import TYPE_CHECKING
+
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.core.dependencies import get_orchestrator, require_auth
-from app.services.auth import User
+from app.core.dependencies import require_auth
 from app.services.scan.engine import InMemoryScanEngine, ScanEngine
+
+if TYPE_CHECKING:
+    from app.services.auth import User
 
 router = APIRouter(prefix="/scans", tags=["Scans"])
 
@@ -57,7 +61,10 @@ def _result_to_dict(result: object) -> dict:
             if isinstance(v, list):
                 v = [_result_to_dict(item) if hasattr(item, "__dict__") else item for item in v]
             elif isinstance(v, dict):
-                v = {kk: _result_to_dict(vv) if hasattr(vv, "__dict__") else vv for kk, vv in v.items()}
+                v = {
+                    kk: _result_to_dict(vv) if hasattr(vv, "__dict__") else vv
+                    for kk, vv in v.items()
+                }
             elif hasattr(v, "value"):
                 v = v.value
             d[k] = v

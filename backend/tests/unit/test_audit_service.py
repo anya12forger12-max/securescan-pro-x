@@ -16,9 +16,7 @@ class TestAuditService:
         return InMemoryAuditService()
 
     @pytest.mark.asyncio
-    async def test_log_event_success(
-        self, service: InMemoryAuditService
-    ) -> None:
+    async def test_log_event_success(self, service: InMemoryAuditService) -> None:
         """Logging an audit event succeeds."""
         event = await service.log_event(
             action="workspace.create",
@@ -34,9 +32,7 @@ class TestAuditService:
         assert event.success is True
 
     @pytest.mark.asyncio
-    async def test_log_event_failure(
-        self, service: InMemoryAuditService
-    ) -> None:
+    async def test_log_event_failure(self, service: InMemoryAuditService) -> None:
         """Logging a failed audit event succeeds."""
         event = await service.log_event(
             action="workspace.create",
@@ -48,9 +44,7 @@ class TestAuditService:
         assert event.error_message == "Permission denied"
 
     @pytest.mark.asyncio
-    async def test_get_events(
-        self, service: InMemoryAuditService
-    ) -> None:
+    async def test_get_events(self, service: InMemoryAuditService) -> None:
         """Getting audit events returns logged events."""
         await service.log_event(action="action.1", user_id="user-1")
         await service.log_event(action="action.2", user_id="user-2")
@@ -60,9 +54,7 @@ class TestAuditService:
         assert len(events) == 2
 
     @pytest.mark.asyncio
-    async def test_get_events_filter_by_user(
-        self, service: InMemoryAuditService
-    ) -> None:
+    async def test_get_events_filter_by_user(self, service: InMemoryAuditService) -> None:
         """Filtering events by user returns correct results."""
         await service.log_event(action="a", user_id="user-1")
         await service.log_event(action="a", user_id="user-2")
@@ -71,9 +63,7 @@ class TestAuditService:
         assert len(events) == 1
 
     @pytest.mark.asyncio
-    async def test_get_event_count(
-        self, service: InMemoryAuditService
-    ) -> None:
+    async def test_get_event_count(self, service: InMemoryAuditService) -> None:
         """Getting event count returns correct count."""
         assert await service.get_event_count() == 0
 
@@ -83,9 +73,7 @@ class TestAuditService:
         assert await service.get_event_count() == 2
 
     @pytest.mark.asyncio
-    async def test_get_events_pagination(
-        self, service: InMemoryAuditService
-    ) -> None:
+    async def test_get_events_pagination(self, service: InMemoryAuditService) -> None:
         """Pagination works correctly."""
         for i in range(10):
             await service.log_event(action=f"action.{i}")

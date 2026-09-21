@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
 
-from app.services.auth import AuthService, UserRole
 from app.core.dependencies import get_auth_service, get_current_user_optional
+
+if TYPE_CHECKING:
+    from app.services.auth import AuthService
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -146,7 +150,10 @@ async def change_password(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     success = await auth.change_password(user.id, request.old_password, request.new_password)
     if not success:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid current password or password too weak")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid current password or password too weak",
+        )
     return {"message": "Password changed successfully"}
 
 
@@ -157,10 +164,7 @@ async def list_users(
 ) -> list[UserResponse]:
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    if hasattr(user.role, "value"):
-        role_val = user.role.value
-    else:
-        role_val = user.role
+    role_val = user.role.value if hasattr(user.role, "value") else user.role
     if role_val != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     users = await auth.list_users()
