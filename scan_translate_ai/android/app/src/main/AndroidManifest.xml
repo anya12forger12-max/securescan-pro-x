@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="scan_translate_ai"
+        android:label="Scan & Translate AI"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
