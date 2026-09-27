@@ -9,12 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY backend/pyproject.toml .
-RUN pip install --no-cache-dir -e ".[dev]"
-
-# Copy application code
+# Copy the backend before installing: hatchling's editable install builds
+# metadata that requires README.md and the app/ package to exist. Copying
+# pyproject.toml alone failed with "Readme file does not exist".
 COPY backend/ .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -e ".[dev]"
 
 EXPOSE 8000
 
