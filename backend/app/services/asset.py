@@ -56,7 +56,7 @@ class AssetService(ABC):
     @abstractmethod
     async def list_by_workspace(
         self,
-        workspace_id: str,
+        workspace_id: str | None,
         asset_type: str | None = None,
         offset: int = 0,
         limit: int = 50,
@@ -64,7 +64,7 @@ class AssetService(ABC):
         """List assets in a workspace.
 
         Args:
-            workspace_id: Parent workspace ID.
+            workspace_id: Parent workspace ID (None = all workspaces).
             asset_type: Filter by asset type.
             offset: Number to skip.
             limit: Maximum to return.
@@ -183,7 +183,7 @@ class InMemoryAssetService(AssetService):
 
     async def list_by_workspace(
         self,
-        workspace_id: str,
+        workspace_id: str | None,
         asset_type: str | None = None,
         offset: int = 0,
         limit: int = 50,
@@ -191,7 +191,7 @@ class InMemoryAssetService(AssetService):
         """List assets in a workspace from memory.
 
         Args:
-            workspace_id: Parent workspace ID.
+            workspace_id: Parent workspace ID (None = all workspaces).
             asset_type: Filter by asset type.
             offset: Number to skip.
             limit: Maximum to return.
@@ -199,7 +199,11 @@ class InMemoryAssetService(AssetService):
         Returns:
             Tuple of (list of assets, total count).
         """
-        all_assets = [a for a in self._assets.values() if a["workspace_id"] == workspace_id]
+        all_assets = [
+            a
+            for a in self._assets.values()
+            if workspace_id is None or a["workspace_id"] == workspace_id
+        ]
 
         if asset_type is not None:
             all_assets = [a for a in all_assets if a["asset_type"] == asset_type]

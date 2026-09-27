@@ -42,6 +42,9 @@ dependencies = [
     "httpx>=0.28.0",
     "jinja2>=3.1.0",
     "python-multipart>=0.0.17",
+    "bcrypt>=4.2.0",
+    "email-validator>=2.1.0",
+    "pyyaml>=6.0.1",
 ]
 
 [project.optional-dependencies]
@@ -144,6 +147,11 @@ source = ["app"]
 omit = [
     "tests/*",
     "app/cli.py",
+    # Unreachable repository layer: nothing in app/ or tests/ imports
+    # app.services.database (the lifespan uses app.core/database.py instead).
+    # Kept for a future SQL-backed mode; excluded so the gate measures code
+    # that actually runs. Revisit if it gets wired up.
+    "app/services/database/*",
 ]
 
 [tool.coverage.report]
@@ -153,7 +161,7 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "if __name__ == .__main__.",
 ]
-fail_under = 80
+fail_under = 85
 show_missing = true
 
 [tool.bandit]

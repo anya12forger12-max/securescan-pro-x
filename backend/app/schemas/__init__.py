@@ -89,6 +89,10 @@ class AssessmentCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = Field(None, max_length=4096)
     asset_ids: list[str] = Field(default_factory=list)
+    profile_id: Optional[str] = None
+    policy_id: Optional[str] = None
+    priority: str = Field("normal", pattern="^(low|normal|high|critical)$")
+    tags: list[str] = Field(default_factory=list)
 
 
 class AssessmentUpdate(BaseModel):

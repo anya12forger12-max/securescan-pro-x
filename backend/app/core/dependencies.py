@@ -47,11 +47,7 @@ def init_services() -> None:
     _asset_service = InMemoryAssetService()
     _config_service = InMemoryConfigurationService()
     _plugin_manager = InMemoryPluginManager()
-    _orchestrator = InMemoryOrchestrator(
-        audit_service=_audit_service,
-        evidence_service=InMemoryEvidenceService(),
-        report_service=InMemoryReportService(),
-    )
+    _orchestrator = InMemoryOrchestrator()
     _evidence_service = InMemoryEvidenceService()
     _report_service = InMemoryReportService()
     _profile_service = InMemoryProfileService()

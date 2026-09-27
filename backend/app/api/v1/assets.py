@@ -55,7 +55,10 @@ async def create_asset(
     description="List assets in a workspace.",
 )
 async def list_assets(
-    workspace_id: str = Query(..., description="Parent workspace ID"),
+    workspace_id: str | None = Query(
+        None,
+        description="Parent workspace ID (omit to list across all workspaces)",
+    ),
     asset_type: str | None = Query(None, description="Filter by type"),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
@@ -63,7 +66,7 @@ async def list_assets(
     """List assets in a workspace.
 
     Args:
-        workspace_id: Parent workspace ID.
+        workspace_id: Parent workspace ID (None = all workspaces).
         asset_type: Filter by asset type.
         offset: Number to skip.
         limit: Maximum to return.

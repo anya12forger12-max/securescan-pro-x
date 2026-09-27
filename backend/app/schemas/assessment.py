@@ -365,7 +365,7 @@ class AssessmentStatisticsResponse(BaseModel):
     total_evidence: int
     duration_seconds: Optional[float] = None
     target_count: int
-    plugin_count: int
+    plugin_count: int = 0
     risk_score: Optional[float] = None
 
 

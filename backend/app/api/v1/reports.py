@@ -13,19 +13,12 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from app.api.v1.state import orchestrator as _orchestrator
+from app.api.v1.state import report_service as _report_service
 from app.core.exceptions import AssessmentNotFoundError
 from app.schemas import ErrorResponse
-from app.services.assessment import EventBus, InMemoryOrchestrator
-from app.services.reports import (
-    ReportGenerationService,
-)
 
 router = APIRouter()
-
-# Shared service instances
-_event_bus = EventBus()
-_orchestrator = InMemoryOrchestrator(event_bus=_event_bus)
-_report_service = ReportGenerationService()
 
 
 # ── Request Schemas ───────────────────────────────────────────────

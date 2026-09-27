@@ -13,7 +13,7 @@ from app.services.scan.engine import InMemoryScanEngine, ScanEngine
 if TYPE_CHECKING:
     from app.services.auth import User
 
-router = APIRouter(prefix="/scans", tags=["Scans"])
+router = APIRouter(tags=["Scans"])
 
 _scan_engine: ScanEngine | None = None
 

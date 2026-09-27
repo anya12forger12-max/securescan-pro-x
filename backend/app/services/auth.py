@@ -2,19 +2,48 @@
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 
-from passlib.context import CryptContext
+import bcrypt
 
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
+_BCRYPT_ROUNDS = 12
+# bcrypt processes at most 72 bytes; anything longer raises on bcrypt>=4.1.
+# Longer secrets are pre-hashed with SHA-256 (64 hex chars) so no entropy is
+# silently dropped and verification stays deterministic.
+_BCRYPT_MAX_BYTES = 72
+
+
+def _prepare_password(password: str) -> bytes:
+    """Normalize a password for bcrypt without losing entropy."""
+    data = password.encode()
+    if len(data) > _BCRYPT_MAX_BYTES:
+        return hashlib.sha256(data).hexdigest().encode()
+    return data
+
+
+def hash_password(password: str) -> str:
+    """Hash a password with bcrypt using a per-password random salt."""
+    return bcrypt.hashpw(
+        _prepare_password(password),
+        bcrypt.gensalt(rounds=_BCRYPT_ROUNDS),
+    ).decode()
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Constant-time check of a password against a stored bcrypt hash."""
+    try:
+        return bcrypt.checkpw(_prepare_password(password), password_hash.encode())
+    except (ValueError, TypeError):
+        return False
 
 
 class UserRole(str, Enum):
@@ -65,6 +94,7 @@ class AuthResult:
     success: bool
     user: User | None = None
     session: Session | None = None
+    session_token: str | None = None
     error: str | None = None
     requires_mfa: bool = False
     locked: bool = False
@@ -133,8 +163,6 @@ class InMemoryAuthService(AuthService):
         self._token_store: dict[str, str] = {}
 
     def _hash_token(self, token: str) -> str:
-        import hashlib
-
         return hashlib.sha256(token.encode()).hexdigest()
 
     def _validate_password_strength(self, password: str) -> str | None:
@@ -175,7 +203,7 @@ class InMemoryAuthService(AuthService):
             return AuthResult(success=False, error=strength_error)
 
         user_id = secrets.token_hex(16)
-        password_hash = pwd_context.hash(password)
+        password_hash = hash_password(password)
         now = datetime.now(timezone.utc).isoformat()
 
         user = User(
@@ -215,7 +243,7 @@ class InMemoryAuthService(AuthService):
         if self._is_locked(user):
             return AuthResult(success=False, error="Account is locked", locked=True)
 
-        if not pwd_context.verify(password, user.password_hash):
+        if not verify_password(password, user.password_hash):
             user.failed_login_attempts += 1
             if user.failed_login_attempts >= self._max_login_attempts:
                 user.locked_until = (
@@ -254,7 +282,7 @@ class InMemoryAuthService(AuthService):
         self._sessions_by_user[user_id].append(session.id)
 
         logger.info("user_logged_in", user_id=user_id, session_id=session.id)
-        return AuthResult(success=True, user=user, session=session)
+        return AuthResult(success=True, user=user, session=session, session_token=session_token)
 
     async def logout(self, session_token: str) -> bool:
         token_hash = self._hash_token(session_token)
@@ -316,14 +344,14 @@ class InMemoryAuthService(AuthService):
         if not user:
             return False
 
-        if not pwd_context.verify(old_password, user.password_hash):
+        if not verify_password(old_password, user.password_hash):
             return False
 
         strength_error = self._validate_password_strength(new_password)
         if strength_error:
             return False
 
-        user.password_hash = pwd_context.hash(new_password)
+        user.password_hash = hash_password(new_password)
         user.updated_at = datetime.now(timezone.utc).isoformat()
         await self.revoke_all_sessions(user_id)
         logger.info("password_changed", user_id=user_id)

@@ -15,6 +15,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,9 @@ from app.core.logging import get_logger
 from app.services.assessment.reports import build_report_data
 
 logger = get_logger(__name__)
+
+# Marks the embedded integrity-hash span in generated HTML reports.
+_INTEGRITY_SPAN_RE = re.compile(r'(id="integrity-hash-placeholder">)[0-9a-f]{64}(</code>)')
 
 
 # ── Report Data Structures ────────────────────────────────────────
@@ -119,9 +123,10 @@ class HTMLReportGenerator(ReportGenerator):
 
         Args:
             template_dir: Path to Jinja2 template directory.
-                Defaults to backend/templates/.
+                Defaults to backend/app/templates/.
         """
         if template_dir is None:
+            # backend/app/services/reports -> backend/app/templates (package data)
             template_dir = str(Path(__file__).resolve().parent.parent.parent / "templates")
         self._env = Environment(
             loader=FileSystemLoader(template_dir),
@@ -182,8 +187,15 @@ class HTMLReportGenerator(ReportGenerator):
 
         integrity_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-        content = content.replace('id="integrity-hash-placeholder"', "")
-        content = content.replace("{{ integrity_hash }}", integrity_hash)
+        # Embed the hash into the (empty) integrity span. verify_integrity()
+        # masks this span back to empty before hashing, so the embedded
+        # value, the stored hash, and a re-hash of the stored content all
+        # agree instead of disagreeing with each other.
+        marker = 'id="integrity-hash-placeholder"></code>'
+        content = content.replace(
+            marker,
+            f'id="integrity-hash-placeholder">{integrity_hash}</code>',
+        )
 
         logger.info(
             "html_report.generated",
@@ -679,7 +691,11 @@ class ReportGenerationService:
         if metadata is None:
             return None
 
-        computed_hash = hashlib.sha256(metadata.content.encode("utf-8")).hexdigest()
+        # HTML reports embed their own hash inside the integrity span; mask
+        # it back to empty so the stored hash (computed pre-embedding) is
+        # reproducible. Formats without the span hash the exact content.
+        normalized = _INTEGRITY_SPAN_RE.sub(r"\1\2", metadata.content)
+        computed_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         is_valid = computed_hash == metadata.integrity_hash
 
         if not is_valid:

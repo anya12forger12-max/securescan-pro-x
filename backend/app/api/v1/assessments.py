@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.api.v1.state import orchestrator as _orchestrator
+from app.api.v1.state import report_service as _report_service
 from app.core.exceptions import (
     AssessmentInvalidTransitionError,
     AssessmentNotFoundError,
@@ -45,22 +47,16 @@ from app.schemas.assessment import (
     ReportResponse,
     TimelineEventResponse,
 )
-from app.services.assessment import (
-    EventBus,
-    InMemoryEvidenceService,
-    InMemoryKnowledgeService,
-    InMemoryOrchestrator,
-    InMemoryReportService,
+from app.schemas.assessment import (
+    AssessmentResponse as AssessmentDetailResponse,
 )
+from app.services.assessment import InMemoryEvidenceService
 
 router = APIRouter()
 
-# Shared service instances
-_event_bus = EventBus()
-_orchestrator = InMemoryOrchestrator(event_bus=_event_bus)
+# Canonical evidence store (mirrored into the orchestrator on write so
+# statistics/dashboard counters stay in sync).
 _evidence_service = InMemoryEvidenceService()
-_report_service = InMemoryReportService()
-_knowledge_service = InMemoryKnowledgeService()
 
 
 # ── Assessment CRUD ────────────────────────────────────────────────
@@ -107,7 +103,10 @@ async def create_assessment(
     description="List assessments in a workspace.",
 )
 async def list_assessments(
-    workspace_id: str = Query(..., description="Parent workspace ID"),
+    workspace_id: str | None = Query(
+        None,
+        description="Parent workspace ID (omit to list across all workspaces)",
+    ),
     status: str | None = Query(None, description="Filter by status"),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
@@ -115,7 +114,7 @@ async def list_assessments(
     """List assessments in a workspace.
 
     Args:
-        workspace_id: Parent workspace ID.
+        workspace_id: Parent workspace ID (None = all workspaces).
         status: Filter by status.
         offset: Number to skip.
         limit: Maximum to return.
@@ -126,7 +125,7 @@ async def list_assessments(
     assessments = []
     for a in _orchestrator._assessments.values():
         if (
-            a["workspace_id"] == workspace_id
+            (workspace_id is None or a["workspace_id"] == workspace_id)
             and not a.get("is_deleted")
             and (status is None or a["status"] == status)
         ):
@@ -141,12 +140,15 @@ async def list_assessments(
     description="Get aggregated dashboard data for assessments.",
 )
 async def get_dashboard(
-    workspace_id: str = Query(..., description="Workspace ID"),
+    workspace_id: str | None = Query(
+        None,
+        description="Workspace ID (omit to aggregate across all workspaces)",
+    ),
 ) -> AssessmentDashboardResponse:
     """Get assessment dashboard data.
 
     Args:
-        workspace_id: Workspace ID.
+        workspace_id: Workspace ID (None = all workspaces).
 
     Returns:
         Dashboard summary data.
@@ -154,7 +156,7 @@ async def get_dashboard(
     all_items = [
         a
         for a in _orchestrator._assessments.values()
-        if a["workspace_id"] == workspace_id and not a.get("is_deleted")
+        if (workspace_id is None or a["workspace_id"] == workspace_id) and not a.get("is_deleted")
     ]
 
     status_counts: dict[str, int] = {}
@@ -162,8 +164,18 @@ async def get_dashboard(
         s = a["status"]
         status_counts[s] = status_counts.get(s, 0) + 1
 
-    sum(a.get("finding_count", 0) for a in all_items)
     total_evidence = sum(a.get("evidence_count", 0) for a in all_items)
+
+    workspace_ids = {a["id"] for a in all_items}
+    severity_breakdown = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
+    for assessment_id in workspace_ids:
+        for f in _orchestrator._findings.get(assessment_id, []):
+            sev = f.get("severity", "info")
+            if sev in severity_breakdown:
+                severity_breakdown[sev] += 1
+    workspace_reports = [
+        r for r in _report_service.list_reports() if r["assessment_id"] in workspace_ids
+    ]
 
     recent = sorted(all_items, key=lambda x: x.get("updated_at", ""), reverse=True)[:10]
     upcoming = [a for a in all_items if a["status"] in ("queued", "draft")][:5]
@@ -181,11 +193,11 @@ async def get_dashboard(
         completed_count=status_counts.get("completed", 0),
         failed_count=status_counts.get("failed", 0),
         cancelled_count=status_counts.get("cancelled", 0),
-        recent_assessments=[AssessmentResponse(**a) for a in recent],
-        upcoming_scheduled=[AssessmentResponse(**a) for a in upcoming],
-        severity_breakdown={"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0},
+        recent_assessments=[AssessmentDetailResponse(**a) for a in recent],
+        upcoming_scheduled=[AssessmentDetailResponse(**a) for a in upcoming],
+        severity_breakdown=severity_breakdown,
         evidence_count=total_evidence,
-        report_count=0,
+        report_count=len(workspace_reports),
     )
 
 
@@ -196,7 +208,10 @@ async def get_dashboard(
     description="Search across assessments, findings, and evidence.",
 )
 async def search_assessments(
-    workspace_id: str = Query(..., description="Workspace ID"),
+    workspace_id: str | None = Query(
+        None,
+        description="Workspace ID (omit to search across all workspaces)",
+    ),
     q: str = Query(..., min_length=1, description="Search query"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -204,7 +219,7 @@ async def search_assessments(
     """Search assessments.
 
     Args:
-        workspace_id: Workspace ID.
+        workspace_id: Workspace ID (None = all workspaces).
         q: Search query.
         limit: Max results.
         offset: Skip count.
@@ -216,7 +231,7 @@ async def search_assessments(
     q_lower = q.lower()
 
     for a in _orchestrator._assessments.values():
-        if a["workspace_id"] != workspace_id or a.get("is_deleted"):
+        if (workspace_id is not None and a["workspace_id"] != workspace_id) or a.get("is_deleted"):
             continue
         if q_lower in a["name"].lower() or q_lower in (a.get("description") or "").lower():
             results.append(
@@ -232,7 +247,7 @@ async def search_assessments(
 
     for aid, findings in _orchestrator._findings.items():
         assessment = _orchestrator._assessments.get(aid, {})
-        if assessment.get("workspace_id") != workspace_id:
+        if workspace_id is not None and assessment.get("workspace_id") != workspace_id:
             continue
         for f in findings:
             if q_lower in f.get("title", "").lower():
@@ -669,6 +684,11 @@ async def add_evidence(
         Created evidence.
     """
     try:
+        await _orchestrator.get_assessment(assessment_id)
+    except AssessmentNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    try:
         result = await _evidence_service.add(
             assessment_id=assessment_id,
             evidence_type=data.evidence_type,
@@ -681,9 +701,16 @@ async def add_evidence(
             tags=data.tags,
             retention_days=data.retention_days,
         )
-        return EvidenceResponse(**result)
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+
+    # Mirror into the orchestrator's store so statistics (total_evidence)
+    # and the dashboard evidence counter reflect what was just added.
+    evidence_items = _orchestrator._evidence.setdefault(assessment_id, [])
+    evidence_items.append(result)
+    _orchestrator._assessments[assessment_id]["evidence_count"] = len(evidence_items)
+
+    return EvidenceResponse(**result)
 
 
 @router.get(
@@ -745,14 +772,14 @@ async def generate_report(
         findings = _orchestrator._findings.get(assessment_id, [])
         evidence_items = _orchestrator._evidence.get(assessment_id, [])
 
-        report = await _report_service.generate(
+        report = _report_service.generate(
             assessment_id=assessment_id,
             format=data.format,
             assessment=assessment,
             findings=findings,
             evidence=evidence_items,
         )
-        return ReportResponse(**{k: v for k, v in report.items() if k != "content"})
+        return ReportResponse(**report.to_dict())
     except AssessmentNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
@@ -775,7 +802,7 @@ async def list_reports(assessment_id: str) -> list[ReportResponse]:
     Returns:
         List of report metadata.
     """
-    reports = await _report_service.list_reports(assessment_id)
+    reports = _report_service.list_reports(assessment_id)
     return [ReportResponse(**r) for r in reports]
 
 
