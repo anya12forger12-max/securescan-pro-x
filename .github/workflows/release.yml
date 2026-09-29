@@ -86,7 +86,10 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          draft: true
+          # A draft release is invisible to users and never becomes `latest`,
+          # and nothing in this repository ever un-drafts it, so the first
+          # tagged release would have been undownloadable forever.
+          draft: false
           generate_release_notes: true
           files: |
             dist/**/*.whl
