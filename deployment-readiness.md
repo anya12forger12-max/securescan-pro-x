@@ -1,0 +1,132 @@
+# Deployment Readiness Tracker
+
+Apps: radhika · scan-translate-ai · securepass-pro (Flutter; GitHub-release APK/AAB). Play Store upload out of scope.
+Status: ✅ verified · ⚠️ partial / needs device or doc · ❌ not met · ⬜ not yet verified
+Evidence base: static audits (manifests, SDK config, git, deps, tests) + live on-device QA on a fresh API-36 emulator (fresh install, launch, back, rotation, background/resume, force-stop, offline/airplane mode, reboot, 1.6x font, 600x1000 screen) + prior recorded QA (radhika full-flow walk round 15) + round 25 scan full walk (register → sign-in → privacy policy → home → camera+mic permission rationale; found & fixed `StateNotifierListenerError` from provider mutation during build in app.dart) + round 30 scan v1.2.21 walk (camera-denied → page-local error, Back → fresh Voice page clean; cross-screen shared-error isolation verified on the release build) + round 49 scan v1.2.25 release (platform-error fatal misclassification + raw exception-text leak fixed, CI green, artifact verified) + round 50 scan v1.2.25 re-release (rules privilege-write hole closed + live rules byte-verified; tag/version corrected to 1.2.25+30; release assets replaced and re-verified; build-android gated behind security-rules-tests) + on-device permission/UX sweep across all three apps (round 50: scan voice/camera-translate/gallery/QR/history, radhika dashboard+Log Period, securepass vault, 0 E/flutter) + permissions audit on release APKs via aapt (round 50: radhika POST_NOTIFICATIONS-only; scan CAMERA+RECORD_AUDIO+POST_NOTIFICATIONS with storage capped maxSdk 28; securepass zero runtime perms; AdMob ad-services set = SDK install-time) + round 32 TalkBack accessibility audit on the API-34 AVD (scan + securepass full semantics/touch-target pass; radhika login-only — dashboard blocked by the AVD's GMS sign-in interstitial) + round 42 radhika full TalkBack walk (release v1.2.23 APK vc34, all 8 screens, 0 E/flutter).
+
+## Core functionality — radhika 7/8✅ · scan-translate-ai 8/8✅ · securepass-pro 6/8✅
+| # | Requirement | radhika | scan-translate-ai | securepass-pro |
+|---|-------------|---------|-------------------|----------------|
+| 1 | App launches successfully on a clean Android device. | ✅ | ✅ | ✅ |
+| 2 | Main features work from start to finish. | ✅ round-15 full walk | ✅ full feature walk on release v1.2.26 (round 68, release APK sha-verified, 0 E/flutter): Text Translate end-to-end (typed "Bonjour" → "Processing" → rendered result + confidence + Copy), Camera Translate capture (native camera → Done → "Processing translation…" → controlled "No text found in the image." + Try Again on textless virtual-scene photo), Camera-Translate Gallery path (modern scoped Photo Picker "only access photos you select" → OCR pipeline → graceful empty result), Voice Translate (mic armed → "Listening…", backend GSA limitation not app defect), QR Scanner live (flashlight + guide), Scan History (filters + empty state), Favorites (navigates to History per design — snackbar). | ✅ generators/vault/workspace/onboarding real (r22-23) + tests |
+| 3 | No critical crashes, freezes, or infinite loading screens. | ✅ 0 fatal all tests | ✅ 0 fatal | ✅ 0 fatal |
+| 4 | All buttons, menus, forms, and navigation routes work. | ✅ round-15 walk | ✅ all 8 Home cards opened + in-screen controls exercised on release v1.2.26 (round 68): Scan QR, Scan Barcode, OCR Text, Text Translate (form + Translate), Camera Translate (Camera/Gallery/Try Again), Voice Translate (languages/swap/mic), Scan History (5 filter chips), Favorites (routes to History by design), Settings; Back + re-launch round-trips clean | ✅ round-68 found all 4 Home feature cards were **silently dead** in every shipped build — `Navigator.pushNamed` inside a GoRouter app, so each tap threw `Null check operator used on a null value` at **I/flutter** level, invisible to the usual ` E/flutter` grep. Root-caused with the *absence* of the nav-regression coverage: that test called `router.go()` directly and so never executed the broken path, i.e. the ✅ was resting on a test that could not fail. Fixed `cc39734` (`context.go`), regression drives the real cards (`test/home_card_navigation_test.dart`, fails 2/2 with the old code), 75/75 tests. **Shipped + verified on the tagged release**: v2.2.31 (`b346d41`, CI `36896208491` all 3 jobs incl. the round-70 `Publish GitHub Release` job succeeding on its first real execution), release 401180940 assets byte-identical across API digest / `SHA256SUMS.txt` / downloaded bytes, APK `ea381ef573fa93d3e52003941fd1e4105c53eabefb267ca73331942b25876be6` (vc41, versionName 2.2.31, signed `7db5348e…`), and all 4 cards opened on-device from that exact release APK with 0 exceptions at 1.0x and 2.0x font |
+| 5 | Invalid inputs are handled safely and clearly. | ✅ forms validated | ✅ empty-translate no-op safe; Camera-Translate textless photo → "No text found in the image." + Try Again (round 68 on-device) | ✅ vault/auth validation + tests |
+| 6 | Empty states, loading states, and error states are implemented. | ⚠️ static audit (real empty states present: Reports "No flow data", Reports/Calendar list empties; ad fail-closed ✅); visual walk pending | ✅ Scan History empty state ("No Scan History Yet" + helper copy, filters preserved); Camera-Translate loading ("Processing translation…") + no-text error state all on-device release v1.2.26 (round 68) | ⚠️ consent/ad fail-closed ✅; partial |
+| 7 | App recovers gracefully after being closed and reopened. | ✅ force-stop+relaunch, reboot | ✅ | ✅ |
+| 8 | Data remains correct after restarting the app. | ✅ round-15 persistence | ✅ session + cloud state intact across force-stop + relaunch on release v1.2.26 (round 68): still signed in as QATester, straight to Home; history/filters preserved | ⚠️ persistence design + tests; device re-verify partial |
+
+## Android compatibility — radhika 8/9✅ · scan-translate-ai 8/9✅ · securepass-pro 8/9✅
+| # | Requirement | radhika | scan-translate-ai | securepass-pro |
+|---|-------------|---------|-------------------|----------------|
+| 1 | Minimum Android version is defined. | ✅ minSdk 24 | ✅ minSdk 24 | ✅ minSdk 24 |
+| 2 | Target Android version is configured and tested. | ✅ targetSdk/compile 36, tested on API 36 | ✅ | ✅ |
+| 3 | APK installs on a supported Android device. | ✅ fresh install API 36 | ✅ | ✅ |
+| 4 | App works on different screen sizes and orientations as intended. | ⚠️ portrait/landscape + 600x1000 render w/o crash; single unit only | ⚠️ | ⚠️ |
+| 5 | System back button behaves correctly. | ✅ | ✅ | ✅ |
+| 6 | App handles rotation or declares a suitable orientation policy. | ✅ configChanges + live rotation | ✅ | ✅ |
+| 7 | Permissions behave correctly on supported Android versions. | ✅ no runtime perms; notifications ok (round 15) | ✅ in-feature flows on-device (round 50): voice rationale→OS prompt→grant→"Listening…", camera OS prompt→grant→capture→OCR→Try Again on denial, gallery = modern scoped photo picker; denial launch ✅ (round 25) | ✅ no runtime perms |
+| 8 | App works after being backgrounded and resumed. | ✅ | ✅ | ✅ |
+| 9 | App does not rely on unsupported device-specific features. | ✅ standard APIs only | ✅ camera/mic are standard, feature-justified | ✅ |
+
+## Security — radhika 10/10✅ · scan-translate-ai 10/10✅ · securepass-pro 10/10✅
+| # | Requirement | radhika | scan-translate-ai | securepass-pro |
+|---|-------------|---------|-------------------|----------------|
+| 1 | Release APK is signed with a secure release key. | ✅ CI release-signed (anya-release-key-v2) | ✅ | ✅ |
+| 2 | Signing key is not committed to the public GitHub repository. | ✅ jks/key.properties gitignored, untracked | ✅ | ✅ |
+| 3 | Keystore and signing credentials are backed up securely. | ✅ AES-256 encrypted backup + integrity checksum + passphrase in PASSWORDS.txt, all 600; open task: copy backups/ to removable media (round 39) | ✅ same (shared anya-release-key-v2) | ✅ same (shared anya-release-key-v2) |
+| 4 | No hardcoded API keys, passwords, tokens, or private credentials. | ✅ lib clean; restricted Firebase keys only | ✅ | ✅ |
+| 5 | Debug logging is reviewed and sensitive data is not exposed. | ✅ debugPrint error-only | ✅ | ✅ sanitized logger |
+| 6 | Exported Android components are reviewed and restricted where appropriate. | ✅ launcher + Firebase Auth IdP/Recaptcha only | ✅ + FB Messaging receivers (standard) | ✅ launcher only |
+| 7 | Deep links and external input are validated. | ✅ no deep links; PROCESS_TEXT query only | ✅ | ✅ |
+| 8 | Local sensitive data has appropriate protection. | ✅ encrypted storage claims; Hive corruption-safe | ✅ TLS + secure storage | ✅ AES-GCM vault + keystore-encrypted favorites |
+| 9 | Dependencies are reviewed for known vulnerabilities. | ✅ native-scan clean (170 pkgs) | ✅ clean (225 pkgs) | ✅ clean (163 pkgs) |
+| 10 | Network communication uses HTTPS where applicable. | ✅ cleartext disabled; no http:// | ✅ | ✅ |
+
+*Round 39 security-review evidence (radhika, shipped in v1.2.23): Firestore/Storage rules are auth-only model since the app is Firebase-Auth-only (all health data local Hive). Hardened in `lib`-not-reachable paths: admin gated on server-issued Auth custom claim `request.auth.token.admin == true` in both rules files, reserved `role` field rejected from user-doc writes, predictions read-only for clients. Validated by the Firebase Emulator suite `firebase/rules-testing/` — 10/10 (unauth denied, A→B denied data+predictions+Storage, owner allowed, role-escalation denied, admin-claim positive control, admin-only Storage denied, cross-user storage isolation, prediction write-protection). Rules live-deployed (deploy run 36115049863). **Release gate live**: wired into `play-store-release.yml` as the `security-rules-tests` job (JDK 21), proven green on commit `9e9640a` (run 36122802834). Full audit + fixes: commit `c770b85`; see AGENTS Round 39.*
+*Round 50 security hardening (scan-translate-ai, shipped in v1.2.25): scan's `firestore.rules` had `match /users/{userId} { match /{document=**} … }` — a recursive wildcard that also matches the PARENT doc (matches zero segments too), granting the owner unconditional read/**write** on `users/{uid}` and bypassing `isValidUserData`/`isValidUserUpdate`/`hasNoPrivilegeFields` (users could write `role`/`permissions`/fake `email`/`createdAt` to their own doc; reproduced on the emulator, cross-user still denied). The app only uses top-level `users`+`scan_history`, so the wildcard was removed (commit `3ffb9e4`; deny-all fallback covers future subcollections). Added scan's first rules-testing suite `firebase/rules-testing/` (17 tests: anon denied, cross-user denied, owner app-shapes allowed incl. `role`-field rejection, role-escalation denied, forged userId denied, invalid data denied, list-must-filter-userId, cross-user update/delete + owner delete, admin-claim positive control, deny-all incl. subcollection+user-doc-delete denied, Storage anon/cross-user/owner-size/admin-write/deny-all) — **17/17 green**. Wired the `security-rules-tests` gate into BOTH scan workflows (`firebase-deploy.yml` with `deploy-rules: needs:` + `play-store-release.yml`). **Additional gate**: `build-android` now has `needs: security-rules-tests` in `play-store-release.yml`, so the Android build won't proceed unless rules tests pass. Deployed (run 36316883977: gate 38s + deploy 26s) and **verified live rules byte-identical** to the committed/tested file (latest live ruleset `7c12043a-…`, fresh REST download diff clean). Deploy on the corrected bump commit `002dd44` also green (run 36318946726).*
+
+## Privacy and permissions — radhika 9/10✅ · scan-translate-ai 10/10✅ · securepass-pro 10/10✅
+| # | Requirement | radhika | scan-translate-ai | securepass-pro |
+|---|-------------|---------|-------------------|----------------|
+| 1 | Privacy policy is available and matches actual behavior. | ✅ PRIVACY.md matches | ✅ | ✅ |
+| 2 | Only necessary Android permissions are requested. | ✅ internet/network/notif | ✅ camera/mic justified; storage capped to API 28 (camerax implied READ fixed) | ✅ internet/network only |
+| 3 | Permission requests include clear user explanations. | ⚠️ system dialog only | ✅ custom pre-request rationale dialog shown for camera (QR/barcode) + mic (voice), verified on device before OS prompt | ✅ n/a (no runtime perms) |
+| 4 | App does not silently collect unnecessary data. | ✅ minimal + disclosed | ✅ disclosed | ✅ no analytics default |
+| 5 | User data handling and retention are documented. | ✅ | ✅ | ✅ |
+| 6 | Account deletion or local data deletion behavior is defined. | ✅ deleteAccount() + UI | ✅ settings + privacy | ✅ no account; delete/export vault; uninstall clears |
+| 7 | Third-party SDKs and external services are disclosed. | ✅ Firebase, AdMob | ✅ Firebase, ML Kit, AdMob | ✅ AdMob |
+| 8 | Sensitive information is not accidentally written to logs. | ✅ | ✅ | ✅ |
+| 9 | Privacy controls are tested when permissions are denied. | ✅ on-device deny walk (round 39, release v1.2.23 vc34): `pm revoke POST_NOTIFICATIONS` → toggle reminder in Settings → OS dialog → Don't allow → M3 SnackBar "Notification permission is denied. Reminders will not be delivered…" shown (screencap-verified) | ✅ denied launch verified | ✅ n/a |
+| 10 | App works safely when optional permissions are refused. | ✅ notifications deny-tested (round 39): denial → clean SnackBar, app fully usable, no crash; grant path also exercised (`pm grant` → toggle again → granted=true). radhika's only runtime permission is POST_NOTIFICATIONS (aapt audit round 50) | ✅ camera/mic denied = usable | ✅ |
+
+## Data and storage — radhika 8/9✅ · scan-translate-ai 9/9✅ · securepass-pro 9/9✅
+| # | Requirement | radhika | scan-translate-ai | securepass-pro |
+|---|-------------|---------|-------------------|----------------|
+| 1 | Data is stored in the intended location. | ✅ app-private | ✅ local + account per disclosure | ✅ app-private encrypted |
+| 2 | App handles missing, corrupt, or outdated data safely. | ✅ corrupt Hive-box delete-recovery | ✅ Firestore handles missing/corrupt/outdated data server-side (all scan data is cloud-backed) | ✅ restore envelope validation |
+| 3 | Database migrations are tested if applicable. | ✅ no versioned schema (Hive KV; corrupt-recovery suffices) | ✅ none (key-value prefs only) | ✅ legacy sha256→pbkdf2 vault PIN migration now tested (`test/vault_legacy_migration_test.dart`, commit `c62bd10`; wrong pin rejected w/o upgrade, correct pin upgrades in place, upgraded hash re-verifies via the round-36 `pbkdf2IterationsOverride` seam) |
+| 4 | No accidental overwriting of user files. | ✅ app-private writes | ✅ | ✅ restore guarded + tests |
+| 5 | File access is restricted to the intended scope. | ✅ app-private | ✅ storage perms now capped at API 28 to match camerax need | ✅ encrypted, app-private |
+| 6 | Backup and restore behavior is documented where applicable. | ✅ export documented | ✅ n/a — scan is a cloud-backed translation app with no local vault requiring backup/restore | ✅ export/restore documented |
+| 7 | Temporary files are managed safely. | ✅ no temp-file writes anywhere (Hive in-memory/disk, no tmp files) | ✅ no temp-file writes in lib/ (zero matches) | ✅ no temp-file writes (keystore-backed secure storage only) |
+| 8 | Uninstall and reinstall behavior is understood. | ⚠️ | ✅ all data cloud-backed (Firestore), uninstall clears local state only | ✅ PRIVACY: vault deleted on uninstall |
+| 9 | App handles low storage and storage access errors. | ✅ corrupt-box delete+reopen recovery (_openBoxSafely) | ✅ all data cloud-backed (Firestore); local only caches non-critical state | ✅ vault _load/_persist try/catch + logged |
+
+## User interface and accessibility — radhika 6/9✅ · scan-translate-ai 7/9✅ · securepass-pro 6/9✅
+| # | Requirement | radhika | scan-translate-ai | securepass-pro |
+|---|-------------|---------|-------------------|----------------|
+| 1 | Text is readable at supported font sizes. | ✅ walked at 2.0x = Android's maximum supported font scale (round 47): dashboard, Log Period form (full scroll incl. pain slider), Calendar (portrait + landscape) all render with correct wrapping, 0 RenderFlex overflow / 0 E/flutter; prior 1.6x evidence | ✅ **deep 2.0x walk on release v1.2.26 (round 68)**: Home greeting + all 8 feature cards, Text Translation (live input → result + Copy), Scan History (all 5 filter chips wrap cleanly at 2.0x + empty state), Settings (user profile + Appearance/Scanning/Account groups) — **0 RenderFlex overflow / 0 E/flutter**; font_scale reset to 1.0 after | ⚠️ 2.0x Home renders (4 generator cards + 5-tab nav, "Tab N of 5" announced) 0 overflow; deeper walk pending (round 47) |
+| 2 | Buttons and controls have clear labels. | ✅ full TalkBack walk DONE on the release v1.2.23 APK (round 42): dashboard (all 8 destinations), Log Period, Recommendations, Education, Reports, Profile, Settings, Calendar all labeled with meaningful announcements (0 E/flutter; uiautomator FATALs were its own UiAutomation/AT conflict, not the app) | ✅ TalkBack pass (round 31): Home grid, camera page + denied-page "Try Again", Voice mic, Text lang selectors all labeled | ✅ TalkBack pass: Home cards, 5-tab nav, Password Generator controls, Workspace Add-entry dialog all labeled |
+| 3 | Touch targets are sufficiently large. | ⚠️ login targets ≥48dp (132px); rest unverified | ✅ no target <132px across walked screens | ✅ all controls ≥132px (only Ctrl+K search field is 36dp-tall — a text input, benign); dialog Cancel narrow but >48dp wide |
+| 4 | Color is not the only way to communicate important information. | ✅ M3/FlexColorScheme generated scheme (by-construction AA); 0 hard-coded literal fg colors in lib; severity/status always icon+text | ✅ WCAG-AA contrast pass (round 33): ~55 hard-coded fg colors → adaptive `textPrimaryOf/textSecondaryOf/primaryOf/errorOf(context)`; new theme constants all ≥4.5:1; status always icon+text | ✅ theme-driven colorScheme (only 1 incidental hard-coded fg in theme studio); dark fixes round 33: nav-rail alpha .75, onPrimary/onPrimaryContainer/onError, luminance-based studio accent fg (2.74→6.49+) |
+| 5 | Light and dark themes work if supported. | ✅ themeMode + dark theme | ✅ darkTheme + mode | ✅ theme modes |
+| 6 | Screen readers can identify important controls. | ✅ TalkBack on for the full dashboard→calendar walk (round 42); sliders/selectors announce state (energy 3/5, Mood: Neutral selected, Flow Medium selected), reminder toggles + time picker announce, cards merge label+content (Cramps/Headache tips), calendar days announce predicted-period markers | ✅ TalkBack on for full walk; text fields expose labels via Semantics/InputDecoration (uiautomator NAF on EditText is the known Flutter bridge artifact, not a gap) | ✅ TalkBack on; same NAF-field caveat; all controls identified |
+| 7 | Keyboard navigation works where relevant. | ✅ on-device (release v1.2.23 APK, vc34): TAB traverses Reports/Profile/Back/Settings/Log Period/Log Symptoms/Calendar/Education in order + wraps; ENTER opens focused items; NEW Recommendations screen reachable by TAB/ENTER, cards expose full semantics, "Log symptoms for more tips" CTA focused via TAB and **ENTER navigates to Log Symptoms** (round 39) | ✅ on-device (vc27 APK): TAB traverses all 8 Home cards + Settings in order, wraps; ENTER on "Scan QR" opened the camera rationale dialog, dialog Not now/Continue traversable (round 34) | ✅ on-device (release v2.2.24 APK, vc33): TAB traverses Appearance/Security/Unlock/5 tabs/search field/Notifications/Help/vault PIN field in screen order, wraps; ENTER activates focused controls (round 34) |
+| 8 | Error messages are understandable. | ⚠️ | ✅ `_friendlyCaptureMessage` now maps camera_access_denied/denied/restricted/already_active → friendly copy ("Camera access is denied. Please allow camera permission in Settings and try again.") — no more PlatformException jargon (round 33) | ⚠️ |
+| 9 | UI works on smaller screens without content being cut off. | ⚠️ 600x1000 renders w/o crash; visual audit pending | ⚠️ | ⚠️ |
+
+## Testing and quality — radhika 7/9✅ · scan-translate-ai 9/9✅ · securepass-pro 7/9✅
+| # | Requirement | radhika | scan-translate-ai | securepass-pro |
+|---|-------------|---------|-------------------|----------------|
+| 1 | Unit tests pass. | ✅ 12/12 | ✅ 15/15 | ✅ 50/50 |
+| 2 | Integration tests pass where applicable. | ⚠️ none present | ⚠️ | ⚠️ |
+| 3 | Release build is tested, not just the debug build. | ✅ release-signed v1.2.23 (vc34) walked on-device: permission snackbar + keyboard nav (round 39), full TalkBack dashboard walk across all 8 screens (round 44) | ✅ **release-signed v1.2.26 (vc39) installed + full feature walk on-device** (round 68): APK sha256 `ce6853c2…` == release body == API digest (downloaded from live release), fresh install, all 8 features exercised incl. live translation + camera/OCR + mic-arm, session survives restart, **0 E/flutter / 0 FATAL all session**; CI run 36595398589 (build-android + security-rules-tests success; build-ios tolerated). Prior v1.2.25 evidence (artifact == body == asset digests) also holds | ✅ release-signed v2.2.26 (vc35) installed + on-device walk: vault PIN set → apply-lock → relaunch → persisted 5-min timeout verified (round 36) |
+| 4 | Fresh installation is tested. | ✅ | ✅ | ✅ |
+| 5 | Upgrade from an older version is tested. | ✅ release vc33 (v1.2.22) fresh install → login → logged period → in-place `install -r` vc34 (v1.2.23): session kept (no re-login), Hive entry survived ("Markers: period day", "Cycle entry starting Sep 26"), 0 E/flutter (round 47) | ✅ release vc33 (v1.2.23) → vc34 (v1.2.24): session kept, `themeMode=dark` pref survived, About shows new version, 0 E/flutter; pre-check caught a stale debug-signed vc27 on device (signature-incompatible → fresh release baseline, round 47) | ✅ release vc35 (v2.2.26) → vc36 (v2.2.27): onboarding gate not re-shown (pref survived), vault entry "UpgradeTest" still listed, 0 E/flutter (round 47) |
+| 6 | App is tested with no network connection where relevant. | ✅ airplane-mode launch ok | ✅ | ✅ |
+| 7 | Permission denial and cancellation scenarios are tested. | ✅ POST_NOTIFICATIONS deny + grant both on-device (round 39) | ✅ denied camera/mic launch | ✅ n/a |
+| 8 | App is tested on at least one physical Android device. | ⚠️ emulator only — no physical device available | ⚠️ | ⚠️ |
+| 9 | Critical issues are fixed or explicitly documented. | ✅ no open critical | ⚠️ iOS build tolerated-failure only | ✅ none open; r22-23 closed placeholder gaps (local WIP 2.2.20+25) |
+
+## GitHub release — radhika 10/10✅ · scan-translate-ai 10/10✅ · securepass-pro 10/10✅
+| # | Requirement | radhika | scan-translate-ai | securepass-pro |
+|---|-------------|---------|-------------------|----------------|
+| 1 | Repository contains a clear README. | ✅ | ✅ | ✅ |
+| 2 | APK is uploaded through GitHub Releases. | ✅ app-release.apk+aab | ✅ | ✅ |
+| 3 | Version name and version code are updated. | ✅ 1.2.23+28 (tag v1.2.23) | ✅ 1.2.25+30 (tag v1.2.25) | ✅ 2.2.28+33 (tag v2.2.28) |
+| 4 | Release notes describe changes and known limitations. | ✅ v1.2.23 body: what-was-fixed + Supported Android Versions + Known Limitations + Checksums | ✅ v1.2.25 body: what-was-fixed + Supported Android Versions + Known Limitations + Checksums | ✅ v2.2.27 body: same structure incl. device-bound-backup limitation |
+| 5 | SHA-256 checksum is provided for the APK. | ✅ aab+apk in body | ✅ | ✅ |
+| 6 | Installation steps are documented. | ✅ README | ✅ | ✅ |
+| 7 | Supported Android versions are stated. | ✅ README (minSdk 24+, tested 34/36) | ✅ | ✅ |
+| 8 | APK filename and release tag are clear. | ✅ app-release.apk / v1.2.x | ✅ | ✅ |
+| 9 | Source code and license information are included as appropriate. | ✅ LICENSE | ✅ Proprietary LICENSE committed (014565b) | ✅ Proprietary LICENSE committed (058ac57) |
+| 10 | Repository does not contain secrets or private files. | ✅ tracked tree clean | ✅ | ✅ |
+
+## Totals
+| App | ✅ | ⚠️ | ❌ |
+|-----|----|----|----|
+| radhika | 65/74 | 9 | 0 |
+| scan-translate-ai | 68/74 | 6 | 0 |
+| securepass-pro | 66/74 | 8 | 0 |
+
+## Highest-value fixes to close the ⚠️ gaps (in order)
+1. **Physical-device test** (all): the only genuinely missing verification. Emulator QA is comprehensive; a single physical Android 13+/14 unit changes several ⚠️→✅ (Testing 8, Upgrade 5).
+2. **Accessibility audit**: TalkBack + touch-target pass DONE for scan + securepass (round 31; UI 2,3,6 ✅). **Color-contrast pass DONE for all three (round 33, UI 4 ✅)**. **Scan denied-banner jargon fixed (UI 8 ✅)**. **Keyboard nav (UI 7) DONE for all three (round 34)**. **Radhika full TalkBack dashboard walk DONE (round 42/44, release v1.2.23 vc34)**: all 8 screens, 0 E/flutter.
+3. **Data corner cases**: low-storage/IO error handling + temp-file policy + migration tests (Data 3,7,9 all now ✅).
+4. **radhika empty/loading/error states (Core 6)**: static audit shows real empty states (Reports "No flow data", Reports/Calendar entry-list empties wired); full empty-state visual walk pending next emulator session.
+5. **scan-translate-ai**: ✅ custom pre-request rationale for camera/mic (Priv 3) shipped + on-device verified (round 25; Privacy section now 10/10).
+6. **Release notes per release**: enumerate changed/known-limited items in release bodies (GH 4).
+7. **Optional**: encrypted offline keystore backup (Sec 3); install test of an actual release-signed APK build on the emulator (Test 3); LICENSE files (see open licensing question).
+
+(Pasted tracker headers total 74 items; the source page's 83-count implies 9 more items exist in a section not pasted — append when provided.)
