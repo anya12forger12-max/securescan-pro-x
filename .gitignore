@@ -112,3 +112,4 @@ credentials.json
 plugins/*/dist/
 plugins/*/*.so
 plugins/*/*.pyd
+.aider*
