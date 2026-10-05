@@ -113,3 +113,42 @@ plugins/*/dist/
 plugins/*/*.so
 plugins/*/*.pyd
 .aider*
+
+# Local scratch/workspace artifacts
+.ruff_authshield.txt
+Backend Build Prompt.pdf
+Backend Service Prompts.zip
+Backup-codes-anuhyasiram.txt
+New Graph (1) (recovered at 2026-08-05 00-17-16).mtgl
+OpenCode Build Docs (Combined).docx
+OpenCode Build Docs.zip
+OpenCode Build Kit.zip
+OpenCode Master Prompt.pdf
+audit_contrast.py
+chevvy-shot1.png
+dl.sh
+dump.rdb
+edu.png
+fix_abs_imports.py
+gorrilla.txt
+hist.png
+index.html
+lib/
+lokithmittinti.txt
+mittintilokith.txt
+mlokith.txt
+native-scan.sh
+opencode-ruz/
+opencode.json
+opencode/
+pre-deploy-test-checklist.pdf
+predeploy-check.sh
+promote_entity_imports.py
+radhika/
+readiness-check.sh
+releases/
+scan_translate_ai/
+scan_translate_ai_backup/
+securehash/
+spsx-fix/
+start-emu.sh
