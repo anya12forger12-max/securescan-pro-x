@@ -199,13 +199,14 @@
 - authshield-lab: mypy `--strict` cleanup (2290 pre-existing errors, deliberately soft).
 
 ## Current release state
-| App | Latest release | Tag | Analyze | Tests |
-|-----|---------------|-----|---------|-------|
-| radhika | v1.2.27 | v1.2.27 (`949551b`, pubspec `1.2.27+32`, vc46) | 0 | 12/12 |
-| scan-translate-ai | v1.2.32 | v1.2.32 (`00c6c6d`, pubspec `1.2.32+37`, vc55) | 0 | 85/85 |
-| securepass-pro | v2.2.32 | v2.2.32 (`cf26136`, vc43) | 0 | 83/83 on the committed tree (CI at `6535064`); the previously-recorded 1-failure reading existed only in the parallel session's uncommitted tree |
-| cipherforge-pro | v1.0.2 | v1.0.2 | 0 errors | 100 vitest |
-| authshield-lab | v1.0.2 | v1.0.2 | 0 errors | 22 vitest |
+| App | Latest release | Tag | Main head | Analyze | Tests |
+|-----|---------------|-----|-----------|---------|-------|
+| radhika | v1.2.27 | v1.2.27 (`949551b`, pubspec `1.2.27+32`, vc46) | `337b5609` (Dependabot `@modelcontextprotocol/sdk` #5 merged) | 0 | 12/12 |
+| scan-translate-ai | v1.2.32 | v1.2.32 (`00c6c6d`, pubspec `1.2.32+37`, vc55) | `7b2384e5` (Dependabot #4 squash-merge; alert #9 → fixed) | 0 | 85/85 |
+| securepass-pro | v2.2.32 | v2.2.32 (`cf26136`, vc43) | `65350647` | 0 | 83/83 on the committed tree (CI at `6535064`); the previously-recorded 1-failure reading existed only in the parallel session's uncommitted tree |
+| chevvy | — (Firebase web deploy, no artifact release) | — | `034a37b3` (`.env.example` sanitized to placeholders) | `npm run lint` + build clean | — |
+| cipherforge-pro | v1.0.2 | v1.0.2 | `8eceed9f` (`.env.example` sanitized to placeholders) | 0 errors | 100 vitest |
+| authshield-lab | v1.0.2 | v1.0.2 | — | 0 errors | 22 vitest |
 
 
 ## Next Move
