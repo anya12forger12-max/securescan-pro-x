@@ -70,8 +70,8 @@ securescan = "app.cli:app"
 [project.urls]
 Homepage = "https://securescan.dev"
 Documentation = "https://docs.securescan.dev"
-Repository = "https://github.com/securescan/securescan-pro-x"
-Issues = "https://github.com/securescan/securescan-pro-x/issues"
+Repository = "https://github.com/anya12forger12-max/securescan-pro-x"
+Issues = "https://github.com/anya12forger12-max/securescan-pro-x/issues"
 Security = "https://securescan.dev/security"
 
 [tool.hatch.build.targets.wheel]

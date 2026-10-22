@@ -82,7 +82,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete architecture documentati
 
 ```bash
 # Clone the repository
-git clone https://github.com/securescan/securescan-pro-x.git
+git clone https://github.com/anya12forger12-max/securescan-pro-x.git
 cd securescan-pro-x
 
 # Backend setup
@@ -161,7 +161,7 @@ securescan-pro-x/
 ## Quick Install from GitHub
 
 ```bash
-git clone https://github.com/securescan/securescan-pro-x.git
+git clone https://github.com/anya12forger12-max/securescan-pro-x.git
 cd securescan-pro-x
 bash install.sh
 ```
@@ -226,6 +226,6 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md). **Do not** open publi
 ## Support
 
 - **Documentation**: [docs/](docs/)
-- **Issues**: [GitHub Issues](https://github.com/securescan/securescan-pro-x/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/securescan/securescan-pro-x/discussions)
+- **Issues**: [GitHub Issues](https://github.com/anya12forger12-max/securescan-pro-x/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/anya12forger12-max/securescan-pro-x/discussions)
 - **Security Reports**: See [SECURITY.md](SECURITY.md)
