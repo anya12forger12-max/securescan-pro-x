@@ -76,7 +76,6 @@ export function LoginPage(): JSX.Element {
             Sign In
           </Button>
         </form>
-        <p className="login-demo">Demo: admin / admin123!@#SecureScan</p>
       </div>
     </div>
   );

@@ -2,7 +2,7 @@
 -- Default admin user, demo workspace, and built-in plugins
 
 -- ============================================================
--- Default Admin User (password: admin123!@#SecureScan)
+-- Dev-only seed. Set SECURESCAN_ADMIN_PASSWORD on first run to override.
 -- In production, this MUST be changed on first login
 -- ============================================================
 
