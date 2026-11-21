@@ -8,10 +8,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from functools import lru_cache
 
 import bcrypt
 
 from app.core.logging import get_logger
+from app.utils.crypto import verify_totp
 
 logger = get_logger(__name__)
 
@@ -44,6 +46,12 @@ def verify_password(password: str, password_hash: str) -> bool:
         return bcrypt.checkpw(_prepare_password(password), password_hash.encode())
     except (ValueError, TypeError):
         return False
+
+
+@lru_cache(maxsize=1)
+def _dummy_password_hash() -> str:
+    """Hash used to keep unknown-user logins from returning instantly."""
+    return hash_password("timing-equalizer-not-a-real-password")
 
 
 class UserRole(str, Enum):
@@ -90,6 +98,12 @@ class Session:
 
 
 @dataclass
+class _LoginAttempt:
+    count: int = 0
+    locked_until: datetime | None = None
+
+
+@dataclass
 class AuthResult:
     success: bool
     user: User | None = None
@@ -113,6 +127,7 @@ class AuthService(ABC):
         password: str,
         ip_address: str | None = None,
         user_agent: str | None = None,
+        mfa_code: str | None = None,
     ) -> AuthResult: ...
 
     @abstractmethod
@@ -156,6 +171,7 @@ class InMemoryAuthService(AuthService):
         self._users_by_email: dict[str, str] = {}
         self._sessions: dict[str, Session] = {}
         self._sessions_by_user: dict[str, list[str]] = {}
+        self._login_attempts: dict[tuple[str, str], _LoginAttempt] = {}
         self._session_timeout = session_timeout_minutes
         self._max_login_attempts = max_login_attempts
         self._lockout_duration = lockout_duration_minutes
@@ -178,25 +194,32 @@ class InMemoryAuthService(AuthService):
             return "Password must contain at least one special character"
         return None
 
-    def _is_locked(self, user: User) -> bool:
-        if user.locked_until:
-            try:
-                lock_time = datetime.fromisoformat(user.locked_until)
-                if datetime.now(timezone.utc) < lock_time:
-                    return True
-                user.locked_until = None
-                user.failed_login_attempts = 0
-            except ValueError:
-                user.locked_until = None
+    @staticmethod
+    def _attempt_key(username: str, ip_address: str | None) -> tuple[str, str]:
+        return username.casefold(), ip_address or "unknown"
+
+    def _get_attempt(self, username: str, ip_address: str | None) -> _LoginAttempt:
+        return self._login_attempts.setdefault(
+            self._attempt_key(username, ip_address), _LoginAttempt()
+        )
+
+    def _is_locked(self, attempt: _LoginAttempt, user: User) -> bool:
+        if attempt.locked_until:
+            if datetime.now(timezone.utc) < attempt.locked_until:
+                return True
+            attempt.locked_until = None
+            attempt.count = 0
+            user.locked_until = None
+            user.failed_login_attempts = 0
         return False
 
     async def register(
         self, username: str, email: str, password: str, role: UserRole = UserRole.VIEWER
     ) -> AuthResult:
-        if username in self._users_by_username:
-            return AuthResult(success=False, error="Username already exists")
-        if email in self._users_by_email:
-            return AuthResult(success=False, error="Email already exists")
+        if username.casefold() in self._users_by_username:
+            return AuthResult(success=False, error="Registration failed")
+        if email.casefold() in self._users_by_email:
+            return AuthResult(success=False, error="Registration failed")
 
         strength_error = self._validate_password_strength(password)
         if strength_error:
@@ -218,8 +241,8 @@ class InMemoryAuthService(AuthService):
         )
 
         self._users[user_id] = user
-        self._users_by_username[username] = user_id
-        self._users_by_email[email] = user_id
+        self._users_by_username[username.casefold()] = user_id
+        self._users_by_email[email.casefold()] = user_id
 
         logger.info("user_registered", user_id=user_id, username=username, role=role.value)
         return AuthResult(success=True, user=user)
@@ -230,32 +253,45 @@ class InMemoryAuthService(AuthService):
         password: str,
         ip_address: str | None = None,
         user_agent: str | None = None,
+        mfa_code: str | None = None,
     ) -> AuthResult:
-        user_id = self._users_by_username.get(username)
+        normalized = username.casefold()
+        user_id = self._users_by_username.get(normalized)
         if not user_id:
+            verify_password(password, _dummy_password_hash())
             return AuthResult(success=False, error="Invalid credentials")
 
         user = self._users[user_id]
+        attempt = self._get_attempt(normalized, ip_address)
 
         if not user.is_active:
             return AuthResult(success=False, error="Account is deactivated")
 
-        if self._is_locked(user):
+        if self._is_locked(attempt, user):
             return AuthResult(success=False, error="Account is locked", locked=True)
 
         if not verify_password(password, user.password_hash):
-            user.failed_login_attempts += 1
-            if user.failed_login_attempts >= self._max_login_attempts:
-                user.locked_until = (
-                    datetime.now(timezone.utc) + timedelta(minutes=self._lockout_duration)
-                ).isoformat()
+            attempt.count += 1
+            user.failed_login_attempts = attempt.count
+            if attempt.count >= self._max_login_attempts:
+                attempt.locked_until = datetime.now(timezone.utc) + timedelta(
+                    minutes=self._lockout_duration
+                )
+                user.locked_until = attempt.locked_until.isoformat()
                 logger.warning(
                     "account_locked",
                     user_id=user_id,
-                    attempts=user.failed_login_attempts,
+                    attempts=attempt.count,
+                    ip_address=ip_address,
                 )
             return AuthResult(success=False, error="Invalid credentials")
 
+        if user.mfa_enabled and (
+            not mfa_code or not user.mfa_secret or not verify_totp(user.mfa_secret, mfa_code)
+        ):
+            return AuthResult(success=False, error="Invalid MFA code", requires_mfa=True)
+
+        self._login_attempts.pop(self._attempt_key(normalized, ip_address), None)
         user.failed_login_attempts = 0
         user.locked_until = None
         user.last_login_at = datetime.now(timezone.utc).isoformat()
@@ -331,6 +367,17 @@ class InMemoryAuthService(AuthService):
 
         session = self._sessions.get(session_id)
         if not session:
+            return None
+
+        try:
+            if datetime.fromisoformat(session.expires_at) < datetime.now(timezone.utc):
+                await self.logout(session_token)
+                return None
+        except ValueError:
+            return None
+
+        user = self._users.get(session.user_id)
+        if not user or not user.is_active:
             return None
 
         session.expires_at = (

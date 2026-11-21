@@ -142,7 +142,7 @@ class AssetRepository(BaseRepository[Asset]):
         if "identifier" in kwargs and kwargs["identifier"] != asset.identifier:
             new_id = kwargs["identifier"]
             if await self.identifier_exists_in_workspace(
-                asset.workspace_id, new_id, exclude_id=asset_id
+                str(asset.workspace_id), str(new_id), exclude_id=asset_id
             ):
                 raise AssetExistsError(
                     f"Asset with identifier '{new_id}' "

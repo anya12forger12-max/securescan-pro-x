@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from typing import Any
 
 from app.core.exceptions import AssetExistsError, AssetNotFoundError
 from app.core.logging import get_logger
@@ -112,7 +113,7 @@ class InMemoryAssetService(AssetService):
 
     def __init__(self) -> None:
         """Initialize the in-memory store."""
-        self._assets: dict[str, dict] = {}
+        self._assets: dict[str, dict[str, Any]] = {}
         self._counter: int = 0
 
     async def create(

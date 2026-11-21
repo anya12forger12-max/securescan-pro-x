@@ -314,7 +314,7 @@ class InMemoryEvidenceService(EvidenceService):
         """
         item = await self.get(evidence_id)
         expected_hash = compute_evidence_hash(item["content"], item["source"])
-        verified = item["integrity_hash"] == expected_hash
+        verified: bool = bool(item["integrity_hash"] == expected_hash)
 
         if not verified:
             logger.warning(

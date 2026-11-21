@@ -144,6 +144,9 @@ class ScanEngine(ABC):
         self, target: str, scan_types: list[str] | None = None
     ) -> dict[str, ScanResult]: ...
 
+    @abstractmethod
+    def get_scan_history(self) -> list[ScanResult]: ...
+
 
 class InMemoryScanEngine(ScanEngine):
     def __init__(self, timeout: float = 5.0, max_concurrent: int = 50) -> None:

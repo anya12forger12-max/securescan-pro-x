@@ -31,7 +31,7 @@ _service = InMemoryAssetService()
 )
 async def create_asset(
     workspace_id: str = Query(..., description="Parent workspace ID"),
-    data: AssetCreate = ...,
+    data: AssetCreate = ...,  # type: ignore[assignment]
 ) -> AssetResponse:
     """Create a new asset.
 

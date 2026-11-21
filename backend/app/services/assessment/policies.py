@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, List
 
 from app.core.exceptions import AssessmentNotFoundError, ValidationError
 from app.core.logging import get_logger
@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 # ── Built-in Policies ──────────────────────────────────────────────
 
-BUILTIN_POLICIES: list[dict[str, Any]] = [
+BUILTIN_POLICIES: List[dict[str, Any]] = [
     {
         "name": "Default Policy",
         "description": "Standard policy with reasonable defaults.",
@@ -80,7 +80,7 @@ class PolicyService(ABC):
         export_allowed: bool = True,
         approval_required: bool = False,
         evidence_storage: str = "local",
-        allowed_plugin_ids: list[str] | None = None,
+        allowed_plugin_ids: List[str] | None = None,
         config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new assessment policy.
@@ -128,7 +128,7 @@ class PolicyService(ABC):
         include_builtin: bool = True,
         offset: int = 0,
         limit: int = 50,
-    ) -> tuple[list[dict[str, Any]], int]:
+    ) -> tuple[List[dict[str, Any]], int]:
         """List all policies.
 
         Args:
@@ -172,7 +172,7 @@ class PolicyService(ABC):
         self,
         policy_id: str,
         assessment_config: dict[str, Any],
-    ) -> tuple[bool, list[str]]:
+    ) -> tuple[bool, List[str]]:
         """Validate an assessment against a policy.
 
         Args:
@@ -221,7 +221,7 @@ class InMemoryPolicyService(PolicyService):
         export_allowed: bool = True,
         approval_required: bool = False,
         evidence_storage: str = "local",
-        allowed_plugin_ids: list[str] | None = None,
+        allowed_plugin_ids: List[str] | None = None,
         config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new assessment policy.
@@ -309,7 +309,7 @@ class InMemoryPolicyService(PolicyService):
         include_builtin: bool = True,
         offset: int = 0,
         limit: int = 50,
-    ) -> tuple[list[dict[str, Any]], int]:
+    ) -> tuple[List[dict[str, Any]], int]:
         """List all policies.
 
         Args:
@@ -390,7 +390,7 @@ class InMemoryPolicyService(PolicyService):
         self,
         policy_id: str,
         assessment_config: dict[str, Any],
-    ) -> tuple[bool, list[str]]:
+    ) -> tuple[bool, List[str]]:
         """Validate an assessment config against a policy.
 
         Args:
@@ -401,7 +401,7 @@ class InMemoryPolicyService(PolicyService):
             Tuple of (is_valid, list of violation descriptions).
         """
         policy = await self.get(policy_id)
-        violations: list[str] = []
+        violations: List[str] = []
 
         # Check plugin permissions
         allowed_plugins = policy.get("allowed_plugin_ids", [])

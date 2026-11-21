@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings
+from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class LoggingConfig(BaseSettings):
+class LoggingConfig(BaseModel):
     """Logging configuration."""
 
     level: str = "info"
@@ -28,7 +28,7 @@ class LoggingConfig(BaseSettings):
     retention_days: int = 30
 
 
-class AuditConfig(BaseSettings):
+class AuditConfig(BaseModel):
     """Audit logging configuration."""
 
     enabled: bool = True
@@ -36,7 +36,7 @@ class AuditConfig(BaseSettings):
     path: str = "~/.securescan/audit/"
 
 
-class DatabaseConfig(BaseSettings):
+class DatabaseConfig(BaseModel):
     """Database configuration."""
 
     type: str = "sqlite"
@@ -45,7 +45,7 @@ class DatabaseConfig(BaseSettings):
     backup_on_migration: bool = True
 
 
-class SecurityConfig(BaseSettings):
+class SecurityConfig(BaseModel):
     """Security configuration."""
 
     encryption_algorithm: str = "AES-256-GCM"
@@ -55,7 +55,7 @@ class SecurityConfig(BaseSettings):
     authentication_method: str = "local"
 
 
-class NetworkConfig(BaseSettings):
+class NetworkConfig(BaseModel):
     """Network configuration."""
 
     enabled: bool = False
@@ -66,7 +66,7 @@ class NetworkConfig(BaseSettings):
     plugin_download: bool = False
 
 
-class PluginConfig(BaseSettings):
+class PluginConfig(BaseModel):
     """Plugin configuration."""
 
     enabled: bool = True
@@ -78,7 +78,7 @@ class PluginConfig(BaseSettings):
     timeout_seconds: int = 300
 
 
-class UIConfig(BaseSettings):
+class UIConfig(BaseModel):
     """UI configuration."""
 
     theme: str = "dark"
@@ -88,7 +88,7 @@ class UIConfig(BaseSettings):
     language: str = "en"
 
 
-class BackupConfig(BaseSettings):
+class BackupConfig(BaseModel):
     """Backup configuration."""
 
     enabled: bool = True
@@ -108,6 +108,12 @@ class Settings(BaseSettings):
     3. System config file (/etc/securescan/config.yaml)
     4. Defaults defined here
     """
+
+    model_config = SettingsConfigDict(
+        env_prefix="SECURESCAN_",
+        env_nested_delimiter="__",
+        case_sensitive=False,
+    )
 
     # Application
     app_name: str = "SecureScan Pro X"
@@ -130,6 +136,33 @@ class Settings(BaseSettings):
     def expand_home_dir(cls, v: str) -> str:
         """Expand ~ in home directory path."""
         return str(Path(v).expanduser())
+
+    @model_validator(mode="after")
+    def resolve_paths(self) -> Settings:
+        """Expand ~ and tie default paths to the configured home directory."""
+        home = Path(self.home_dir).expanduser()
+        self.home_dir = str(home)
+        default_paths = {
+            ("logging", "file_path"): ("~/.securescan/logs/", home / "logs"),
+            ("audit", "path"): ("~/.securescan/audit/", home / "audit"),
+            ("database", "path"): (
+                "~/.securescan/data/securescan.db",
+                home / "data" / "securescan.db",
+            ),
+            ("plugins", "directory"): ("~/.securescan/plugins/", home / "plugins"),
+            ("backup", "directory"): ("~/.securescan/backups/", home / "backups"),
+        }
+        for (section, field), (default, resolved) in default_paths.items():
+            component = getattr(self, section)
+            current = getattr(component, field)
+            if current == default:
+                setattr(component, field, str(resolved))
+            elif current.startswith("~/.securescan/"):
+                suffix = current[len("~/.securescan/") :]
+                setattr(component, field, str(home / suffix))
+            else:
+                setattr(component, field, str(Path(current).expanduser()))
+        return self
 
     @property
     def data_dir(self) -> Path:
@@ -207,6 +240,7 @@ def load_settings() -> Settings:
     merged: dict[str, Any] = {}
     merged.update(system_config)
     merged.update(user_config)
+    merged.setdefault("home_dir", str(home))
 
     settings = Settings(**merged)
     settings.ensure_directories()

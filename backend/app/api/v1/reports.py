@@ -9,8 +9,10 @@ Provides endpoints for:
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
 from app.api.v1.state import orchestrator as _orchestrator
@@ -165,7 +167,7 @@ async def get_report(report_id: str) -> ReportDetailResponse:
         404: {"model": ErrorResponse, "description": "Report not found"},
     },
 )
-async def download_report(report_id: str):
+async def download_report(report_id: str) -> Response:
     """Download report content.
 
     Returns the report content with the appropriate content type:
@@ -234,7 +236,7 @@ async def download_report(report_id: str):
         404: {"model": ErrorResponse, "description": "Report not found"},
     },
 )
-async def verify_report_integrity(report_id: str) -> dict:
+async def verify_report_integrity(report_id: str) -> dict[str, Any]:
     """Verify report content integrity.
 
     Computes SHA-256 hash of the stored content and compares it with

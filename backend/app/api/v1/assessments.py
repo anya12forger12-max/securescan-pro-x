@@ -15,6 +15,8 @@ Provides endpoints for:
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api.v1.state import orchestrator as _orchestrator
@@ -72,7 +74,7 @@ _evidence_service = InMemoryEvidenceService()
 )
 async def create_assessment(
     workspace_id: str = Query(..., description="Parent workspace ID"),
-    data: AssessmentCreate = ...,
+    data: AssessmentCreate = ...,  # type: ignore[assignment]
 ) -> AssessmentResponse:
     """Create a new assessment.
 
@@ -606,7 +608,7 @@ async def get_statistics(assessment_id: str) -> AssessmentStatisticsResponse:
 )
 async def add_finding(
     assessment_id: str,
-    data: dict,
+    data: dict[str, Any],
 ) -> NormalizedFindingResponse:
     """Add a finding to an assessment.
 
@@ -756,7 +758,7 @@ async def verify_evidence_integrity(
 )
 async def generate_report(
     assessment_id: str,
-    data: ReportGenerateRequest = ReportGenerateRequest(),
+    data: ReportGenerateRequest = ReportGenerateRequest(format="json"),
 ) -> ReportResponse:
     """Generate a report.
 

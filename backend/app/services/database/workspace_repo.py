@@ -104,7 +104,7 @@ class WorkspaceRepository(BaseRepository[Workspace]):
 
         if "name" in kwargs and kwargs["name"] != ws.name:
             new_name = kwargs["name"]
-            if await self.name_exists(new_name, exclude_id=workspace_id):
+            if await self.name_exists(str(new_name), exclude_id=workspace_id):
                 raise WorkspaceExistsError(f"Workspace with name '{new_name}' already exists")
 
         return await self.update(workspace_id, **kwargs)

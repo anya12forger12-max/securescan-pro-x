@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -52,7 +52,7 @@ class FullScanRequest(BaseModel):
     )
 
 
-def _result_to_dict(result: object) -> dict:
+def _result_to_dict(result: object) -> dict[str, Any]:
     if hasattr(result, "__dict__"):
         d = {}
         for k, v in result.__dict__.items():
@@ -76,7 +76,7 @@ def _result_to_dict(result: object) -> dict:
 async def run_port_scan(
     request: PortScanRequest,
     user: User = Depends(require_auth),
-) -> dict:
+) -> dict[str, Any]:
     engine = _get_scan_engine()
     result = await engine.run_port_scan(
         target=request.target,
@@ -90,7 +90,7 @@ async def run_port_scan(
 async def run_header_check(
     request: HeaderCheckRequest,
     user: User = Depends(require_auth),
-) -> dict:
+) -> dict[str, Any]:
     engine = _get_scan_engine()
     result = await engine.run_header_check(url=request.url)
     return _result_to_dict(result)
@@ -100,7 +100,7 @@ async def run_header_check(
 async def run_password_check(
     request: PasswordCheckRequest,
     user: User = Depends(require_auth),
-) -> dict:
+) -> dict[str, Any]:
     engine = _get_scan_engine()
     result = await engine.run_password_check(demo_mode=request.demo_mode)
     return _result_to_dict(result)
@@ -110,7 +110,7 @@ async def run_password_check(
 async def run_ssl_check(
     request: SSLCheckRequest,
     user: User = Depends(require_auth),
-) -> dict:
+) -> dict[str, Any]:
     engine = _get_scan_engine()
     result = await engine.run_ssl_check(hostname=request.hostname, port=request.port)
     return _result_to_dict(result)
@@ -120,7 +120,7 @@ async def run_ssl_check(
 async def run_full_scan(
     request: FullScanRequest,
     user: User = Depends(require_auth),
-) -> dict:
+) -> dict[str, Any]:
     engine = _get_scan_engine()
     results = await engine.run_full_scan(
         target=request.target,
@@ -132,7 +132,7 @@ async def run_full_scan(
 @router.get("/history")
 async def get_scan_history(
     user: User = Depends(require_auth),
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     engine = _get_scan_engine()
     history = engine.get_scan_history()
     return [_result_to_dict(r) for r in history]

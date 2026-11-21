@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from typing import Any
 
 from app.core.exceptions import (
     WorkspaceExistsError,
@@ -112,7 +113,7 @@ class InMemoryWorkspaceService(WorkspaceService):
 
     def __init__(self) -> None:
         """Initialize the in-memory store."""
-        self._workspaces: dict[str, dict] = {}
+        self._workspaces: dict[str, dict[str, Any]] = {}
         self._counter: int = 0
 
     async def create(self, data: WorkspaceCreate) -> WorkspaceResponse:
@@ -152,7 +153,7 @@ class InMemoryWorkspaceService(WorkspaceService):
             name=data.name,
         )
 
-        return WorkspaceResponse(**workspace)
+        return WorkspaceResponse(**workspace)  # type: ignore[arg-type]
 
     async def get(self, workspace_id: str) -> WorkspaceResponse:
         """Get a workspace by ID.

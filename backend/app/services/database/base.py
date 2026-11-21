@@ -124,7 +124,7 @@ class BaseRepository(Generic[ModelType]):
         logger.info(
             "repo.created",
             model=self.model.__tablename__,
-            id=instance.id,
+            id=instance.id,  # type: ignore[attr-defined]
         )
         return instance
 
@@ -139,7 +139,7 @@ class BaseRepository(Generic[ModelType]):
         Returns:
             The model instance or None.
         """
-        stmt = select(self.model).where(self.model.id == id)
+        stmt = select(self.model).where(self.model.id == id)  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -176,7 +176,7 @@ class BaseRepository(Generic[ModelType]):
         """
         if not ids:
             return []
-        stmt = select(self.model).where(self.model.id.in_(ids))
+        stmt = select(self.model).where(self.model.id.in_(ids))  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
@@ -241,7 +241,7 @@ class BaseRepository(Generic[ModelType]):
         Returns:
             True if row exists.
         """
-        stmt = select(func.count()).where(self.model.id == id)
+        stmt = select(func.count()).where(self.model.id == id)  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
         return (result.scalar_one() or 0) > 0
 
@@ -326,9 +326,9 @@ class BaseRepository(Generic[ModelType]):
         """
         if not ids:
             return 0
-        stmt = sa_delete(self.model).where(self.model.id.in_(ids))
+        stmt = sa_delete(self.model).where(self.model.id.in_(ids))  # type: ignore[attr-defined]
         result = await self.session.execute(stmt)
-        count = result.rowcount
+        count = result.rowcount or 0  # type: ignore[attr-defined]
         await self.session.flush()
 
         logger.info(
@@ -342,9 +342,9 @@ class BaseRepository(Generic[ModelType]):
 
     def _apply_filters(
         self,
-        stmt: Select,
+        stmt: Select[Any],
         filters: QueryFilters,
-    ) -> Select:
+    ) -> Select[Any]:
         """Apply FilterSpec list to a SELECT statement."""
         for spec in filters.filters:
             column = self._get_column(spec.column)
@@ -353,10 +353,10 @@ class BaseRepository(Generic[ModelType]):
 
     def _apply_single_filter(
         self,
-        stmt: Select,
-        column: InstrumentedAttribute,
+        stmt: Select[Any],
+        column: InstrumentedAttribute[Any],
         spec: FilterSpec,
-    ) -> Select:
+    ) -> Select[Any]:
         op = spec.op
         if op == "eq":
             return stmt.where(column == spec.value)
@@ -383,9 +383,9 @@ class BaseRepository(Generic[ModelType]):
 
     def _apply_ordering(
         self,
-        stmt: Select,
+        stmt: Select[Any],
         filters: QueryFilters,
-    ) -> Select:
+    ) -> Select[Any]:
         if filters.order_by is None:
             return stmt
         column = self._get_column(filters.order_by)
@@ -393,12 +393,14 @@ class BaseRepository(Generic[ModelType]):
             return stmt.order_by(column.desc())
         return stmt.order_by(column.asc())
 
-    def _get_column(self, name: str) -> InstrumentedAttribute:
+    def _get_column(self, name: str) -> InstrumentedAttribute[Any]:
         """Resolve a column name to the SQLAlchemy instrumented attribute."""
         column = getattr(self.model, name, None)
         if column is None:
             raise DatabaseError(f"Column '{name}' does not exist on {self.model.__tablename__}")
-        return column
+        import typing
+
+        return typing.cast("InstrumentedAttribute[Any]", column)
 
     # ── Transaction helpers ─────────────────────────────────────────
 

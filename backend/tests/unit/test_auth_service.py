@@ -6,6 +6,10 @@ strength policy, session lifecycle, login lockout, and account state.
 
 from __future__ import annotations
 
+import base64
+import time
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from app.services.auth import (
@@ -14,6 +18,7 @@ from app.services.auth import (
     hash_password,
     verify_password,
 )
+from app.utils.crypto import _totp_code
 
 
 @pytest.fixture
@@ -69,7 +74,7 @@ class TestRegistration:
         await auth.register("alice", "alice@example.com", "Str0ngPass!word")
         result = await auth.register("alice", "other@example.com", "Str0ngPass!word")
         assert not result.success
-        assert result.error == "Username already exists"
+        assert result.error == "Registration failed"
 
     @pytest.mark.asyncio
     async def test_duplicate_email_rejected(self, auth: InMemoryAuthService) -> None:
@@ -77,7 +82,7 @@ class TestRegistration:
         await auth.register("alice", "alice@example.com", "Str0ngPass!word")
         result = await auth.register("bob", "alice@example.com", "Str0ngPass!word")
         assert not result.success
-        assert result.error == "Email already exists"
+        assert result.error == "Registration failed"
 
     @pytest.mark.parametrize(
         ("password", "expected"),
@@ -261,3 +266,72 @@ class TestAccountState:
         await auth.register("bob", "bob@example.com", "Str0ngPass!word")
         users = await auth.list_users()
         assert {u.username for u in users} == {"alice", "bob"}
+
+
+class TestAuthenticationHardening:
+    """Regressions for enumeration, lockout, MFA and session hardening."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_user_pays_bcrypt_cost(self, auth: InMemoryAuthService) -> None:
+        """Unknown usernames should not return instantly."""
+        await auth.register("alice", "alice@example.com", "Str0ngPass!word")
+        start = time.perf_counter()
+        await auth.login("nobody", "Str0ngPass!word")
+        elapsed = time.perf_counter() - start
+        assert elapsed > 0.05
+
+    @pytest.mark.asyncio
+    async def test_lockout_is_scoped_to_source_ip(self, auth: InMemoryAuthService) -> None:
+        """Five failures from one IP must not lock the account everywhere."""
+        await auth.register("alice", "alice@example.com", "Str0ngPass!word")
+        for _ in range(5):
+            result = await auth.login("alice", "Wr0ngPass!word", ip_address="198.51.100.9")
+            assert not result.success
+        blocked = await auth.login("alice", "Str0ngPass!word", ip_address="198.51.100.9")
+        assert blocked.locked
+        allowed = await auth.login("alice", "Str0ngPass!word", ip_address="203.0.113.4")
+        assert allowed.success
+
+    @pytest.mark.asyncio
+    async def test_mfa_is_enforced(self, auth: InMemoryAuthService) -> None:
+        """An MFA-enabled account cannot be entered with a password alone."""
+        await auth.register("alice", "alice@example.com", "Str0ngPass!word")
+        user = (await auth.login("alice", "Str0ngPass!word")).user
+        assert user is not None
+        seed = "JBSWY3DPEHPK3PXP"
+        user.mfa_enabled = True
+        user.mfa_secret = seed
+
+        challenged = await auth.login("alice", "Str0ngPass!word")
+        assert not challenged.success
+        assert challenged.requires_mfa
+
+        rejected = await auth.login("alice", "Str0ngPass!word", mfa_code="000000")
+        assert not rejected.success
+        assert rejected.requires_mfa
+
+        key = base64.b32decode(seed)
+        code = _totp_code(key, int(time.time()) // 30)
+        accepted = await auth.login("alice", "Str0ngPass!word", mfa_code=code)
+        assert accepted.success
+        assert not accepted.requires_mfa
+
+    @pytest.mark.asyncio
+    async def test_refresh_rejects_expired_session(self, auth: InMemoryAuthService) -> None:
+        """An expired token cannot be revived by refresh_session."""
+        await auth.register("alice", "alice@example.com", "Str0ngPass!word")
+        login = await auth.login("alice", "Str0ngPass!word")
+        session_id = auth._token_store[auth._hash_token(login.session_token)]
+        auth._sessions[session_id].expires_at = (
+            datetime.now(timezone.utc) - timedelta(minutes=1)
+        ).isoformat()
+        assert await auth.refresh_session(login.session_token) is None
+
+    @pytest.mark.asyncio
+    async def test_login_is_case_insensitive(self, auth: InMemoryAuthService) -> None:
+        """Username case and email case do not create duplicate identities."""
+        await auth.register("Alice", "Alice@Example.com", "Str0ngPass!word")
+        assert (await auth.login("alice", "Str0ngPass!word")).success
+        duplicate = await auth.register("alice", "alice@example.com", "Str0ngPass!word")
+        assert not duplicate.success
+        assert duplicate.error == "Registration failed"

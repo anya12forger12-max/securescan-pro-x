@@ -7,10 +7,12 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
 
-from app.core.dependencies import get_auth_service, get_current_user_optional
+from app.core.dependencies import get_auth_service, require_auth
 
 if TYPE_CHECKING:
-    from app.services.auth import AuthService
+    from typing import Any
+
+    from app.services.auth import AuthService, User
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -25,6 +27,7 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+    mfa_code: str | None = Field(default=None, min_length=6, max_length=6)
 
 
 class ChangePasswordRequest(BaseModel):
@@ -47,10 +50,9 @@ class AuthResponse(BaseModel):
     success: bool
     message: str
     user: UserResponse | None = None
-    session_token: str | None = None
 
 
-def _user_to_response(user: object) -> UserResponse:
+def _user_to_response(user: Any) -> UserResponse:
     return UserResponse(
         id=user.id,
         username=user.username,
@@ -87,7 +89,7 @@ async def login(
     request: LoginRequest,
     response: Response,
     auth: AuthService = Depends(get_auth_service),
-    req: Request = None,
+    req: Request = None,  # type: ignore[assignment]
 ) -> AuthResponse:
     ip = req.client.host if req and req.client else None
     ua = req.headers.get("user-agent") if req else None
@@ -96,11 +98,15 @@ async def login(
         password=request.password,
         ip_address=ip,
         user_agent=ua,
+        mfa_code=request.mfa_code,
     )
     if not result.success:
         code = status.HTTP_423_LOCKED if result.locked else status.HTTP_401_UNAUTHORIZED
-        raise HTTPException(status_code=code, detail=result.error)
+        headers = {"X-MFA-Required": "true"} if result.requires_mfa else None
+        raise HTTPException(status_code=code, detail=result.error, headers=headers)
 
+    if not result.session_token:
+        raise HTTPException(status_code=500, detail="Session token missing")
     response.set_cookie(
         key="session_token",
         value=result.session_token,
@@ -115,7 +121,6 @@ async def login(
         success=True,
         message="Login successful",
         user=_user_to_response(result.user) if result.user else None,
-        session_token=result.session_token,
     )
 
 
@@ -133,21 +138,17 @@ async def logout(
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user(
-    user=Depends(get_current_user_optional),
+    user: User = Depends(require_auth),
 ) -> UserResponse:
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     return _user_to_response(user)
 
 
 @router.post("/change-password")
 async def change_password(
     request: ChangePasswordRequest,
-    user=Depends(get_current_user_optional),
+    user: User = Depends(require_auth),
     auth: AuthService = Depends(get_auth_service),
 ) -> dict[str, str]:
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     success = await auth.change_password(user.id, request.old_password, request.new_password)
     if not success:
         raise HTTPException(
@@ -159,11 +160,9 @@ async def change_password(
 
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
-    user=Depends(get_current_user_optional),
+    user: User = Depends(require_auth),
     auth: AuthService = Depends(get_auth_service),
 ) -> list[UserResponse]:
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     role_val = user.role.value if hasattr(user.role, "value") else user.role
     if role_val != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")

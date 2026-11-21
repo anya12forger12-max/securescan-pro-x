@@ -31,6 +31,8 @@ class InputSanitizationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if request.method in ("GET", "HEAD", "OPTIONS"):
             return await call_next(request)
+        if request.url.path.startswith("/api/v1/auth/"):
+            return await call_next(request)
 
         content_type = request.headers.get("content-type", "")
         if "application/json" not in content_type:

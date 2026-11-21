@@ -226,17 +226,23 @@ class AuditRepository(BaseRepository[AuditLogModel]):
             Total number of entries deleted.
         """
         from sqlalchemy import delete as sa_delete
+        from sqlalchemy import select
 
         total_deleted = 0
         while True:
-            stmt = (
-                sa_delete(AuditLogModel).where(AuditLogModel.timestamp < before).limit(batch_size)
+            id_stmt = (
+                select(AuditLogModel.id).where(AuditLogModel.timestamp < before).limit(batch_size)
             )
+            id_result = await self.session.execute(id_stmt)
+            ids = [row[0] for row in id_result.all()]
+            if not ids:
+                break
+            stmt = sa_delete(AuditLogModel).where(AuditLogModel.id.in_(ids))
             result = await self.session.execute(stmt)
-            batch = result.rowcount
+            batch = result.rowcount or 0  # type: ignore[attr-defined]
             total_deleted += batch
             await self.session.flush()
-            if batch < batch_size:
+            if len(ids) < batch_size:
                 break
 
         logger.info(

@@ -14,6 +14,15 @@ from app.core.logging import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
+_ALLOWED_ORIGINS = frozenset(
+    {
+        "tauri://localhost",
+        "http://localhost:1420",
+        "http://localhost:3000",
+        "http://localhost:5173",
+    }
+)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -55,12 +64,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "tauri://localhost",
-            "http://localhost:1420",
-            "http://localhost:3000",
-            "http://localhost:5173",
-        ],
+        allow_origins=list(_ALLOWED_ORIGINS),
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
@@ -69,6 +73,10 @@ def create_app() -> FastAPI:
     from app.utils.security_headers import SecurityHeadersMiddleware
 
     app.add_middleware(SecurityHeadersMiddleware)
+
+    from app.utils.csrf import CSRFMiddleware
+
+    app.add_middleware(CSRFMiddleware, allowed_origins=_ALLOWED_ORIGINS)
 
     from app.utils.rate_limit import RateLimitMiddleware
 
@@ -91,7 +99,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix="/api/v1")
 
     @app.get("/health", tags=["health"])
-    async def health_check() -> dict:
+    async def health_check() -> dict[str, str]:
         return {
             "status": "healthy",
             "version": __version__,
@@ -99,7 +107,7 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/", tags=["root"])
-    async def root() -> dict:
+    async def root() -> dict[str, str]:
         return {
             "name": __app_name__,
             "version": __version__,

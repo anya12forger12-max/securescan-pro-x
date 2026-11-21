@@ -76,7 +76,7 @@ def setup_logging(
     _logger = structlog.get_logger("securescan")
 
 
-def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
+def get_logger(name: str | None = None) -> Any:
     """Get a bound logger instance.
 
     Args:
@@ -87,7 +87,10 @@ def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
     """
     if _logger is None:
         setup_logging()
-    return structlog.get_logger(name or "securescan")
+    import typing
+
+    _lg = structlog.get_logger(name or "securescan")
+    return typing.cast("structlog.types.FilteringBoundLogger", _lg)
 
 
 def log_audit(
@@ -131,4 +134,4 @@ def log_security(
     """
     logger = get_logger("security")
     log_fn = getattr(logger, severity, logger.info)
-    log_fn("security.event", event=event, severity=severity, **kwargs)
+    log_fn(event, severity=severity, **kwargs)

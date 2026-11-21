@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import pytest
 
@@ -162,8 +163,8 @@ class TestCrypto:
         assert tm.decrypt_dict(tm.encrypt_dict(payload)) == payload
 
     def test_token_manager_rejects_wrong_key(self) -> None:
-        tm1 = TokenManager()
-        tm2 = TokenManager()
+        tm1 = TokenManager(key=generate_secret_key())
+        tm2 = TokenManager(key=generate_secret_key())
         token = tm1.encrypt("secret-value")
         rejected = False
         try:
@@ -171,6 +172,21 @@ class TestCrypto:
         except Exception:
             rejected = True
         assert rejected, "decrypt with wrong key must fail"
+
+    def test_token_manager_persists_key_between_instances(self, tmp_path: Path) -> None:
+        key_file = tmp_path / "token.key"
+        token = TokenManager(key_path=key_file).encrypt("secret-value")
+        assert TokenManager(key_path=key_file).decrypt(token) == "secret-value"
+        assert key_file.stat().st_mode & 0o777 == 0o600
+
+    def test_token_manager_uses_environment_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        key = generate_secret_key()
+        monkeypatch.setenv("SECURESCAN_TOKEN_KEY", key)
+        try:
+            token = TokenManager().encrypt("secret-value")
+            assert TokenManager(key=key).decrypt(token) == "secret-value"
+        finally:
+            monkeypatch.delenv("SECURESCAN_TOKEN_KEY", raising=False)
 
 
 class TestSanitization:

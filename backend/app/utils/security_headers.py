@@ -9,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 if TYPE_CHECKING:
     from starlette.requests import Request
     from starlette.responses import Response
+    from starlette.types import ASGIApp
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -16,7 +17,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
     def __init__(
         self,
-        app: object,
+        app: "ASGIApp",
         csp_directives: dict[str, str] | None = None,
     ) -> None:
         super().__init__(app)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, Callable
+
 from fastapi import Cookie, Depends, HTTPException, status
 
 from app.services.assessment.evidence import EvidenceService, InMemoryEvidenceService
@@ -12,7 +14,7 @@ from app.services.assessment.profiles import InMemoryProfileService, ProfileServ
 from app.services.assessment.reports import InMemoryReportService, ReportService
 from app.services.asset import AssetService, InMemoryAssetService
 from app.services.audit import AuditService, InMemoryAuditService
-from app.services.auth import AuthService, InMemoryAuthService, User, UserRole
+from app.services.auth import ROLE_HIERARCHY, AuthService, InMemoryAuthService, User, UserRole
 from app.services.configuration import ConfigurationService, InMemoryConfigurationService
 from app.services.plugin import InMemoryPluginManager, PluginManager
 from app.services.workspace import InMemoryWorkspaceService, WorkspaceService
@@ -58,90 +60,92 @@ def init_services() -> None:
 def get_auth_service() -> AuthService:
     if _auth_service is None:
         init_services()
-    assert _auth_service is not None
+    if _auth_service is None:
+        raise RuntimeError("Service not initialized")
     return _auth_service
 
 
 def get_workspace_service() -> WorkspaceService:
     if _workspace_service is None:
         init_services()
-    assert _workspace_service is not None
+    if _workspace_service is None:
+        raise RuntimeError("Service not initialized")
     return _workspace_service
 
 
 def get_asset_service() -> AssetService:
     if _asset_service is None:
         init_services()
-    assert _asset_service is not None
+    if _asset_service is None:
+        raise RuntimeError("Service not initialized")
     return _asset_service
 
 
 def get_audit_service() -> AuditService:
     if _audit_service is None:
         init_services()
-    assert _audit_service is not None
+    if _audit_service is None:
+        raise RuntimeError("Service not initialized")
     return _audit_service
 
 
 def get_plugin_manager() -> PluginManager:
     if _plugin_manager is None:
         init_services()
-    assert _plugin_manager is not None
+    if _plugin_manager is None:
+        raise RuntimeError("Service not initialized")
     return _plugin_manager
 
 
 def get_orchestrator() -> AssessmentOrchestrator:
     if _orchestrator is None:
         init_services()
-    assert _orchestrator is not None
+    if _orchestrator is None:
+        raise RuntimeError("Service not initialized")
     return _orchestrator
 
 
 def get_evidence_service() -> EvidenceService:
     if _evidence_service is None:
         init_services()
-    assert _evidence_service is not None
+    if _evidence_service is None:
+        raise RuntimeError("Service not initialized")
     return _evidence_service
 
 
 def get_report_service() -> ReportService:
     if _report_service is None:
         init_services()
-    assert _report_service is not None
+    if _report_service is None:
+        raise RuntimeError("Service not initialized")
     return _report_service
 
 
 def get_profile_service() -> ProfileService:
     if _profile_service is None:
         init_services()
-    assert _profile_service is not None
+    if _profile_service is None:
+        raise RuntimeError("Service not initialized")
     return _profile_service
 
 
 def get_policy_service() -> PolicyService:
     if _policy_service is None:
         init_services()
-    assert _policy_service is not None
+    if _policy_service is None:
+        raise RuntimeError("Service not initialized")
     return _policy_service
 
 
 def get_knowledge_service() -> KnowledgeService:
     if _knowledge_service is None:
         init_services()
-    assert _knowledge_service is not None
+    if _knowledge_service is None:
+        raise RuntimeError("Service not initialized")
     return _knowledge_service
 
 
 async def get_current_user(
-    session_token: str | None = Cookie(None),
-    auth: AuthService = Depends(get_auth_service),
-) -> User | None:
-    if not session_token:
-        return None
-    return await auth.validate_session(session_token)
-
-
-async def get_current_user_optional(
     session_token: str | None = Cookie(None),
     auth: AuthService = Depends(get_auth_service),
 ) -> User | None:
@@ -161,12 +165,10 @@ async def require_auth(
     return user
 
 
-def require_role(minimum_role: UserRole):
-    role_order = {UserRole.ADMIN: 3, UserRole.OPERATOR: 2, UserRole.VIEWER: 1}
-
+def require_role(minimum_role: UserRole) -> Callable[..., Any]:
     async def _check(user: User = Depends(require_auth)) -> User:
-        user_level = role_order.get(user.role, 0)
-        required_level = role_order.get(minimum_role, 0)
+        user_level = ROLE_HIERARCHY.get(user.role, 0)
+        required_level = ROLE_HIERARCHY.get(minimum_role, 0)
         if user_level < required_level:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

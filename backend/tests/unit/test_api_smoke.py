@@ -63,7 +63,8 @@ def _login(client: TestClient) -> str:
         {"username": username, "password": "Str0ngPass!word"},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["session_token"]
+    assert "session_token=" in r.headers.get("set-cookie", "")
+    assert "session_token" not in r.json()
     return username
 
 
@@ -142,7 +143,7 @@ class TestAuthFlow:
             {**payload, "email": f"other-{uid}@example.com"},
         )
         assert r.status_code == 409
-        assert "exists" in r.json()["detail"]
+        assert r.json()["detail"] == "Registration failed"
 
         # Weak password rejected by the request schema with an actionable message.
         r = _post(
@@ -169,7 +170,8 @@ class TestAuthFlow:
             {"username": username, "password": "Str0ngPass!word"},
         )
         assert r.status_code == 200
-        assert r.json()["session_token"]
+        assert "session_token=" in r.headers.get("set-cookie", "")
+        assert "session_token" not in r.json()
 
         # Cookie session resolves the user.
         r = _get(client, "/api/v1/auth/me")
@@ -180,6 +182,19 @@ class TestAuthFlow:
         r = _post(client, "/api/v1/auth/logout")
         assert r.status_code == 200
         assert _get(client, "/api/v1/auth/me").status_code == 401
+
+    def test_auth_bodies_bypass_xss_scanner(self, client: TestClient) -> None:
+        uid = uuid.uuid4().hex[:12]
+        username = f"qa_{uid}"
+        pw = "Str0ngPass!onload=1"
+        payload = {
+            "username": username,
+            "email": f"{uid}@example.com",
+            "password": pw,
+        }
+        assert _post(client, "/api/v1/auth/register", payload).status_code == 201
+        r = _post(client, "/api/v1/auth/login", {"username": username, "password": pw})
+        assert r.status_code == 200
 
 
 class TestScans:
@@ -619,6 +634,40 @@ class TestMiddleware:
         assert limited.headers["X-RateLimit-Limit"] == "20"
         assert int(limited.headers["Retry-After"]) > 0
         assert statuses[-1] == 429
+
+    def test_forwarded_for_spoofing_is_ignored(self) -> None:
+        # A real client cannot reset its bucket by changing X-Forwarded-For.
+        with TestClient(app, client=("198.51.100.9", 1234)) as untrusted:
+            statuses = [
+                untrusted.get(
+                    "/api/v1/workspaces",
+                    headers={"X-Forwarded-For": f"10.0.0.{i}"},
+                ).status_code
+                for i in range(25)
+            ]
+        assert 429 in statuses
+        assert statuses[-1] == 429
+
+    def test_csrf_rejects_foreign_origin(self, client: TestClient) -> None:
+        _login(client)
+        r = _post(
+            client,
+            "/api/v1/workspaces",
+            {"name": "csrf-blocked"},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert r.status_code == 403
+        assert r.json()["detail"] == "CSRF origin check failed"
+
+    def test_csrf_allows_configured_origin(self, client: TestClient) -> None:
+        _login(client)
+        r = _post(
+            client,
+            "/api/v1/workspaces",
+            {"name": "csrf-allowed"},
+            headers={"Origin": "http://localhost:5173"},
+        )
+        assert r.status_code == 201
 
 
 class TestLifespan:
