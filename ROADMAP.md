@@ -1,5 +1,9 @@
 # Roadmap — SecureScan Pro X
 
+> Statuses were reconciled with the repository on 2026-11-22. Unchecked items
+> are not yet implemented. Current verification: 325 backend tests pass with
+> 89.5% coverage (85% gate); the frontend builds, lints and tests cleanly.
+
 ## Vision
 
 Become the leading open-source, privacy-first, defensive security assessment platform trusted by security professionals worldwide.
@@ -15,12 +19,12 @@ Become the leading open-source, privacy-first, defensive security assessment pla
 - [x] Security and privacy policies
 
 ### 1B: Core Services & Data Layer
-- [ ] Configuration service implementation
-- [ ] Logging service implementation
-- [ ] Audit service implementation
-- [ ] Database migrations and seed data
-- [ ] Authentication and RBAC implementation
-- [ ] Workspace service implementation
+- [x] Configuration service implementation
+- [x] Logging service implementation
+- [x] Audit service implementation
+- [x] Database migrations and seed data
+- [x] Authentication and RBAC implementation
+- [x] Workspace service implementation
 - [ ] Backup service implementation
 
 ## Phase 2: Assessment Engine
@@ -39,20 +43,20 @@ Become the leading open-source, privacy-first, defensive security assessment pla
 - [ ] User account checks
 
 ### 2C: Correlation Engine
-- [ ] Finding correlation
+- [x] Finding correlation
 - [ ] Deduplication
 - [ ] Impact clustering
 
 ## Phase 3: User Interface
 
 ### 3A: Core UI
-- [ ] Dashboard
-- [ ] Workspace management
-- [ ] Asset management
-- [ ] Assessment management
+- [x] Dashboard
+- [x] Workspace management
+- [x] Asset management
+- [x] Assessment management
 
 ### 3B: Visualization
-- [ ] Risk overview charts
+- [x] Risk overview charts
 - [ ] Finding detail views
 - [ ] Timeline visualizations
 - [ ] Network topology views
@@ -65,7 +69,7 @@ Become the leading open-source, privacy-first, defensive security assessment pla
 ## Phase 4: Plugin System
 
 ### 4A: Plugin Infrastructure
-- [ ] Plugin manager implementation
+- [x] Plugin manager implementation
 - [ ] Plugin sandbox
 - [ ] Plugin marketplace UI
 - [ ] Plugin configuration
@@ -93,12 +97,12 @@ Become the leading open-source, privacy-first, defensive security assessment pla
 ### 5B: Risk Engine
 - [ ] CVSS 3.1 scoring
 - [ ] CVSS 4.0 support
-- [ ] Risk prioritization
+- [x] Risk prioritization
 - [ ] Business impact analysis
 
 ### 5C: Reporting
 - [ ] PDF report generation
-- [ ] HTML report generation
+- [x] HTML report generation
 - [ ] Custom report templates
 - [ ] Executive summaries
 

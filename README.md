@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![TypeScript](https://img.shields.io/badge/typescript-5.4+-blue.svg)](https://www.typescriptlang.org/)
-[![WCAG 2.2 AA](https://img.shields.io/badge/WCAG-2.2%20AA-green.svg)](ACCESSIBILITY.md)
+[![WCAG 2.2 AA target](https://img.shields.io/badge/WCAG-2.2%20AA%20target-orange.svg)](ACCESSIBILITY.md)
 [![Security Policy](https://img.shields.io/badge/Security-Policy-red.svg)](SECURITY.md)
 
 ---
@@ -15,6 +15,16 @@
 SecureScan Pro X is a privacy-first, offline-first, desktop security assessment platform designed for defensive cybersecurity professionals. It enables organizations to assess systems they own or have explicit authorization to test.
 
 **This software is exclusively for defensive purposes.** It never contains exploit execution, payload generation, persistence mechanisms, credential theft, or any capability intended to facilitate unauthorized access.
+
+## Status
+
+Active development. The backend services and the core React UI exist and build;
+several roadmap items (backup service, plugin marketplace, localization, installers)
+are still planned. See [ROADMAP.md](ROADMAP.md) for milestone status.
+
+Last verified 2026-11-22: 325 backend tests pass with 89.5% coverage (gate 85%),
+and the frontend builds, lints and tests cleanly. Accessibility conformance has
+not yet been audited; WCAG 2.2 AA is a target, not a claim.
 
 ## Key Principles
 
@@ -166,38 +176,20 @@ cd securescan-pro-x
 bash install.sh
 ```
 
-## Features
+## Implemented capabilities
 
-| Feature | Description |
+| Area | What exists today |
 |---|---|
-| **Port Scanner** | Discovers open ports and identifies running services |
-| **Header Checker** | Analyzes HTTP security headers (CSP, HSTS, X-Frame-Options, etc.) |
-| **SSL/TLS Analyzer** | Checks certificate validity, protocol versions, cipher suites |
-| **Password Strength** | Evaluates passwords against common patterns and breaches |
-| **Risk Scoring** | CVSS-based risk calculation with severity correlation |
-| **Report Generation** | HTML, JSON, Markdown, CSV reports with integrity hashes |
-| **Knowledge Base** | 24+ vulnerability entries with CWE/OWASP/NIST mappings |
-| **Plugin System** | Extensible scanner framework with built-in plugins |
+| **REST API** | FastAPI endpoints for auth/session, assets, workspaces, assessments, scans and reports |
+| **Assessment engine** | Assessment lifecycle, evidence normalization, orchestration and scan engine |
+| **Risk & correlation** | Severity/CVSS-based finding correlation and risk prioritization |
+| **Reporting** | HTML, JSON, Markdown and CSV report generation with integrity hashes |
+| **Knowledge base** | Local vulnerability intelligence service |
+| **Plugin framework** | Python plugin interfaces and manager; built-in plugins are not shipped yet |
+| **Frontend** | Login, dashboard, assets, workspaces, assessments, scanner and settings pages |
 
-## Architecture
-
-```
-┌─────────────────────────────────────┐
-│        Presentation Layer           │  React 19 + TypeScript
-├─────────────────────────────────────┤
-│         REST API (FastAPI)          │  30+ endpoints, RBAC
-├─────────────────────────────────────┤
-│         Assessment Layer            │  Scan engine, plugins
-├─────────────────────────────────────┤
-│         Risk & Correlation          │  Cross-check analysis
-├─────────────────────────────────────┤
-│         Knowledge Engine            │  24+ vuln entries
-├─────────────────────────────────────┤
-│         Reporting Layer             │  4 formats, integrity
-├─────────────────────────────────────┤
-│         Database (SQLite)           │  FTS5, WAL mode
-└─────────────────────────────────────┘
-```
+Built-in scanner checks, a report-builder UI, localization and desktop installers
+are still on the [roadmap](ROADMAP.md).
 
 ## Security Features
 
