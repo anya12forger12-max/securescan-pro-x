@@ -11,12 +11,6 @@ import { z } from "zod";
  * openapi.yaml server URL and the compose healthcheck must match this value.
  */
 export declare const promotionsEnvSchema: z.ZodObject<{
-    SERVICE_TOKEN: z.ZodString;
-    ADMIN_SERVICE_TOKEN: z.ZodString;
-    WALLET_SERVICE_TOKEN: z.ZodString;
-    REALTIME_SERVICE_TOKEN: z.ZodString;
-    PROMOTIONS_SERVICE_TOKEN: z.ZodString;
-    ADMIN_BOOTSTRAP_TOKEN: z.ZodString;
     NODE_ENV: z.ZodDefault<z.ZodEnum<["development", "test", "production"]>>;
     PORT: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
     DATABASE_URL: z.ZodString;
@@ -32,17 +26,14 @@ export declare const promotionsEnvSchema: z.ZodObject<{
         trace: "trace";
         silent: "silent";
     }>>;
-    RESPONSIBLE_GAMING_URL: z.ZodOptional<z.ZodString>;
-    WALLET_URL: z.ZodOptional<z.ZodString>;
+    RESPONSIBLE_GAMING_URL: z.ZodString;
+    WALLET_URL: z.ZodString;
+    SERVICE_TOKEN: z.ZodString;
+    WALLET_SERVICE_TOKEN: z.ZodString;
+    PROMOTIONS_SERVICE_TOKEN: z.ZodString;
 }, z.core.$strip>;
 export type PromotionsEnv = z.infer<typeof promotionsEnvSchema>;
 export declare const loadEnv: (data: unknown, params?: z.core.ParseContext<z.core.$ZodIssue>) => {
-    SERVICE_TOKEN: string;
-    ADMIN_SERVICE_TOKEN: string;
-    WALLET_SERVICE_TOKEN: string;
-    REALTIME_SERVICE_TOKEN: string;
-    PROMOTIONS_SERVICE_TOKEN: string;
-    ADMIN_BOOTSTRAP_TOKEN: string;
     NODE_ENV: 3 | "development" | "test" | "production" | (() => ArrayIterator<"development" | "test" | "production">) | {
         [x: number]: boolean | undefined;
         length?: boolean | undefined;
@@ -113,7 +104,10 @@ export declare const loadEnv: (data: unknown, params?: z.core.ParseContext<z.cor
     REDIS_URL: string;
     CORS_ORIGIN: string;
     LOG_LEVEL: "error" | "fatal" | "warn" | "info" | "debug" | "trace" | "silent";
-    RESPONSIBLE_GAMING_URL?: string | undefined;
-    WALLET_URL?: string | undefined;
+    RESPONSIBLE_GAMING_URL: string;
+    WALLET_URL: string;
+    SERVICE_TOKEN: string;
+    WALLET_SERVICE_TOKEN: string;
+    PROMOTIONS_SERVICE_TOKEN: string;
 };
 //# sourceMappingURL=env.d.ts.map

@@ -117,19 +117,44 @@ function tokenMatches(value, expected) {
 }
 
 /** The gateway owns token injection: a caller can never choose which internal
- * capability its request receives. */
-function injectedToken(req, target) {
-  for (const [prefix, token] of SERVICE_TOKEN_ONLY) {
-    if (req.url.startsWith(prefix)) return token;
-  }
-  if (target.bootstrap || target.service === "admin-risk") return ADMIN_SERVICE_TOKEN;
+ * capability its request receives. The token is selected from the *matched
+ * route*, never from the raw URL, so a crafted path cannot borrow a more
+ * privileged capability than the route it actually resolves to. */
+function injectedToken(target, peerToken) {
+  if (peerToken) return peerToken;
+  if (target.service === "admin-risk") return ADMIN_SERVICE_TOKEN;
   if (target.service === "promotions") return PROMOTIONS_SERVICE_TOKEN;
   return SERVICE_TOKEN;
 }
 
-function requiredPermission(route, url) {
+/** Parse the request target once and refuse any path whose normalised form
+ * differs from what the client sent. This blocks `/v1/internal/audit/../...`
+ * and percent-encoded dot segments, which would otherwise be routed by one
+ * set of rules and forwarded to a completely different upstream endpoint. */
+function parseProxyUrl(rawUrl) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl, "http://gateway.invalid");
+  } catch {
+    return null;
+  }
+  const rawPath = rawUrl.split(/[?#]/, 1)[0];
+  if (parsed.pathname !== rawPath) return null;
+  if (/[\\\u0000-\u001f]/.test(parsed.pathname)) return null;
+  // Encoded separators/dot segments have no legitimate use in these routes
+  // and could desynchronise the proxy's router from the upstream router.
+  if (/%2f|%5c|%2e/i.test(rawPath)) return null;
+  return parsed;
+}
+
+/** Prefix matches must land on a segment boundary: `/v1/authx` is not `/v1/auth`. */
+function matchesPrefix(path, prefix) {
+  return path === prefix || path.startsWith(prefix + "/");
+}
+
+function requiredPermission(route, path) {
   if (route.permission) return route.permission;
-  if (url.startsWith("/v1/internal/audit") || url.startsWith("/v1/internal/rbac"))
+  if (matchesPrefix(path, "/v1/internal/audit") || matchesPrefix(path, "/v1/internal/rbac"))
     return "audit.read";
   return "promotions.manage";
 }
@@ -203,8 +228,17 @@ app.get("/ready", async (_req, reply) => {
 });
 
 async function proxy(req, reply) {
+  // Normalise once, then route, authorise and forward using only that canonical
+  // path. A URL that changes under normalisation is rejected outright so it
+  // cannot pass one route's checks and reach a different upstream endpoint.
+  const parsed = parseProxyUrl(req.url);
+  if (!parsed) {
+    return reply.code(400).send({ error: "BAD_REQUEST", message: "invalid request path" });
+  }
+  const path = parsed.pathname;
+
   const target = ROUTES.find(
-    (route) => req.url.startsWith(route.prefix) && (!route.methods || route.methods.includes(req.method)),
+    (route) => matchesPrefix(path, route.prefix) && (!route.methods || route.methods.includes(req.method)),
   );
   if (!target) return reply.code(404).send({ error: "NOT_FOUND", message: "unknown route" });
 
@@ -214,9 +248,18 @@ async function proxy(req, reply) {
   const headers = { ...req.headers };
   delete headers.host;
   delete headers["content-length"];
-  delete headers["x-user-id"];
-  delete headers["x-username"];
-  delete headers["x-service-token"];
+  for (const name of [
+    "x-user-id",
+    "x-username",
+    "x-actor",
+    "x-user",
+    "x-role",
+    "x-roles",
+    "x-permissions",
+    "x-service-token",
+  ]) {
+    delete headers[name];
+  }
 
   // Assert identity only from a verified player JWT. Services still receive
   // the original Authorization header and can verify it independently.
@@ -234,7 +277,7 @@ async function proxy(req, reply) {
 
   // Peer-to-peer routes are authenticated by their capability token alone;
   // requiring a player JWT here would make every documented service call 401.
-  const peerToken = [...SERVICE_TOKEN_ONLY].find(([prefix]) => req.url.startsWith(prefix))?.[1];
+  const peerToken = [...SERVICE_TOKEN_ONLY].find(([prefix]) => matchesPrefix(path, prefix))?.[1];
   if ((target.requirePlayer || target.bootstrap || (target.privileged && !peerToken)) && !decoded?.userId) {
     return reply.code(401).send({
       error: "UNAUTHORIZED",
@@ -252,7 +295,7 @@ async function proxy(req, reply) {
         return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid service token" });
       }
     } else {
-      const permission = requiredPermission(target, req.url);
+      const permission = requiredPermission(target, path);
       if (!(await hasPermission(decoded.userId, permission, req.log))) {
         return reply.code(403).send({
           error: "FORBIDDEN",
@@ -263,10 +306,10 @@ async function proxy(req, reply) {
   }
 
   if (target.privileged || target.bootstrap) {
-    headers["x-service-token"] = injectedToken(req, target);
+    headers["x-service-token"] = injectedToken(target, peerToken);
   }
 
-  const upstream = `http://${upstreamHost(target.service)}:${target.port}${req.url}`;
+  const upstream = `http://${upstreamHost(target.service)}:${target.port}${parsed.pathname}${parsed.search}`;
   const init = { method: req.method, headers };
   if (req.body !== undefined) {
     init.body = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
@@ -322,9 +365,11 @@ async function proxy(req, reply) {
     if (requestId) reply.header("x-request-id", requestId);
     return reply.send(text);
   } catch (err) {
+    req.log.warn({ err, service: target.service }, "upstream request failed");
+    // Do not reflect upstream/internal error details back to callers.
     return reply.code(503).send({
       error: "SERVICE_UNAVAILABLE",
-      message: `upstream ${target.service} unavailable: ${err.message}`,
+      message: `upstream ${target.service} unavailable`,
     });
   }
 }

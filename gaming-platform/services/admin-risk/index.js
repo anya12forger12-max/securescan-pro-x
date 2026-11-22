@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { createHash, randomUUID } from "node:crypto";
-import { baseEnvSchema, dbPoolOptions, loadEnv, registerErrorHandler } from "@gp/config";
+import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, registerErrorHandler } from "@gp/config";
 import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
 
 /**
@@ -16,6 +16,7 @@ import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
  * together. The chain can be verified independently via /audit/verify.
  */
 const envSchema = baseEnvSchema.extend({
+  ...capabilityFields("ADMIN_SERVICE_TOKEN", "ADMIN_BOOTSTRAP_TOKEN"),
   PORT: z.coerce.number().int().positive().default(3013),
   DATABASE_URL: z.string().min(1).url(),
   JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 characters"),
@@ -153,7 +154,6 @@ const AuditSchema = z.object({
 const GrantSchema = z.object({
   userId: z.string().min(1),
   role: z.enum(["admin", "risk", "support", "player"]),
-  grantedBy: z.string().min(1).optional(),
 });
 
 app.post("/v1/internal/rbac/check", async (req, reply) => {
@@ -341,11 +341,13 @@ app.post("/v1/admin-risk/roles/grant", async (req, reply) => {
   if (!parsed.success)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
 
-  const actor = headerString(req.headers, "x-user-id") ?? headerString(req.headers, "x-actor");
-  if (!actor) {
+  // The gateway derives this header from a verified player JWT and strips any
+  // caller-supplied identity headers. Never fall back to a client-controlled
+  // alias: the audit trail must record the actual authenticated grantor.
+  const grantedBy = headerString(req.headers, "x-user-id");
+  if (!grantedBy) {
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "grant requests must identify the granting user");
   }
-  const grantedBy = parsed.data.grantedBy ?? actor;
 
   try {
     const result = await withTransaction(async (client) => {

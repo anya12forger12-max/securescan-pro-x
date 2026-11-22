@@ -10,14 +10,9 @@ x-common-env: &common-env
   DB_POOL_MAX: ${DB_POOL_MAX:-5}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379}
   JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET must be at least 32 random characters}
-  SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
-  # Capability-scoped internal credentials: a compromised service cannot use
-  # its own token to reach the wallet, admin or event APIs.
-  ADMIN_SERVICE_TOKEN: ${ADMIN_SERVICE_TOKEN:?ADMIN_SERVICE_TOKEN must be set}
-  WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
-  REALTIME_SERVICE_TOKEN: ${REALTIME_SERVICE_TOKEN:?REALTIME_SERVICE_TOKEN must be set}
-  PROMOTIONS_SERVICE_TOKEN: ${PROMOTIONS_SERVICE_TOKEN:?PROMOTIONS_SERVICE_TOKEN must be set}
-  ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:?ADMIN_BOOTSTRAP_TOKEN must be set}
+  # Capability credentials are intentionally NOT shared here. Each service
+  # below receives only the token(s) its own code verifies; the gateway holds
+  # all of them because it is the component that injects them per route.
   CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN must be the public browser origin}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   REALTIME_URL: http://realtime:3010
@@ -108,6 +103,12 @@ services:
       <<: *common-env
       PORT: 3000
       UPSTREAM_MODE: docker
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
+      ADMIN_SERVICE_TOKEN: ${ADMIN_SERVICE_TOKEN:?ADMIN_SERVICE_TOKEN must be set}
+      WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
+      REALTIME_SERVICE_TOKEN: ${REALTIME_SERVICE_TOKEN:?REALTIME_SERVICE_TOKEN must be set}
+      PROMOTIONS_SERVICE_TOKEN: ${PROMOTIONS_SERVICE_TOKEN:?PROMOTIONS_SERVICE_TOKEN must be set}
+      ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:?ADMIN_BOOTSTRAP_TOKEN must be set}
     healthcheck:
       test:
         - CMD
@@ -136,6 +137,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3013
+      ADMIN_SERVICE_TOKEN: ${ADMIN_SERVICE_TOKEN:?ADMIN_SERVICE_TOKEN must be set}
+      ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:?ADMIN_BOOTSTRAP_TOKEN must be set}
     expose:
       - "3013"
 
@@ -145,6 +148,7 @@ services:
     environment:
       <<: *common-env
       PORT: 3010
+      REALTIME_SERVICE_TOKEN: ${REALTIME_SERVICE_TOKEN:?REALTIME_SERVICE_TOKEN must be set}
     expose:
       - "3010"
 
@@ -154,6 +158,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3011
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
+      WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
     expose:
       - "3011"
 
@@ -163,6 +169,7 @@ services:
     environment:
       <<: *common-env
       PORT: 3012
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
     expose:
       - "3012"
 
@@ -172,6 +179,7 @@ services:
     environment:
       <<: *common-env
       PORT: 3014
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
     expose:
       - "3014"
 
@@ -181,6 +189,7 @@ services:
     environment:
       <<: *common-env
       PORT: 3016
+      REALTIME_SERVICE_TOKEN: ${REALTIME_SERVICE_TOKEN:?REALTIME_SERVICE_TOKEN must be set}
     expose:
       - "3016"
 
@@ -235,6 +244,9 @@ services:
     environment:
       <<: *common-env
       PORT: 3022
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
+      PROMOTIONS_SERVICE_TOKEN: ${PROMOTIONS_SERVICE_TOKEN:?PROMOTIONS_SERVICE_TOKEN must be set}
+      WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
     expose:
       - "3022"
 

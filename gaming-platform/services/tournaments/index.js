@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { randomUUID } from "node:crypto";
-import { baseEnvSchema, dbPoolOptions, loadEnv } from "@gp/config";
+import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv } from "@gp/config";
 import { ERROR_CODES, serviceTokenOk, toMoney } from "@gp/shared-types";
 
 /**
@@ -13,6 +13,7 @@ import { ERROR_CODES, serviceTokenOk, toMoney } from "@gp/shared-types";
  * catalogue + registration lifecycle so the port is no longer a placeholder.
  */
 const envSchema = baseEnvSchema.extend({
+  ...capabilityFields("SERVICE_TOKEN"),
   PORT: z.coerce.number().int().positive().default(3014),
   DATABASE_URL: z.string().min(1).url(),
   JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 characters"),

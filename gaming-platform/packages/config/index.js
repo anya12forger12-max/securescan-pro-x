@@ -11,13 +11,27 @@ import { z } from "zod";
 const internalToken = (name) =>
   z.string().min(32, `${name} must be at least 32 characters and explicitly configured`);
 
-export const baseEnvSchema = z.object({
+/**
+ * Capability credentials are declared by the services that actually hold them.
+ * Putting every token in a shared base schema used to force Compose to inject
+ * all of them into every container, which made compromising a game service
+ * equivalent to compromising the wallet and admin APIs.
+ */
+export const capabilityTokenFields = {
   SERVICE_TOKEN: internalToken("SERVICE_TOKEN"),
   ADMIN_SERVICE_TOKEN: internalToken("ADMIN_SERVICE_TOKEN"),
   WALLET_SERVICE_TOKEN: internalToken("WALLET_SERVICE_TOKEN"),
   REALTIME_SERVICE_TOKEN: internalToken("REALTIME_SERVICE_TOKEN"),
   PROMOTIONS_SERVICE_TOKEN: internalToken("PROMOTIONS_SERVICE_TOKEN"),
   ADMIN_BOOTSTRAP_TOKEN: internalToken("ADMIN_BOOTSTRAP_TOKEN"),
+};
+
+/** Select only the credentials a service needs; unlisted ones stay absent. */
+export function capabilityFields(...names) {
+  return Object.fromEntries(names.map((name) => [name, capabilityTokenFields[name]]));
+}
+
+export const baseEnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 });
 

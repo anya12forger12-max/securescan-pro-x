@@ -3,7 +3,7 @@ import { z } from "zod";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { randomUUID } from "node:crypto";
-import { baseEnvSchema, dbPoolOptions, loadEnv } from "@gp/config";
+import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv } from "@gp/config";
 import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
 
 /**
@@ -13,6 +13,7 @@ import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
  * That makes replay after a restart (or across multiple instances) possible.
  */
 const envSchema = baseEnvSchema.extend({
+  ...capabilityFields("REALTIME_SERVICE_TOKEN"),
   PORT: z.coerce.number().int().positive().default(3010),
   DATABASE_URL: z.string().min(1).url(),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),

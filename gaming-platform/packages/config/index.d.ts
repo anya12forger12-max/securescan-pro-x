@@ -1,14 +1,23 @@
 import type { z } from "zod";
 import type { FastifyInstance } from "fastify";
 
-/** Base environment schema shared by every service. */
-export declare const baseEnvSchema: z.ZodObject<{
+/** Capability credentials, declared only by the services that hold them. */
+export declare const capabilityTokenFields: {
   SERVICE_TOKEN: z.ZodString;
   ADMIN_SERVICE_TOKEN: z.ZodString;
   WALLET_SERVICE_TOKEN: z.ZodString;
   REALTIME_SERVICE_TOKEN: z.ZodString;
   PROMOTIONS_SERVICE_TOKEN: z.ZodString;
   ADMIN_BOOTSTRAP_TOKEN: z.ZodString;
+};
+
+/** Pick a subset of capability fields for use with `.extend()`. */
+export declare function capabilityFields<K extends keyof typeof capabilityTokenFields>(
+  ...names: K[]
+): { [P in K]: z.ZodString };
+
+/** Base environment schema shared by every service (no credentials). */
+export declare const baseEnvSchema: z.ZodObject<{
   NODE_ENV: z.ZodDefault<z.ZodEnum<["development", "test", "production"]>>;
 }>;
 
