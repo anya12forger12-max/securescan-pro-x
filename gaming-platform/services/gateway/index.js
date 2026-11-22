@@ -6,7 +6,10 @@ const PORT = Number(process.env.PORT ?? 3000);
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 const SERVICE_TOKEN = process.env.SERVICE_TOKEN;
 const CORS_ORIGIN = process.env.CORS_ORIGIN ?? "http://localhost:5173";
-const ADMIN_RISK_URL = process.env.ADMIN_RISK_URL ?? "http://admin-risk:3013";
+const UPSTREAM_MODE = process.env.UPSTREAM_MODE === "docker" ? "docker" : "local";
+const ADMIN_RISK_URL =
+  process.env.ADMIN_RISK_URL ??
+  (UPSTREAM_MODE === "docker" ? "http://admin-risk:3013" : "http://127.0.0.1:3013");
 
 if (!JWT_ACCESS_SECRET || JWT_ACCESS_SECRET.length < 32) {
   console.error("[gateway] JWT_ACCESS_SECRET must be at least 32 characters");
@@ -19,7 +22,6 @@ if (!SERVICE_TOKEN || SERVICE_TOKEN.length < 32) {
 
 /** In Compose every peer is reachable by its service name on the shared
  * network; with `npm run start:all` everything listens on loopback. */
-const UPSTREAM_MODE = process.env.UPSTREAM_MODE === "docker" ? "docker" : "local";
 const SERVICE_HOSTS = {
   auth: process.env.UPSTREAM_AUTH_HOST ?? "auth",
   "admin-risk": process.env.UPSTREAM_ADMIN_RISK_HOST ?? "admin-risk",
@@ -60,6 +62,8 @@ const ROUTES = [
   { prefix: "/v1/promotions", service: "promotions", port: 3022 },
 ];
 
+const DOWNSTREAM_PORTS = [...new Map(ROUTES.map((route) => [route.service, route.port]))];
+
 /** Privileged routes that peer services call with their own service token,
  * not with a player JWT (chat publishing to realtime, for example). */
 const SERVICE_TOKEN_ONLY = ["/internal/events"];
@@ -98,7 +102,7 @@ async function hasPermission(userId, permission, log) {
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
 
 app.addHook("onRequest", async (req, reply) => {
-  if (req.url === "/health") return;
+  if (req.url === "/health" || req.url === "/ready") return;
   reply.header("access-control-allow-origin", CORS_ORIGIN);
   reply.header("access-control-allow-credentials", "true");
   if (req.method === "OPTIONS") {
@@ -111,6 +115,28 @@ app.addHook("onRequest", async (req, reply) => {
 });
 
 app.get("/health", async () => ({ status: "ok", service: "gateway" }));
+
+/** Aggregate readiness for orchestrators and `npm run smoke`: the gateway is
+ * only ready once every downstream service reports its own DB-backed /ready. */
+app.get("/ready", async (_req, reply) => {
+  const checks = await Promise.all(
+    DOWNSTREAM_PORTS.map(async ([service, port]) => {
+      try {
+        const res = await fetch(`http://${upstreamHost(service)}:${port}/ready`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        return { service, ok: res.ok, status: res.status };
+      } catch (err) {
+        return { service, ok: false, error: err.message };
+      }
+    }),
+  );
+  const failed = checks.filter((check) => !check.ok);
+  if (failed.length) {
+    return reply.code(503).send({ status: "not_ready", failed, services: checks.length });
+  }
+  return { status: "ready", services: checks.length };
+});
 
 async function proxy(req, reply) {
   const target = ROUTES.find((route) => req.url.startsWith(route.prefix));
@@ -228,4 +254,14 @@ try {
 } catch (err) {
   app.log.error({ err }, "gateway failed to start");
   process.exit(1);
+}
+
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.once(signal, async () => {
+    try {
+      await app.close();
+    } finally {
+      process.exit(0);
+    }
+  });
 }

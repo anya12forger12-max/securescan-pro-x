@@ -9,7 +9,7 @@ installed, migrated and started as one system.
 
 All fourteen services boot, the six migrations apply cleanly, and the main
 auth / RBAC / wallet / chat / realtime / promotions / Codenames / Gin-rummy /
-audit flows pass end to end through the gateway (27 checks in the validation
+audit flows pass end to end through the gateway (20 checks in the validation
 run).
 
 ## Services
@@ -71,7 +71,8 @@ These are fixed here (each fix is commented inline at the site):
 - **Durable realtime** — events are persisted in `realtime_events` and published
   via `pg_notify`, so SSE polling works across process restarts.
 - **Readiness** — every stateful service, including promotions, exposes
-  `/ready` backed by a database query.
+  `/ready` backed by a database query. The gateway adds an aggregate `/ready`
+  that reports healthy only when all thirteen downstream services are ready.
 - **Migration idempotency** — `npm run migrate` records applied files in
   `schema_migrations` and skips them on subsequent runs.
 
@@ -95,47 +96,56 @@ These are fixed here (each fix is commented inline at the site):
 | `0005_admin_risk.sql` | RBAC roles/assignments, hash-chained admin audit |
 | `0006_realtime.sql` | durable `realtime_events` table |
 
-All six are mounted into Postgres's init directory by compose.
+All six are applied by the one-shot `migrate` service before any application
+starts, on first boot and on every upgrade.
 
-## Quick start (Docker)
+## Deploy with Docker Compose
+
+Requirements: Docker with Compose v2, a public browser origin, and port 3000
+free on the host.
 
 ```bash
 cd coffee/gaming-platform
-cp .env.example .env          # then edit the secrets
+CORS_ORIGIN=https://play.example.com npm run env:init
 docker compose up -d --build
-curl http://localhost:3000/health
+npm run smoke
 ```
 
-The `Dockerfile` installs dependencies from the lockfile at image build time;
-the compose bind mount uses an anonymous `/app/node_modules` volume so no Node
-installation is needed on the host.
+`env:init` generates a fresh Postgres password, JWT signing key and service
+token, writes a `0600` `.env`, and refuses to replace an existing one unless
+`--force` is passed. Compose fails before starting anything if `DATABASE_URL`,
+`JWT_ACCESS_SECRET`, `SERVICE_TOKEN`, `CORS_ORIGIN` or `POSTGRES_PASSWORD` is
+blank.
 
-## TypeScript sources
+Only the gateway is published on `0.0.0.0:3000`. Postgres, Redis and the peer
+services bind to `127.0.0.1` for local administration; all application traffic
+goes through `http://<host>:3000`. The image is self-contained — source,
+migrations and operational scripts are baked in, with no host bind mount.
 
-The seven recovered services keep a typed `src/*.ts` tree alongside the
-compiled `dist/*.js` that Docker and `start-all.js` run. Each service has its
-own `tsconfig.json` extending the shared `tsconfig.base.json` (NodeNext ESM,
-`strict: true`). Shared packages ship `index.d.ts` declarations.
+### Operations
+
+- `docker compose ps` — container state and health.
+- `docker compose logs -f gateway` — edge logs.
+- `docker compose run --rm migrate` — apply migrations manually.
+- `npm run smoke` — gateway liveness, aggregate readiness and auth flow.
+- `docker compose down` — stop, keeping `pgdata` and `redisdata`; add `-v` to
+  destroy data.
+
+For an upgrade, refresh the tree, keep the same `.env`, and run
+`docker compose up -d --build`. The one-shot `migrate` service runs before the
+applications on every recreate, so an existing database volume is upgraded in
+place.
+
+## Run locally from Node
+
+Requires Node 22+ on a native filesystem (npm workspaces create symlinks,
+which FAT/exFAT USB mounts do not support), plus reachable Postgres and Redis.
+The generated `.env` uses Compose hostnames, so override peer URLs for local
+runs. `scripts/start-all.js` pins each service's `PORT` itself.
 
 ```bash
-npm run typecheck                # type-check all seven services, no output
-npm run build                    # compile src/ -> dist/ for all seven services
-npm run build -w @gp/codenames   # compile a single service
-```
-
-The compiled output is committed, so a plain `npm install && npm run start:all`
-needs no compiler. Add `npm run build` to your workflow after editing any
-recovered service's `src/`.
-
-## Quick start (local Node)
-
-Requires Node 22+, a reachable Postgres and Redis. `.env` uses Compose
-hostnames, so override peer URLs for local runs. `scripts/start-all.js` pins
-each service's `PORT` itself.
-
-```bash
-npm install
-export DATABASE_URL=postgresql://gp:gp@127.0.0.1:5432/gaming_platform
+npm ci --omit=dev
+export DATABASE_URL=postgresql://gp:<password>@127.0.0.1:5432/gaming_platform
 export REDIS_URL=redis://127.0.0.1:6379
 export JWT_ACCESS_SECRET='a-long-random-secret-at-least-32-chars'
 export SERVICE_TOKEN='another-long-random-secret-at-least-32-chars'
@@ -143,10 +153,26 @@ export REALTIME_URL=http://127.0.0.1:3010
 export WALLET_URL=http://127.0.0.1:3011
 export RESPONSIBLE_GAMING_URL=http://127.0.0.1:3012
 export ADMIN_RISK_URL=http://127.0.0.1:3013
+export UPSTREAM_MODE=local
 npm run migrate
 npm run check
 npm run start:all
 ```
+
+The compiled service output is committed, so no compiler is needed to run the
+platform. The seven recovered services also keep a typed `src/*.ts` tree and
+per-service `tsconfig.json` extending `tsconfig.base.json`; shared packages
+ship `index.d.ts` declarations.
+
+```bash
+npm run typecheck                # type-check all seven services, no output
+npm run build                    # compile src/ -> dist/ for all seven services
+npm run build -w @gp/codenames   # compile a single service
+npm run validate:compose         # static Compose path/port validation
+```
+
+Add `npm run build` to your workflow after editing a recovered service's
+`src/`.
 
 ## Calling the API
 
@@ -236,17 +262,21 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/jso
 
 ## Validation
 
-- `npm run check` — syntax-checks every JavaScript file.
+- `npm run check` — syntax-checks every JavaScript file outside `node_modules`.
 - `npm run typecheck` — strict type-checks all seven TypeScript services.
-- `npm run validate:compose` — checks Compose paths, ports and service wiring
+- `npm run validate:compose` — checks Compose paths, commands and host ports
   without requiring a Docker daemon.
-- Full HTTP end-to-end suite: auth, RBAC, audit, wallet, chat, realtime,
-  promotions, Codenames, Gin-rummy and leaderboard flows through the gateway.
+- `npm audit --omit=dev` — reports 0 vulnerabilities with the pinned
+  `@fastify/jwt` 10.x and `zod` 4.x dependency set.
+- `npm run smoke` — gateway liveness, aggregate `/ready`, and register/login/me
+  through the gateway. Run it after `docker compose up -d --build`.
 
 ## Known gaps
 
-- Docker/Compose could not be launched in the build environment (no daemon),
-  so it was validated statically plus by running every service directly with
-  local Node and Postgres.
+- The Docker daemon was unavailable in the build environment, so Compose was
+  validated structurally and the same runtime was exercised directly with
+  local Node, Postgres and Redis. Run `npm run smoke` on the target host.
 - Realtime uses Postgres `LISTEN`/`NOTIFY` rather than Redis for fan-out; Redis
-  remains available to shared packages.
+  remains available to shared packages and as a persisted Compose service.
+- The recovered services ship both readable `src/*.ts` and committed
+  `dist/*.js`; the container runs `dist/` unless you rebuild it explicitly.

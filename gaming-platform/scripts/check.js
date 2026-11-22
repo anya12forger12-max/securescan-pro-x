@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 const roots = ["packages", "services", "scripts"];
+const skippedDirectories = new Set(["node_modules", ".git"]);
 const files = [];
 
 async function walk(dir) {
@@ -14,8 +15,11 @@ async function walk(dir) {
   }
   for (const entry of entries) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) await walk(path);
-    else if (entry.name.endsWith(".js")) files.push(path);
+    if (entry.isDirectory()) {
+      if (!skippedDirectories.has(entry.name)) await walk(path);
+    } else if (entry.name.endsWith(".js")) {
+      files.push(path);
+    }
   }
 }
 

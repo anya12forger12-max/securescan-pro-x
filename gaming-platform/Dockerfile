@@ -1,15 +1,22 @@
 FROM node:22-slim
 
+ENV NODE_ENV=production \
+    PORT=3000
+
 WORKDIR /app
 
-# Install once from the lockfile. The anonymous /app/node_modules volume in
-# docker-compose.yml keeps this layer even when the source is bind-mounted.
+# The image is self-contained: source, migrations and operational scripts are
+# all baked in so the same digest can be deployed without a host bind mount.
 COPY package.json package-lock.json ./
 COPY packages ./packages
 COPY services ./services
+COPY scripts ./scripts
+COPY migrations ./migrations
+
 RUN npm ci --omit=dev && npm cache clean --force
 
-ENV NODE_ENV=production
-ENV PORT=3000
+USER node
+STOPSIGNAL SIGTERM
+EXPOSE 3000
 
 CMD ["node", "services/gateway/index.js"]
