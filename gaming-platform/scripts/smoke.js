@@ -30,6 +30,21 @@ await request("all downstream services ready", "/ready");
 // The unified crash game must be behind the gateway, not just running in a
 // container: this probes the player-facing route before any account exists.
 await request("crash round feed", "/v1/crash/rounds/current");
+// Edge abuse controls must be active even before a player logs in.
+try {
+  const limited = await fetch(`${baseUrl}/v1/crash/rounds/current`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  const rateHeader = limited.headers.get("x-ratelimit-limit");
+  results.push({
+    label: "rate limit headers",
+    ok: Boolean(rateHeader),
+    status: limited.status,
+    body: rateHeader ? {} : { message: "missing X-RateLimit-Limit on player route" },
+  });
+} catch (err) {
+  results.push({ label: "rate limit headers", ok: false, status: 0, body: { message: err.message } });
+}
 
 const suffix = randomBytes(6).toString("hex");
 const username = `smoke_${suffix}`;

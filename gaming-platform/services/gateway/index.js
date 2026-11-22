@@ -4,6 +4,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRateLimiter } from "./rate-limit.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
@@ -51,6 +52,20 @@ for (const [name, value] of Object.entries(REQUIRED_SECRETS)) {
     process.exit(1);
   }
 }
+
+/** Player-facing abuse controls. Service-to-service routes are excluded: they
+ * already carry a scoped capability token and have their own budgets. Counts
+ * live in Redis so several gateway replicas share one quota. */
+const RATE_LIMIT_ENABLED = process.env.RATE_LIMIT_ENABLED !== "false";
+const rateLimitConfig = {
+  windowMs: Number(process.env.RATE_LIMIT_WINDOW_MS) || 60_000,
+  authMax: Number(process.env.RATE_LIMIT_AUTH_MAX) || 10,
+  userMax: Number(process.env.RATE_LIMIT_USER_MAX) || 120,
+  mutateMax: Number(process.env.RATE_LIMIT_MUTATE_MAX) || 30,
+  failClosed: process.env.RATE_LIMIT_FAIL_CLOSED === "true",
+  redisUrl: process.env.REDIS_URL,
+};
+const rateLimiter = RATE_LIMIT_ENABLED ? createRateLimiter(rateLimitConfig) : null;
 
 /** In Compose every peer is reachable by its service name on the shared
  * network; with `npm run start:all` everything listens on loopback. */
@@ -244,6 +259,53 @@ app.get("/ready", async (_req, reply) => {
     return reply.code(503).send({ status: "not_ready", failed, services: checks.length });
   }
   return { status: "ready", services: checks.length };
+});
+
+/** Rate-limit player traffic before it reaches any downstream service.
+ * Keys are derived from a verified JWT subject or, for unauthenticated auth
+ * routes, the socket address. A client-supplied x-service-token is never a
+ * valid reason to skip the check. */
+app.addHook("onRequest", async (req, reply) => {
+  if (!rateLimiter) return;
+  const path = req.url.split(/[?#]/, 1)[0];
+  if (!path.startsWith("/v1/") && !path.startsWith("/internal/")) return;
+  if (req.method === "OPTIONS" || path === "/v1/events/stream") return;
+  // Capability-authenticated peer routes are not player traffic.
+  if (path.startsWith("/internal/")) return;
+
+  let limit = rateLimitConfig.userMax;
+  let key;
+  if (path.startsWith("/v1/auth/")) {
+    limit = rateLimitConfig.authMax;
+    key = `ip:${req.ip ?? req.socket?.remoteAddress ?? "unknown"}`;
+  } else {
+    const raw = req.headers.authorization;
+    let userId = null;
+    if (typeof raw === "string" && raw.startsWith("Bearer ")) {
+      try {
+        const decoded = jwt.verify(raw.slice(7), JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
+        if (typeof decoded.userId === "string") userId = decoded.userId;
+      } catch {
+        // An invalid token is still counted by IP; the downstream service
+        // performs the authoritative rejection.
+      }
+    }
+    const mutating = ["POST", "PATCH", "PUT", "DELETE"].includes(req.method);
+    if (mutating) limit = rateLimitConfig.mutateMax;
+    key = userId
+      ? `user:${userId}:${mutating ? "write" : "read"}`
+      : `ip:${req.ip ?? req.socket?.remoteAddress ?? "unknown"}`;
+  }
+
+  const result = await rateLimiter.check(key, limit);
+  reply.header("x-ratelimit-limit", String(result.limit));
+  reply.header("x-ratelimit-remaining", String(result.remaining));
+  reply.header("x-ratelimit-reset", String(Math.ceil(result.resetAt / 1000)));
+  if (!result.allowed) {
+    const retryAfter = Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1000));
+    reply.header("retry-after", String(retryAfter));
+    return reply.code(429).send({ error: "RATE_LIMITED", message: "too many requests", retryAfter });
+  }
 });
 
 async function proxy(req, reply) {
@@ -465,7 +527,11 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
     try {
       await app.close();
     } finally {
-      process.exit(0);
+      try {
+        await rateLimiter?.close();
+      } finally {
+        process.exit(0);
+      }
     }
   });
 }

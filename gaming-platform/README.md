@@ -71,6 +71,10 @@ These are fixed here (each fix is commented inline at the site):
   verified player JWT, and injects only the capability token that route is
   allowed to use. Previously any caller could set `x-user-id: <victim>` and gain
   full impersonation against wallet, promotions, RG and tournaments.
+- **Abuse control at the edge** — the gateway applies Redis-backed sliding-window
+  limits: auth routes per source IP, player reads and writes per verified user.
+  Every limited response carries `X-RateLimit-*` headers and a 429 with
+  `Retry-After`. Peer routes stay exempt because they are capability scoped.
 - **Privileged route gating / audit prefix** — admin routes require a verified
   player token plus an admin-risk RBAC permission; peer-to-peer routes require
   the matching capability token. A failed RBAC check fails closed. The gateway route and
@@ -279,6 +283,18 @@ you need local overrides. Frontend dependencies and `frontend/build` are not
 committed; the Dockerfile reproduces both from `frontend/package-lock.json`.
 
 ## Calling the API
+
+### Rate limits
+
+Player traffic is counted before proxying. `/v1/auth/*` is limited per source IP
+(10 requests per 60s by default); other `/v1/*` routes are limited per verified
+JWT subject (120 reads and 30 writes per 60s). Responses include
+`X-RateLimit-Limit`, `X-RateLimit-Remaining` and `X-RateLimit-Reset`; exceeding
+a limit returns `429` with `Retry-After`. Tune with `RATE_LIMIT_WINDOW_MS`,
+`RATE_LIMIT_AUTH_MAX`, `RATE_LIMIT_USER_MAX` and `RATE_LIMIT_MUTATE_MAX`, or set
+`RATE_LIMIT_ENABLED=false` for local debugging. Counters are shared through
+`REDIS_URL`; if Redis is unavailable the gateway keeps local counters and
+continues serving unless `RATE_LIMIT_FAIL_CLOSED=true`.
 
 ### Auth
 
