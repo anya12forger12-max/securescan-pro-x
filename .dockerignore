@@ -1,0 +1,17 @@
+# Keep build contexts small and never send local secrets to the daemon.
+.git
+.github
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+.coverage
+coverage.xml
+backups/*
+diagnostics/reports/*

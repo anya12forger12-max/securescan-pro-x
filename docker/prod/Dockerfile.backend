@@ -1,0 +1,51 @@
+# Production backend — FastAPI (app.api:app) on Python 3.13
+#
+# Build from the repository root:
+#   docker build -f docker/prod/Dockerfile.backend -t securescan/backend:local .
+#
+# The wheel is installed non-editably; README.md must stay in backend/ because
+# hatchling reads it as the project's long description.
+
+FROM python:3.13-slim AS builder
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /build
+RUN python -m venv /opt/venv
+
+# Copy the whole backend (source + README) before installing: hatchling needs
+# both to build metadata for the non-editable install.
+COPY backend/ ./
+
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir .
+
+
+FROM python:3.13-slim AS runtime
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    SECURESCAN_HOME=/data
+
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+
+RUN groupadd --system --gid 10001 securescan \
+    && useradd --system --uid 10001 --gid securescan \
+       --home-dir /app --shell /usr/sbin/nologin securescan \
+    && mkdir -p /data /app \
+    && chown -R securescan:securescan /data /app
+
+USER securescan
+EXPOSE 8000
+STOPSIGNAL SIGTERM
+
+# /health is defined in app/api/__init__.py and is exempt from rate limiting
+# and audit middleware.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"]
+
+CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]

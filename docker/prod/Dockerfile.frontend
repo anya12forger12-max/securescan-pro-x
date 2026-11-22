@@ -1,0 +1,47 @@
+# Production frontend — Vite/React build served by nginx
+#
+# Build from the repository root:
+#   docker build -f docker/prod/Dockerfile.frontend \
+#     --build-arg VITE_API_URL=/api/v1 -t securescan/frontend:local .
+
+FROM node:22-alpine AS build
+
+WORKDIR /app
+
+# Install from the committed npm lockfile; npm workspaces are not used here.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY frontend/ ./
+
+# VITE_API_URL is embedded in the bundle at build time. "/api/v1" is the
+# same-origin path proxied by nginx.conf; use an absolute URL for an external
+# backend (and add the browser origin to the backend CORS allowlist).
+ARG VITE_API_URL=/api/v1
+ENV VITE_API_URL=${VITE_API_URL}
+
+RUN npm run build
+
+
+FROM nginx:1.27-alpine AS runtime
+
+# Full nginx config: unprivileged port 8080, SPA history fallback, /health and
+# an optional /api reverse proxy that resolves "backend" only at request time.
+COPY docker/prod/nginx.conf /etc/nginx/nginx.conf
+
+RUN rm -f /etc/nginx/conf.d/default.conf \
+    && mkdir -p /tmp/nginx \
+    && chown -R nginx:nginx /tmp/nginx /usr/share/nginx/html
+
+COPY --from=build --chown=nginx:nginx /app/dist/ /usr/share/nginx/html/
+
+# nginx master runs as the unprivileged nginx user too; all writable paths
+# (pid, temp dirs, logs) are in /tmp or standard streams (see nginx.conf).
+USER nginx
+EXPOSE 8080
+STOPSIGNAL SIGQUIT
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+
+CMD ["nginx", "-g", "daemon off;"]

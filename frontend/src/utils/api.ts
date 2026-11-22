@@ -2,7 +2,9 @@
  * API Client for SecureScan Pro X
  */
 
-const BASE_URL = "http://localhost:8000/api/v1";
+// Baked in at build time by Vite. Defaults to the local desktop backend; the
+// production nginx image proxies /api to the Compose backend service.
+const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000/api/v1";
 
 class ApiError extends Error {
   status: number;

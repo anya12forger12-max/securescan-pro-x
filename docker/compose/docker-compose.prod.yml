@@ -1,0 +1,64 @@
+# Production stack — SecureScan Pro X desktop/API product.
+#
+# Run from the repository root:
+#   cp .env.example .env
+#   docker compose -f docker/compose/docker-compose.prod.yml up -d --build
+#
+# The gaming-platform product has its own stack at
+# gaming-platform/docker-compose.yml; it is deployed separately.
+
+services:
+  backend:
+    build:
+      context: ../..
+      dockerfile: docker/prod/Dockerfile.backend
+    image: securescan/backend:local
+    restart: unless-stopped
+    stop_grace_period: 10s
+    # Relative to this Compose file: repository root .env (gitignored).
+    env_file:
+      - ../../.env
+    environment:
+      SECURESCAN_HOME: /data
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - securescan_data:/data
+    # Loopback only: browsers reach the API through the frontend's /api proxy.
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: docker/prod/Dockerfile.frontend
+      args:
+        # Baked into the JS bundle. /api/v1 uses nginx's same-origin proxy.
+        VITE_API_URL: ${VITE_API_URL:-/api/v1}
+    image: securescan/frontend:local
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  securescan_data:
