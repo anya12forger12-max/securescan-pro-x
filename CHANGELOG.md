@@ -41,9 +41,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Privacy policy with local-first guarantees
 - Threat model documentation
 - Risk register
+- `gaming-platform/`: fourteen-service Fastify backend with a single gateway,
+  shared `@gp/*` packages, six Postgres migrations and a self-contained
+  production Compose stack
+- Strict TypeScript sources for the seven recovered game services with a
+  verified `src/ → dist/` build path
+- Gaming-platform architecture documentation in `ARCHITECTURE.md` and
+  `docs/architecture/gaming-platform.md`
 
 ### Changed
 - N/A (initial release)
+- Repository documentation, roadmap, Docker guidance and CI now cover both
+  the desktop assessment product and the gaming-platform backend
+- Gaming-platform infrastructure: fleet-wide `DB_POOL_MAX` with a validated
+  Postgres connection budget, 25-second graceful shutdown, gateway-only public
+  exposure, container resource limits and `/ready` healthchecks
 
 ### Deprecated
 - N/A

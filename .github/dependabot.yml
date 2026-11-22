@@ -75,3 +75,22 @@ updates:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
+
+  # Node.js gaming-platform backend
+  - package-ecosystem: "npm"
+    directory: "/gaming-platform"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "MalwareHashChecker-Pro/maintainers"
+    labels:
+      - "dependencies"
+      - "npm"
+      - "gaming-platform"
+    commit-message:
+      prefix: "deps"
+      include: "scope"

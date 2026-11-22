@@ -147,6 +147,32 @@ Become the leading open-source, privacy-first, defensive security assessment pla
 - [ ] Example assessments
 - [ ] Best practices guide
 
+## Phase 8: Gaming Platform (delivered 2026-11-22)
+
+A separate distributed backend shipped in [`gaming-platform/`](gaming-platform/README.md).
+It is independently deployable from the desktop assessment app.
+
+- [x] Gateway plus thirteen downstream Fastify services (14 total)
+- [x] Shared `@gp/config`, `@gp/shared-types` and `@gp/event-bus` packages
+- [x] Six idempotent Postgres migrations and a one-shot migrate service
+- [x] Fail-closed gateway identity, service-token and RBAC enforcement
+- [x] Playable Codenames, Gin-rummy and Pictionary state machines
+- [x] Durable realtime events with Postgres `LISTEN`/`NOTIFY`
+- [x] Strict TypeScript `src/` for all seven recovered services with a verified `src/ → dist/` build
+- [x] Bootstrap tooling: `env:init`, `migrate`, `smoke`, `start:all`
+- [x] Production Compose stack with generated secrets and gateway-only exposure
+- [x] Infrastructure hardening: bounded DB pools, graceful shutdown, container limits, `/ready` probes, advisory-locked migrations
+- [x] Validation: 27/27 end-to-end checks, 7/7 service typechecks, static Compose validation, zero npm audit findings
+
+### Remaining work
+
+- [ ] Player-facing web/mobile client
+- [ ] Gateway rate limiting and per-user quotas
+- [ ] Kubernetes manifests / Helm chart
+- [ ] Redis-backed realtime fan-out for multi-instance deployments
+- [ ] Metrics, tracing and alerting integration
+- [ ] Load and soak testing on a host with a Docker daemon
+
 ## Future Considerations
 
 - PostgreSQL support

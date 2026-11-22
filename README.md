@@ -179,6 +179,8 @@ securescan-pro-x/
 | Document | Description |
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture and design decisions |
+| [Gaming platform](gaming-platform/README.md) | Gaming-platform services, deployment, RBAC and API |
+| [Gaming platform architecture](docs/architecture/gaming-platform.md) | Distributed subsystem design |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 | [SECURITY.md](SECURITY.md) | Security policy and vulnerability reporting |
 | [PRIVACY.md](PRIVACY.md) | Privacy policy and data handling |
@@ -210,6 +212,7 @@ bash install.sh
 | **Knowledge base** | Local vulnerability intelligence service |
 | **Plugin framework** | Python plugin interfaces and manager; built-in plugins are not shipped yet |
 | **Frontend** | Login, dashboard, assets, workspaces, assessments, scanner and settings pages |
+| **Gaming platform** | 14-service Fastify backend, gateway RBAC, six game/peer services, durable realtime, six migrations and a production Compose stack |
 
 Built-in scanner checks, a report-builder UI, localization and desktop installers
 are still on the [roadmap](ROADMAP.md).

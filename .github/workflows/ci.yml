@@ -150,6 +150,30 @@ jobs:
           path: frontend/dist
           if-no-files-found: warn
 
+  gaming-platform:
+    name: Gaming Platform (checks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        working-directory: gaming-platform
+        run: npm ci
+      - name: Syntax check
+        working-directory: gaming-platform
+        run: npm run check
+      - name: TypeScript typecheck
+        working-directory: gaming-platform
+        run: npm run typecheck
+      - name: Compose validation
+        working-directory: gaming-platform
+        run: npm run validate:compose
+      - name: Dependency audit
+        working-directory: gaming-platform
+        run: npm audit --omit=dev
+
   docker-build:
     name: Docker Build
     runs-on: ubuntu-latest

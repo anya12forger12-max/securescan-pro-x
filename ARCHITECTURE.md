@@ -297,6 +297,7 @@ Later tiers override earlier tiers.
 | Accessibility | WCAG compliance | axe-core |
 | Security | SAST/DAST | Bandit, Safety |
 | Performance | Benchmarks | pytest-benchmark |
+| Gaming platform | Gateway/RBAC/gameplay end-to-end | Python HTTP suite through the gateway |
 
 ## 12. Deployment Models
 
@@ -305,9 +306,50 @@ Later tiers override earlier tiers.
 | Desktop App | Native Tauri binary | All platforms |
 | CLI | Python package + binary | All platforms |
 | Docker | Containerized services | Server/cloud |
+| Gaming platform | 14-service Fastify/Postgres stack behind one gateway | Server/cloud |
 | Source | Development install | Contributors |
 
-## 13. Future Considerations
+## 13. Gaming Platform Subsystem
+
+The repository also contains an independently deployable, service-oriented
+backend in `gaming-platform/`. It is deliberately separate from the layered
+desktop product above: that product is local-first and single-process, while
+the gaming platform is a networked multi-service system. See
+[docs/architecture/gaming-platform.md](docs/architecture/gaming-platform.md)
+and [gaming-platform/README.md](gaming-platform/README.md) for the full details.
+
+```
+                      ┌──────────────────────────┐
+   browser clients ──▶ │ gateway (:3000)          │
+                      │ JWT verify · RBAC · proxy │
+                      └────────────┬─────────────┘
+                                   │ service-token / verified x-user-id
+        ┌──────────────┬───────────┼───────────┬──────────────┐
+        ▼              ▼           ▼           ▼              ▼
+     auth         admin-risk    wallet    realtime      game services
+    (:3015)        (:3013)     (:3011)    (:3010)     (:3016–3022)
+        └──────────────┴───────────┼───────────┴──────────────┘
+                                   ▼
+                     PostgreSQL (six migrations) · Redis
+```
+
+### 13.1 Design rules
+
+1. **Single public entry point** — only the gateway publishes a host port;
+   all thirteen internal services are reachable only on the Compose network.
+2. **Identity is gateway-owned** — caller-supplied `x-user-id`, `x-username`
+   and `x-service-token` are stripped. Player identity is asserted only from a
+   verified HS256 JWT; peer calls require a configured service token.
+3. **Fail closed** — privileged routes need both a verified player JWT and a
+   successful admin-risk permission check. If admin-risk is unavailable, the
+   request is denied.
+4. **Bounded resources** — one fleet-wide `DB_POOL_MAX` sizes every pool,
+   `max_connections` is raised to match, containers have CPU/memory limits, and
+   SIGTERM drains requests before pools close.
+5. **Typed and reproducible** — seven recovered services carry strict
+   TypeScript sources that compile to the committed `dist/` runtime output.
+
+## 14. Future Considerations
 
 - PostgreSQL support via repository abstraction
 - Team collaboration via shared workspace protocol

@@ -160,6 +160,25 @@ export function Button({
 }
 ```
 
+### TypeScript (Gaming platform)
+
+- **Location**: `gaming-platform/services/<name>/src/`
+- **Style**: strict TypeScript, NodeNext ESM, relative imports keep `.js` extensions
+- **Build**: `npm run typecheck` then `npm run build` in `gaming-platform/`
+- **Runtime**: the committed `dist/*.js` is what Docker executes; always rebuild it after editing `src/`
+- **Comments**: recovered services keep their inline fix comments as historical context
+- **Shared code**: put common environment, error and money helpers in `packages/@gp/*`
+- **Validation**: also run `npm run check` and `npm run validate:compose`
+
+```bash
+cd gaming-platform
+npm ci
+npm run typecheck
+npm run build
+npm run check
+npm run validate:compose
+```
+
 ### General Rules
 
 1. **No comments** unless requested or required for complex logic

@@ -18,13 +18,33 @@ cd <repo>
 
 Copy `.env.example` to `.env` (or `backend/.env`) and fill in values.
 
+For the gaming platform, generate its separate secrets file instead:
+
+```bash
+cd gaming-platform
+CORS_ORIGIN=https://play.example.com npm run env:init
+```
+
 ## Running
 
-See README.md for run commands.
+See README.md for the desktop app commands. For the gaming platform:
+
+```bash
+cd gaming-platform
+docker compose up -d --build
+npm run smoke
+```
 
 ## Tests
 
-See README.md for test commands.
+See README.md for desktop app test commands. For the gaming platform:
+
+```bash
+cd gaming-platform
+npm run check
+npm run typecheck
+npm run validate:compose
+```
 
 ## First contribution
 

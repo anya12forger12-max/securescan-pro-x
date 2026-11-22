@@ -58,6 +58,7 @@ nav:
     - Layer Architecture: architecture/layers.md
     - Security: architecture/security.md
     - Plugin System: architecture/plugins.md
+    - Gaming Platform: architecture/gaming-platform.md
   - Guides:
     - Getting Started: guides/getting-started.md
     - Configuration: guides/configuration.md
