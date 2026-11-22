@@ -1,0 +1,21 @@
+import type { z } from "zod";
+import type { FastifyInstance } from "fastify";
+
+/** Base environment schema shared by every service. */
+export declare const baseEnvSchema: z.ZodObject<{
+  SERVICE_TOKEN: z.ZodString;
+  NODE_ENV: z.ZodDefault<z.ZodEnum<["development", "test", "production"]>>;
+}>;
+
+/** Parse process.env against a service schema; exits the process on failure. */
+export declare function loadEnv<T extends z.ZodTypeAny>(schema: T): z.infer<T>;
+
+/** Attach the platform's uniform JSON error envelope to a Fastify app. */
+export declare function registerErrorHandler(app: FastifyInstance): void;
+
+/** fetch with an abort timeout. */
+export declare function fetchWithTimeout(
+  url: string,
+  options?: RequestInit,
+  timeoutMs?: number,
+): Promise<Response>;

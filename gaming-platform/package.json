@@ -1,0 +1,51 @@
+{
+  "name": "gp-gaming-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Gaming platform reconstructed from the compiled services in coffee/gaming-platform",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "migrate": "node scripts/migrate.js",
+    "check": "node scripts/check.js",
+    "build": "node scripts/build.js",
+    "typecheck": "node scripts/build.js --check",
+    "validate:compose": "node scripts/validate-compose.js",
+    "start:gateway": "npm run start -w @gp/gateway",
+    "start:auth": "npm run start -w @gp/auth",
+    "start:admin-risk": "npm run start -w @gp/admin-risk",
+    "start:realtime": "npm run start -w @gp/realtime",
+    "start:wallet": "npm run start -w @gp/wallet",
+    "start:responsible-gaming": "npm run start -w @gp/responsible-gaming",
+    "start:tournaments": "npm run start -w @gp/tournaments",
+    "start:chat": "npm run start -w @gp/chat",
+    "start:codenames": "npm run start -w @gp/codenames",
+    "start:game-engine": "npm run start -w @gp/game-engine",
+    "start:gin-rummy": "npm run start -w @gp/gin-rummy",
+    "start:leaderboard": "npm run start -w @gp/leaderboard",
+    "start:pictionary": "npm run start -w @gp/pictionary",
+    "start:promotions": "npm run start -w @gp/promotions",
+    "start:all": "node scripts/start-all.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@fastify/jwt": "^9.0.3",
+    "decimal.js": "^10.5.0",
+    "fastify": "^5.2.1",
+    "ioredis": "^5.4.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,173 @@
+name: gaming-platform
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gp_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-gaming_platform}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations/0001_init.sql:/docker-entrypoint-initdb.d/0001_init.sql:ro
+      - ./migrations/0002_peer_services.sql:/docker-entrypoint-initdb.d/0002_peer_services.sql:ro
+      - ./migrations/0003_gameplay.sql:/docker-entrypoint-initdb.d/0003_gameplay.sql:ro
+      - ./migrations/0004_auth.sql:/docker-entrypoint-initdb.d/0004_auth.sql:ro
+      - ./migrations/0005_admin_risk.sql:/docker-entrypoint-initdb.d/0005_admin_risk.sql:ro
+      - ./migrations/0006_realtime.sql:/docker-entrypoint-initdb.d/0006_realtime.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gp} -d ${POSTGRES_DB:-gaming_platform}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gateway:
+    <<: &service
+      build: .
+      working_dir: /app
+      volumes:
+        - .:/app
+        - /app/node_modules
+      env_file: .env
+      depends_on:
+        postgres:
+          condition: service_healthy
+        redis:
+          condition: service_healthy
+      healthcheck:
+        # node:22-slim has no curl; use the runtime that is already present.
+        test:
+          - CMD
+          - node
+          - -e
+          - "fetch('http://127.0.0.1:'+process.env.PORT+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        interval: 10s
+        timeout: 3s
+        retries: 6
+        start_period: 10s
+    command: node services/gateway/index.js
+    environment:
+      PORT: 3000
+      # Services are siblings on the Compose network, not loopback processes.
+      UPSTREAM_MODE: docker
+    ports:
+      - "3000:3000"
+
+  auth:
+    <<: *service
+    command: node services/auth/index.js
+    environment:
+      PORT: 3015
+    ports:
+      - "3015:3015"
+
+  admin-risk:
+    <<: *service
+    command: node services/admin-risk/index.js
+    environment:
+      PORT: 3013
+    ports:
+      - "3013:3013"
+
+  realtime:
+    <<: *service
+    command: node services/realtime/index.js
+    environment:
+      PORT: 3010
+    ports:
+      - "3010:3010"
+
+  wallet:
+    <<: *service
+    command: node services/wallet/index.js
+    environment:
+      PORT: 3011
+    ports:
+      - "3011:3011"
+
+  responsible-gaming:
+    <<: *service
+    command: node services/responsible-gaming/index.js
+    environment:
+      PORT: 3012
+    ports:
+      - "3012:3012"
+
+  tournaments:
+    <<: *service
+    command: node services/tournaments/index.js
+    environment:
+      PORT: 3014
+    ports:
+      - "3014:3014"
+
+  chat:
+    <<: *service
+    command: node services/chat/dist/index.js
+    environment:
+      PORT: 3016
+    ports:
+      - "3016:3016"
+
+  codenames:
+    <<: *service
+    command: node services/codenames/dist/index.js
+    environment:
+      PORT: 3017
+    ports:
+      - "3017:3017"
+
+  game-engine:
+    <<: *service
+    command: node services/game-engine/dist/index.js
+    environment:
+      PORT: 3018
+    ports:
+      - "3018:3018"
+
+  gin-rummy:
+    <<: *service
+    command: node services/gin-rummy/dist/index.js
+    environment:
+      PORT: 3019
+    ports:
+      - "3019:3019"
+
+  leaderboard:
+    <<: *service
+    command: node services/leaderboard/dist/index.js
+    environment:
+      PORT: 3020
+    ports:
+      - "3020:3020"
+
+  pictionary:
+    <<: *service
+    command: node services/pictionary/dist/index.js
+    environment:
+      PORT: 3021
+    ports:
+      - "3021:3021"
+
+  promotions:
+    <<: *service
+    command: node services/promotions/dist/index.js
+    environment:
+      PORT: 3022
+    ports:
+      - "3022:3022"
+
+volumes:
+  pgdata:

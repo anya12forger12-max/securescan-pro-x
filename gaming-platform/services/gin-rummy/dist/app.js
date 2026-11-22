@@ -1,0 +1,357 @@
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import Fastify from "fastify";
+import cors from "@fastify/cors";
+import jwt from "@fastify/jwt";
+import { getPool, closePool, createGame, getGame, getGameForUpdate, joinGame, setGameStatus, updateGameState, } from "./db.js";
+/**
+ * The request's route path.
+ *
+ * Fastify 4 exposes it as `req.routerPath`; Fastify 5 removed that and
+ * answers `req.routeOptions.url`. The service is on one of them depending
+ * on which copy it was built from, and a probe that silently stopped
+ * matching is how a container ends up "unhealthy" while serving perfectly.
+ */
+function requestPath(req) {
+    return String(req.routeOptions?.url ?? req.routerPath ?? req.url ?? "");
+}
+function headerBearer(value) {
+    return typeof value === "string" && value.startsWith("Bearer ") ? value.slice(7) : null;
+}
+const CreateGameSchema = z.object({
+    session_id: z.string().uuid(),
+});
+const JoinGameSchema = z.object({
+    id: z.string().uuid(),
+});
+const CARD_PATTERN = /^(10|[2-9JQKA])[SHDC]$/;
+const DrawSchema = z.object({
+    source: z.enum(["stock", "discard"]),
+});
+const DiscardSchema = z.object({
+    card: z.string().regex(CARD_PATTERN),
+});
+// Ace is low-only for runs: A-2-3 works, Q-K-A does not.
+const RANK_ORDER = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+function cardParts(card) {
+    const match = CARD_PATTERN.exec(card);
+    return match ? { rank: match[1], suit: match[2] } : null;
+}
+function isValidMeld(group) {
+    if (group.length < 3)
+        return false;
+    const parts = group.map(cardParts);
+    if (parts.some((part) => part === null))
+        return false;
+    const ranks = parts.map((part) => part.rank);
+    // A set is any three or more cards of the same rank, suits ignored.
+    if (ranks.every((rank) => rank === ranks[0]))
+        return true;
+    // Otherwise every card must share a suit and climb one rank at a time.
+    if (new Set(parts.map((part) => part.suit)).size !== 1)
+        return false;
+    const order = ranks.map((rank) => RANK_ORDER.indexOf(rank));
+    return order.every((rank, index) => index === 0 || rank === order[index - 1] + 1);
+}
+const MeldSchema = z.object({
+    melds: z.array(z.array(z.string().regex(CARD_PATTERN))).min(1),
+}).superRefine((value, ctx) => {
+    value.melds.forEach((group, index) => {
+        if (!isValidMeld(group)) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["melds", index],
+                message: `melds[${index}] must be a set (>=3 cards of the same rank) or a run (>=3 consecutive ranks of one suit, ace low)`,
+            });
+        }
+    });
+});
+// A rejected move must not leave a transaction open, so every move route uses
+// the same rollback-and-respond path.
+async function rejectMove(client, reply, code, error, message) {
+    await client.query("ROLLBACK");
+    return reply.code(code).send({ error, message });
+}
+export async function buildGinRummyService(env) {
+    const app = Fastify({ logger: { level: env.LOG_LEVEL } });
+    await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
+    await app.register(jwt, {
+        secret: env.JWT_ACCESS_SECRET,
+        sign: { expiresIn: Math.floor(900) },
+    });
+    // Auth middleware
+    app.addHook("onRequest", async (req, reply) => {
+        // the probes are not player calls: a container that cannot be probed
+        // cannot be reported ready
+        if (requestPath(req) === "/health" || requestPath(req) === "/ready")
+            return;
+        try {
+            const token = req.headers.authorization?.replace("Bearer ", "");
+            if (!token) {
+                return reply.code(401).send({ error: "UNAUTHORIZED", message: "missing bearer token" });
+            }
+            await app.jwt.verify(token);
+        }
+        catch {
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid or expired token" });
+        }
+    });
+    // ---------- create game ----------
+    app.post("/v1/gin-rummy/games", async (req, reply) => {
+        const parsed = CreateGameSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return reply.code(400).send({ error: "VALIDATION_ERROR", message: parsed.error.flatten() });
+        }
+        const authHeader = req.headers.authorization;
+        if (!authHeader) {
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "missing bearer token" });
+        }
+        const token = authHeader.replace("Bearer ", "");
+        const decoded = await app.jwt.verify(token);
+        const pool = getPool(env.DATABASE_URL);
+        const game = await createGame(pool, {
+            id: randomUUID(),
+            session_id: parsed.data.session_id,
+            player1_id: decoded.userId,
+        });
+        return reply.code(201).send({ game });
+    });
+    // ---------- get game ----------
+    app.get("/v1/gin-rummy/games/:id", async (req, reply) => {
+        const { id } = req.params;
+        const pool = getPool(env.DATABASE_URL);
+        const game = await getGame(pool, id);
+        if (!game) {
+            return reply.code(404).send({ error: "GAME_NOT_FOUND", message: "game not found" });
+        }
+        return reply.send({ game });
+    });
+    // ---------- join game ----------
+    app.post("/v1/gin-rummy/games/:id/join", async (req, reply) => {
+        const parsed = JoinGameSchema.safeParse(req.params);
+        if (!parsed.success) {
+            return reply.code(400).send({ error: "VALIDATION_ERROR", message: parsed.error.flatten() });
+        }
+        const authHeader = req.headers.authorization;
+        if (!authHeader) {
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "missing bearer token" });
+        }
+        const token = authHeader.replace("Bearer ", "");
+        const decoded = await app.jwt.verify(token);
+        const pool = getPool(env.DATABASE_URL);
+        const game = await getGame(pool, parsed.data.id);
+        if (!game) {
+            return reply.code(404).send({ error: "GAME_NOT_FOUND", message: "game not found" });
+        }
+        if (game.status !== "waiting") {
+            return reply.code(409).send({ error: "GAME_NOT_WAITING", message: "game is not waiting for players" });
+        }
+        const updated = await joinGame(pool, parsed.data.id, decoded.userId);
+        return reply.send({ game: updated });
+    });
+    // ---------- draw a card ----------
+    app.post("/v1/gin-rummy/games/:id/draw", async (req, reply) => {
+        const parsed = DrawSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return reply.code(400).send({ error: "VALIDATION_ERROR", message: parsed.error.flatten() });
+        }
+        const { id } = req.params;
+        const token = headerBearer(req.headers.authorization);
+        if (!token)
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "missing bearer token" });
+        let decoded;
+        try {
+            decoded = await app.jwt.verify(token);
+        }
+        catch {
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid or expired token" });
+        }
+        const pool = getPool(env.DATABASE_URL);
+        const client = await pool.connect();
+        try {
+            // Lock the game for the whole move: two simultaneous draws must not
+            // read the same top of the stock pile.
+            await client.query("BEGIN");
+            const game = await getGameForUpdate(client, id);
+            if (!game)
+                return await rejectMove(client, reply, 404, "GAME_NOT_FOUND", "game not found");
+            if (game.status !== "active" || !game.player2_id)
+                return await rejectMove(client, reply, 409, "GAME_NOT_ACTIVE", "game is not active");
+            if (game.current_turn !== decoded.userId)
+                return await rejectMove(client, reply, 403, "NOT_YOUR_TURN", "it is not your turn");
+            if (game.has_drawn)
+                return await rejectMove(client, reply, 409, "MUST_DISCARD_FIRST", "discard before drawing again");
+            const handKey = game.player1_id === decoded.userId ? "player1_hand" : "player2_hand";
+            const hand = [...(game[handKey] ?? [])];
+            const sourceKey = parsed.data.source === "stock" ? "stock_pile" : "discard_pile";
+            const pile = [...(game[sourceKey] ?? [])];
+            if (pile.length === 0)
+                return await rejectMove(client, reply, 409, "EMPTY_PILE", `${parsed.data.source} pile is empty`);
+            // Stock is dealt from the front; the discard pile is taken from the top.
+            const card = parsed.data.source === "stock" ? pile.shift() : pile.pop();
+            hand.push(card);
+            // has_drawn records the owed discard; it is cleared by /discard.
+            const updated = await updateGameState(client, id, { [handKey]: hand, [sourceKey]: pile, has_drawn: true });
+            await client.query("COMMIT");
+            return reply.send({ game: updated, card });
+        }
+        catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        }
+        finally {
+            client.release();
+        }
+    });
+    // ---------- discard a card ----------
+    app.post("/v1/gin-rummy/games/:id/discard", async (req, reply) => {
+        const parsed = DiscardSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return reply.code(400).send({ error: "VALIDATION_ERROR", message: parsed.error.flatten() });
+        }
+        const { id } = req.params;
+        const token = headerBearer(req.headers.authorization);
+        if (!token)
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "missing bearer token" });
+        let decoded;
+        try {
+            decoded = await app.jwt.verify(token);
+        }
+        catch {
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid or expired token" });
+        }
+        const pool = getPool(env.DATABASE_URL);
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const game = await getGameForUpdate(client, id);
+            if (!game)
+                return await rejectMove(client, reply, 404, "GAME_NOT_FOUND", "game not found");
+            if (game.status !== "active" || !game.player2_id)
+                return await rejectMove(client, reply, 409, "GAME_NOT_ACTIVE", "game is not active");
+            if (game.current_turn !== decoded.userId)
+                return await rejectMove(client, reply, 403, "NOT_YOUR_TURN", "it is not your turn");
+            if (!game.has_drawn)
+                return await rejectMove(client, reply, 409, "MUST_DRAW_FIRST", "draw a card before discarding");
+            const handKey = game.player1_id === decoded.userId ? "player1_hand" : "player2_hand";
+            const hand = [...(game[handKey] ?? [])];
+            const cardIndex = hand.indexOf(parsed.data.card);
+            if (cardIndex === -1)
+                return await rejectMove(client, reply, 409, "CARD_NOT_IN_HAND", "card is not in your hand");
+            hand.splice(cardIndex, 1);
+            const discardPile = [...(game.discard_pile ?? []), parsed.data.card];
+            // A discard hands the turn to the only other player in the game.
+            const nextTurn = game.current_turn === game.player1_id ? game.player2_id : game.player1_id;
+            const updated = await updateGameState(client, id, {
+                [handKey]: hand,
+                discard_pile: discardPile,
+                has_drawn: false,
+                current_turn: nextTurn,
+            });
+            await client.query("COMMIT");
+            return reply.send({ game: updated });
+        }
+        catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        }
+        finally {
+            client.release();
+        }
+    });
+    // ---------- declare melds and win ----------
+    app.post("/v1/gin-rummy/games/:id/meld", async (req, reply) => {
+        const parsed = MeldSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return reply.code(400).send({ error: "VALIDATION_ERROR", message: parsed.error.flatten() });
+        }
+        const { id } = req.params;
+        const token = headerBearer(req.headers.authorization);
+        if (!token)
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "missing bearer token" });
+        let decoded;
+        try {
+            decoded = await app.jwt.verify(token);
+        }
+        catch {
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid or expired token" });
+        }
+        const pool = getPool(env.DATABASE_URL);
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            const game = await getGameForUpdate(client, id);
+            if (!game)
+                return await rejectMove(client, reply, 404, "GAME_NOT_FOUND", "game not found");
+            if (game.status !== "active" || !game.player2_id)
+                return await rejectMove(client, reply, 409, "GAME_NOT_ACTIVE", "game is not active");
+            if (game.current_turn !== decoded.userId)
+                return await rejectMove(client, reply, 403, "NOT_YOUR_TURN", "it is not your turn");
+            const hand = game.player1_id === decoded.userId ? game.player1_hand : game.player2_hand;
+            const meldedCards = parsed.data.melds.flat();
+            // A card can only be laid down once, even if it appears in two groups.
+            if (new Set(meldedCards).size !== meldedCards.length) {
+                return await rejectMove(client, reply, 400, "VALIDATION_ERROR", { formErrors: ["a card cannot be used in more than one meld"], fieldErrors: {} });
+            }
+            if (meldedCards.some((card) => !(hand ?? []).includes(card))) {
+                return await rejectMove(client, reply, 409, "CARD_NOT_IN_HAND", "every melded card must be in your hand");
+            }
+            await setGameStatus(client, id, "ended", decoded.userId);
+            const updated = await getGame(client, id);
+            await client.query("COMMIT");
+            return reply.send({ game: updated });
+        }
+        catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        }
+        finally {
+            client.release();
+        }
+    });
+    // ---------- end game ----------
+    app.post("/v1/gin-rummy/games/:id/end", async (req, reply) => {
+        const { id } = req.params;
+        const body = z.object({ winner_id: z.string().uuid().optional() }).safeParse(req.body);
+        if (!body.success) {
+            return reply.code(400).send({ error: "VALIDATION_ERROR", message: body.error.flatten() });
+        }
+        const token = headerBearer(req.headers.authorization);
+        if (!token)
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "missing bearer token" });
+        let decoded;
+        try {
+            decoded = await app.jwt.verify(token);
+        }
+        catch {
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid or expired token" });
+        }
+        const pool = getPool(env.DATABASE_URL);
+        const game = await getGame(pool, id);
+        if (!game)
+            return reply.code(404).send({ error: "GAME_NOT_FOUND", message: "game not found" });
+        if (decoded.userId !== game.player1_id && decoded.userId !== game.player2_id)
+            return reply.code(403).send({ error: "FORBIDDEN", message: "only players may end a game" });
+        const winnerId = body.data.winner_id ?? null;
+        if (winnerId && winnerId !== game.player1_id && winnerId !== game.player2_id)
+            return reply.code(400).send({ error: "VALIDATION_ERROR", message: "winner must be a player in the game" });
+        await setGameStatus(pool, id, "ended", winnerId);
+        return reply.send({ ok: true });
+    });
+    // ---- health and readiness ----
+    app.get("/health", async () => ({ status: "ok", service: "gin-rummy" }));
+    app.get("/ready", async (_req, reply) => {
+        try {
+            const pool = getPool(env.DATABASE_URL);
+            await pool.query("SELECT 1");
+            return reply.code(200).send({ status: "ready" });
+        }
+        catch {
+            return reply.code(503).send({ status: "not_ready", reason: "database unavailable" });
+        }
+    });
+    app.addHook("onClose", async () => {
+        await closePool();
+    });
+    return app;
+}
