@@ -346,7 +346,8 @@ export async function buildGinRummyService(env) {
             if (remaining.length > 0) {
                 return await rejectMove(client, reply, 409, "INCOMPLETE_HAND", "every card in your hand must belong to a meld");
             }
-            await setGameStatus(client, id, "ended", decoded.userId);
+            if (!(await setGameStatus(client, id, "ended", decoded.userId, "active")))
+                return await rejectMove(client, reply, 409, "GAME_NOT_ACTIVE", "game is not active");
             const updated = await getGame(client, id);
             await client.query("COMMIT");
             return reply.send({ game: publicGame(updated, decoded.userId) });
@@ -377,18 +378,35 @@ export async function buildGinRummyService(env) {
             return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid or expired token" });
         }
         const pool = getPool(env.DATABASE_URL);
-        const game = await getGame(pool, id);
-        if (!game)
-            return reply.code(404).send({ error: "GAME_NOT_FOUND", message: "game not found" });
-        if (decoded.userId !== game.player1_id && decoded.userId !== game.player2_id)
-            return reply.code(403).send({ error: "FORBIDDEN", message: "only players may end a game" });
-        if (game.status !== "active" || !game.player2_id)
-            return reply.code(409).send({ error: "GAME_NOT_ACTIVE", message: "game is not active" });
-        // Ending is a concession, not a way to choose an arbitrary winner. A
-        // validated win comes from /meld, which sets the winner from the hand.
-        const winnerId = decoded.userId === game.player1_id ? game.player2_id : game.player1_id;
-        await setGameStatus(pool, id, "ended", winnerId);
-        return reply.send({ ok: true });
+        const client = await pool.connect();
+        try {
+            await client.query("BEGIN");
+            // Lock the row: a /meld win that committed while this request was
+            // waiting must not be overwritten by a stale concession read.
+            const game = await getGameForUpdate(client, id);
+            if (!game)
+                return await rejectMove(client, reply, 404, "GAME_NOT_FOUND", "game not found");
+            if (decoded.userId !== game.player1_id && decoded.userId !== game.player2_id)
+                return await rejectMove(client, reply, 403, "FORBIDDEN", "only players may end a game");
+            if (game.status !== "active" || !game.player2_id)
+                return await rejectMove(client, reply, 409, "GAME_NOT_ACTIVE", "game is not active");
+            // Ending is a concession, not a way to choose an arbitrary winner. A
+            // validated win comes from /meld, which sets the winner from the hand.
+            const winnerId = decoded.userId === game.player1_id ? game.player2_id : game.player1_id;
+            if (body.data.winner_id && body.data.winner_id !== winnerId)
+                return await rejectMove(client, reply, 409, "INVALID_WINNER", "winner_id may only name the opponent");
+            if (!(await setGameStatus(client, id, "ended", winnerId, "active")))
+                return await rejectMove(client, reply, 409, "GAME_NOT_ACTIVE", "game is not active");
+            await client.query("COMMIT");
+            return reply.send({ ok: true });
+        }
+        catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+        }
+        finally {
+            client.release();
+        }
     });
     // ---- health and readiness ----
     app.get("/health", async () => ({ status: "ok", service: "gin-rummy" }));

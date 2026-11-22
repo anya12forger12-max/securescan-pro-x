@@ -127,6 +127,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
   const [state, setState] = React.useState<ContextDataType>(initialState);
   const tokenRef = useRef<string | null>(null);
   const lastSeqRef = useRef(0);
+  const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
 
   useEffect(() => {
     tokenRef.current = state.token;
@@ -136,10 +137,50 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     setState((prev) => ({ ...prev, ...attrs }));
   }, []);
 
+  /** Rotate the 15-minute access token with the durable refresh token. One
+   * shared promise prevents parallel 401s from racing the single-use token. */
+  const refreshSession = useCallback((): Promise<string | null> => {
+    if (refreshPromiseRef.current) return refreshPromiseRef.current;
+    const refreshToken = localStorage.getItem(config.refreshKey);
+    if (!refreshToken) return Promise.resolve(null);
+
+    refreshPromiseRef.current = apiRequest<AuthData>("/auth/refresh", {
+      method: "POST",
+      body: { refresh_token: refreshToken },
+    })
+      .then((data) => {
+        persist(data.token, data.refresh_token);
+        tokenRef.current = data.token;
+        update({ token: data.token, user: data.user });
+        return data.token;
+      })
+      .catch(() => {
+        persist(null, null);
+        tokenRef.current = null;
+        update({ token: null, user: null });
+        return null;
+      })
+      .finally(() => {
+        refreshPromiseRef.current = null;
+      });
+    return refreshPromiseRef.current;
+  }, [update]);
+
   const call = useCallback(
-    async <T,>(path: string, init: RequestOptions = {}): Promise<T> =>
-      apiRequest<T>(path, { ...init, token: tokenRef.current }),
-    [],
+    async <T,>(path: string, init: RequestOptions = {}): Promise<T> => {
+      const request = (token: string | null) => apiRequest<T>(path, { ...init, token });
+      try {
+        return await request(tokenRef.current);
+      } catch (err) {
+        // Auth endpoints own their own 401s; every other expired access token
+        // is silently refreshed and the original request replayed once.
+        if (!(err instanceof ApiError && err.status === 401) || path.startsWith("/auth/")) throw err;
+        const refreshed = await refreshSession();
+        if (!refreshed) throw err;
+        return request(refreshed);
+      }
+    },
+    [refreshSession],
   );
 
   const guard = useCallback(
@@ -168,24 +209,40 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       update({ ready: true });
       return;
     }
-    apiRequest<{ user: User }>("/auth/me", { token: stored })
-      .then((data) => {
+    void (async () => {
+      try {
+        const data = await apiRequest<{ user: User }>("/auth/me", { token: stored });
         if (cancelled) return;
         tokenRef.current = stored;
         update({ token: stored, user: data.user });
-      })
-      .catch(() => {
+      } catch (err) {
         if (cancelled) return;
+        // A stale access token is normal after 15 minutes; the 30-day refresh
+        // token should keep the session alive instead of forcing a new login.
+        if (err instanceof ApiError && err.status === 401) {
+          const refreshed = await refreshSession();
+          if (cancelled) return;
+          if (refreshed) {
+            try {
+              const me = await apiRequest<{ user: User }>("/auth/me", { token: refreshed });
+              if (!cancelled) update({ token: refreshed, user: me.user });
+              return;
+            } catch {
+              // Fall through and clear the unusable session.
+            }
+          }
+        }
         persist(null, null);
+        tokenRef.current = null;
         update({ token: null, user: null });
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) update({ ready: true });
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [update]);
+  }, [refreshSession, update]);
 
   // Durable event stream. Fetch is used instead of EventSource because the
   // gateway requires an Authorization header on every event request.
@@ -323,12 +380,20 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
   );
 
   const signOut = useCallback(async () => {
-    await call("/auth/logout", { method: "POST", body: {} }).catch(() => undefined);
+    // Send the refresh token so the server revokes it too; clearing only local
+    // storage would leave a 30-day credential usable by anyone who copied it.
+    const refreshToken = localStorage.getItem(config.refreshKey);
+    if (refreshToken) {
+      await apiRequest("/auth/logout", {
+        method: "POST",
+        body: { refresh_token: refreshToken },
+      }).catch(() => undefined);
+    }
     persist(null, null);
     tokenRef.current = null;
     setState({ ...initialState, ready: true });
     toast.info("Signed out");
-  }, [call]);
+  }, []);
 
   const createSession = useCallback(
     async (kind: GameKind) => {
@@ -348,15 +413,19 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
 
   const joinSession = useCallback(
     async (id: string) => {
-      const result = await guard("Join session", () =>
-        call<{ session: GameSession; players: GamePlayer[] }>(`/game/sessions/${id}/join`, {
-          method: "POST",
-          body: {},
-        }),
+      // The join endpoint returns only `{ player }`. Read the session back so
+      // the board keeps its existing session and player list instead of being
+      // overwritten with undefined by the join response.
+      const joined = await guard("Join session", () =>
+        call(`/game/sessions/${id}/join`, { method: "POST", body: {} }),
       );
-      if (result) {
-        const data = result as { session: GameSession; players: GamePlayer[] };
-        update({ session: data.session, players: data.players });
+      if (!joined) return;
+      const data = await guard("Session", () =>
+        call<{ session: GameSession; players: GamePlayer[] }>(`/game/sessions/${id}`),
+      );
+      if (data) {
+        const sessionData = data as { session: GameSession; players: GamePlayer[] };
+        update({ session: sessionData.session, players: sessionData.players });
       }
     },
     [call, guard, update],
@@ -585,7 +654,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
   );
 
   const loadAudit = useCallback(async () => {
-    const result = await guard("Audit", () => call<AuditReport>("/internal/audit/verify"));
+    const result = await guard("Audit", () => call<AuditReport>("/v1/internal/audit/verify"));
     if (result) update({ audit: result as AuditReport });
   }, [call, guard, update]);
 

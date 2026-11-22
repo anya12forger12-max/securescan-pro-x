@@ -9,6 +9,12 @@ export interface WalletCreditInput {
     referenceId: string;
     idempotencyKey: string;
 }
+/** A wallet failure is only safe to roll back when the request was definitely
+ * rejected. Network timeouts and 5xx responses may hide a committed credit. */
+export declare class WalletCreditError extends Error {
+    readonly ambiguous: boolean;
+    constructor(message: string, ambiguous: boolean);
+}
 export interface WalletClient {
     credit(input: WalletCreditInput): Promise<unknown>;
 }

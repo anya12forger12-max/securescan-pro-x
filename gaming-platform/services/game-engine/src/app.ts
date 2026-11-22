@@ -23,8 +23,11 @@ function headerBearer(value: string | undefined): string | null {
   return typeof value === "string" && value.startsWith("Bearer ") ? value.slice(7) : null;
 }
 
+// Only these three games have authoritative result state that the leaderboard
+// can verify. crash/roulette/slot are Aviator-shell placeholders with no
+// scoring backend, so accepting sessions for them created unscorable games.
 const CreateSessionSchema = z.object({
-  game_type: z.enum(["crash", "roulette", "slot", "pictionary", "codenames", "gin-rummy"]),
+  game_type: z.enum(["pictionary", "codenames", "gin-rummy"]),
 });
 const JoinSessionSchema = z.object({
   id: z.string().uuid(),

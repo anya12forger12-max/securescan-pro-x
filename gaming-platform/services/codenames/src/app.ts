@@ -5,7 +5,7 @@ import type { FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { getPool, closePool, createGame, getGame, setGameStatus, submitClue, getCluesForGame, submitGuess, listGuessesForGame, listRevealedWords, playerTeam, isTeamSpymaster } from "./db.js";
-import type { Team, GuessOutcome } from "./db.js";
+import type { GameStatus, Team, GuessOutcome } from "./db.js";
 import type { CodenamesEnv } from "./env.js";
 
 /**
@@ -262,11 +262,13 @@ export async function buildCodenamesService(env: CodenamesEnv) {
       return reply.code(404).send({ error: "GAME_NOT_FOUND", message: "game not found" });
     if (game.host_id !== decoded.userId)
       return reply.code(403).send({ error: "FORBIDDEN", message: "only the host may change game status" });
-    const legal = ((game.status === "setup" || game.status === "waiting") && body.data.status === "active") ||
-      (game.status === "active" && body.data.status === "ended");
-    if (!legal)
+    const expected: GameStatus[] = body.data.status === "active"
+      ? ["setup", "waiting"]
+      : body.data.status === "ended"
+        ? ["active"]
+        : [];
+    if (!expected.length || !(await setGameStatus(pool, id, body.data.status, expected)))
       return reply.code(409).send({ error: "INVALID_TRANSITION", message: `cannot move from ${game.status} to ${body.data.status}` });
-    await setGameStatus(pool, id, body.data.status);
     return reply.send({ ok: true });
   });
   // ---- health and readiness ----

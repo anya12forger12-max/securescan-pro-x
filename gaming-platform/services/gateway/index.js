@@ -87,7 +87,9 @@ const ROUTES = [
   { prefix: "/internal/wallet", service: "wallet", port: 3011, privileged: true },
   { prefix: "/v1/responsible-gaming", service: "responsible-gaming", port: 3012 },
   // Creating a tournament with an arbitrary prize pool is an admin action.
-  { prefix: "/v1/tournaments", service: "tournaments", port: 3014, methods: ["POST"], privileged: true, permission: "tournaments.manage" },
+  // This rule must match only the collection POST: a broad prefix match also
+  // swallowed POST /v1/tournaments/:id/join and blocked ordinary players.
+  { prefix: "/v1/tournaments", service: "tournaments", port: 3014, methods: ["POST"], exact: true, privileged: true, permission: "tournaments.manage" },
   { prefix: "/v1/tournaments", service: "tournaments", port: 3014 },
   { prefix: "/v1/chat", service: "chat", port: 3016 },
   { prefix: "/v1/codenames", service: "codenames", port: 3017 },
@@ -150,6 +152,14 @@ function parseProxyUrl(rawUrl) {
 /** Prefix matches must land on a segment boundary: `/v1/authx` is not `/v1/auth`. */
 function matchesPrefix(path, prefix) {
   return path === prefix || path.startsWith(prefix + "/");
+}
+
+/** Most routes are prefix-scoped, but a few capabilities apply only to the
+ * exact collection path. Without this, a privileged POST /v1/tournaments rule
+ * also captured POST /v1/tournaments/:id/join. */
+function matchesRoute(path, route) {
+  if (!route.exact) return matchesPrefix(path, route.prefix);
+  return path === route.prefix || path === route.prefix + "/";
 }
 
 function requiredPermission(route, path) {
@@ -238,7 +248,7 @@ async function proxy(req, reply) {
   const path = parsed.pathname;
 
   const target = ROUTES.find(
-    (route) => matchesPrefix(path, route.prefix) && (!route.methods || route.methods.includes(req.method)),
+    (route) => matchesRoute(path, route) && (!route.methods || route.methods.includes(req.method)),
   );
   if (!target) return reply.code(404).send({ error: "NOT_FOUND", message: "unknown route" });
 

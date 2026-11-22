@@ -58,7 +58,10 @@ export declare function getGame(pool: Queryable, id: string): Promise<GameRow | 
 export declare function playerTeam(pool: Queryable, sessionId: string, userId: string): Promise<Team | null>;
 /** The first seat of each team is that team's spymaster. */
 export declare function isTeamSpymaster(pool: Queryable, sessionId: string, userId: string, team: Team): Promise<boolean>;
-export declare function setGameStatus(pool: Queryable, id: string, status: GameStatus): Promise<void>;
+/** Conditional status write. The route validates the transition, but only the
+ * WHERE clause makes it atomic: a delayed request cannot reopen a game that
+ * another request already moved on. */
+export declare function setGameStatus(pool: Queryable, id: string, status: GameStatus, expectedStatus?: GameStatus | GameStatus[]): Promise<boolean>;
 export declare function submitClue(pool: PoolType, input: {
     id: string;
     game_id: string;

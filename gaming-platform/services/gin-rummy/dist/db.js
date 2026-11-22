@@ -83,8 +83,15 @@ export async function joinGame(pool, id, player2_id) {
      RETURNING ${GAME_COLUMNS}`, [id, player2_id]);
     return result.rows[0] ?? null;
 }
-export async function setGameStatus(pool, id, status, winnerId) {
-    await pool.query(`UPDATE gin_rummy_games SET status = $2, winner_id = $3, ended_at = now() WHERE id = $1`, [id, status, winnerId]);
+/** End a game only if it is still in the expected state. The conditional
+ * UPDATE is the final guard against a racing /end overtaking a validated /meld
+ * win; callers must roll back and report a conflict when it returns false. */
+export async function setGameStatus(pool, id, status, winnerId, expectedStatus) {
+    const params = [id, status, winnerId];
+    const guard = expectedStatus ? ` AND status = $${params.push(expectedStatus)}` : "";
+    const result = await pool.query(`UPDATE gin_rummy_games SET status = $2, winner_id = $3, ended_at = now()
+      WHERE id = $1${guard} RETURNING id`, params);
+    return (result.rowCount ?? 0) > 0;
 }
 export async function updateGameState(pool, id, patch) {
     const entries = Object.entries(patch);

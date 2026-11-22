@@ -53,12 +53,18 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   }
 
   if (!response.ok) {
-    const error = payload as { error?: { code?: string; message?: string }; message?: string } | null;
-    throw new ApiError(
-      error?.error?.message ?? error?.message ?? `Request failed (${response.status})`,
-      response.status,
-      error?.error?.code,
-    );
+    const error = payload as {
+      error?: { code?: string; message?: string } | string;
+      message?: string | Record<string, unknown>;
+    } | null;
+    const structured = typeof error?.error === "object" ? error.error : undefined;
+    const message = typeof error?.error === "string"
+      ? error.error
+      : structured?.message ??
+        (typeof error?.message === "string" ? error.message : undefined) ??
+        `Request failed (${response.status})`;
+    const code = structured?.code;
+    throw new ApiError(message, response.status, code);
   }
 
   return unwrap<T>(payload);

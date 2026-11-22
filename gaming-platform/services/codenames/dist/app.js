@@ -259,11 +259,13 @@ export async function buildCodenamesService(env) {
             return reply.code(404).send({ error: "GAME_NOT_FOUND", message: "game not found" });
         if (game.host_id !== decoded.userId)
             return reply.code(403).send({ error: "FORBIDDEN", message: "only the host may change game status" });
-        const legal = ((game.status === "setup" || game.status === "waiting") && body.data.status === "active") ||
-            (game.status === "active" && body.data.status === "ended");
-        if (!legal)
+        const expected = body.data.status === "active"
+            ? ["setup", "waiting"]
+            : body.data.status === "ended"
+                ? ["active"]
+                : [];
+        if (!expected.length || !(await setGameStatus(pool, id, body.data.status, expected)))
             return reply.code(409).send({ error: "INVALID_TRANSITION", message: `cannot move from ${game.status} to ${body.data.status}` });
-        await setGameStatus(pool, id, body.data.status);
         return reply.send({ ok: true });
     });
     // ---- health and readiness ----

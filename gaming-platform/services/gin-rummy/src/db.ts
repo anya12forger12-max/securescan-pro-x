@@ -143,8 +143,24 @@ export async function joinGame(pool: Queryable, id: string, player2_id: string):
   return result.rows[0] ?? null;
 }
 
-export async function setGameStatus(pool: Queryable, id: string, status: string, winnerId: string | null): Promise<void> {
-  await pool.query(`UPDATE gin_rummy_games SET status = $2, winner_id = $3, ended_at = now() WHERE id = $1`, [id, status, winnerId]);
+/** End a game only if it is still in the expected state. The conditional
+ * UPDATE is the final guard against a racing /end overtaking a validated /meld
+ * win; callers must roll back and report a conflict when it returns false. */
+export async function setGameStatus(
+  pool: Queryable,
+  id: string,
+  status: string,
+  winnerId: string | null,
+  expectedStatus?: string,
+): Promise<boolean> {
+  const params: unknown[] = [id, status, winnerId];
+  const guard = expectedStatus ? ` AND status = $${params.push(expectedStatus)}` : "";
+  const result = await pool.query(
+    `UPDATE gin_rummy_games SET status = $2, winner_id = $3, ended_at = now()
+      WHERE id = $1${guard} RETURNING id`,
+    params,
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function updateGameState(pool: Queryable, id: string, patch: GameStatePatch): Promise<GameRow> {

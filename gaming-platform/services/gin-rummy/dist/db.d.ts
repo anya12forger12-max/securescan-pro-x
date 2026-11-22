@@ -39,7 +39,10 @@ export declare function createGame(pool: Queryable, input: CreateGameInput): Pro
 export declare function getGame(pool: Queryable, id: string): Promise<GameRow>;
 export declare function getGameForUpdate(pool: Queryable, id: string): Promise<GameRow>;
 export declare function joinGame(pool: Queryable, id: string, player2_id: string): Promise<GameRow | null>;
-export declare function setGameStatus(pool: Queryable, id: string, status: string, winnerId: string | null): Promise<void>;
+/** End a game only if it is still in the expected state. The conditional
+ * UPDATE is the final guard against a racing /end overtaking a validated /meld
+ * win; callers must roll back and report a conflict when it returns false. */
+export declare function setGameStatus(pool: Queryable, id: string, status: string, winnerId: string | null, expectedStatus?: string): Promise<boolean>;
 export declare function updateGameState(pool: Queryable, id: string, patch: GameStatePatch): Promise<GameRow>;
 export declare function setHasDrawn(pool: Queryable, id: string, value: boolean): Promise<GameRow>;
 export {};

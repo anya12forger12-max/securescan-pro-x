@@ -44,9 +44,26 @@ const clients = new Set();
 let listener = null;
 let reconnectTimer = null;
 let shuttingDown = false;
+// A LISTEN reconnect must replay the durable log to streams that stayed open
+// during the outage. Notifications arriving during a snapshot (or reconnect)
+// replay are buffered so an older replayed row cannot be skipped by a newer
+// live seq. A depth counter covers overlapping client/reconnect replays.
+let replayDepth = 0;
+let draining = false;
+const pendingNotifications = new Set();
+// Notifications are delivered one at a time so a faster query for seq N+1
+// cannot advance lastSeq past a still-in-flight seq N and hide it forever.
+let deliveryChain = Promise.resolve();
 
+/** pg returns bigserial as a string; send the full normalized event so SSE
+ * clients can use `seq` directly instead of guessing from the frame id. */
 function writeEvent(res, event) {
-  res.write(`id: ${event.seq}\nevent: ${event.topic}\ndata: ${JSON.stringify(event.payload)}\n\n`);
+  const normalized = {
+    ...event,
+    seq: Number(event.seq),
+    published_at: event.published_at instanceof Date ? event.published_at.toISOString() : event.published_at,
+  };
+  res.write(`id: ${normalized.seq}\nevent: ${normalized.topic}\ndata: ${JSON.stringify(normalized)}\n\n`);
 }
 
 /** Deliver an event once per client. lastSeq deduplicates the case where a
@@ -65,34 +82,97 @@ function broadcast(event) {
   }
 }
 
+/** Load one notified seq from the durable log. Reading by seq (rather than
+ * trusting the payload) keeps ordering and full event metadata consistent. */
+async function deliverNotification(seq) {
+  const result = await pool.query(
+    `SELECT seq, topic, payload, published_at FROM realtime_events WHERE seq = $1`,
+    [seq],
+  );
+  if (result.rowCount) broadcast(result.rows[0]);
+}
+
+/** Notifications received while a replay is in flight are held until the
+ * snapshot finishes, then replayed in seq order. */
+async function drainNotifications() {
+  if (replayDepth > 0 || draining || pendingNotifications.size === 0) return;
+  draining = true;
+  try {
+    while (pendingNotifications.size) {
+      const batch = [...pendingNotifications].sort((a, b) => a - b);
+      pendingNotifications.clear();
+      for (const seq of batch) await enqueueDelivery(seq);
+    }
+  } catch (err) {
+    app.log.warn({ err }, "failed to drain buffered realtime notifications");
+  } finally {
+    draining = false;
+  }
+}
+
+function enqueueDelivery(seq) {
+  deliveryChain = deliveryChain
+    .then(() => deliverNotification(seq))
+    .catch((err) => app.log.warn({ err, seq }, "failed to deliver notified event"));
+  return deliveryChain;
+}
+
+function onNotification(msg) {
+  const seq = Number(msg.payload);
+  if (!Number.isFinite(seq)) return;
+  if (replayDepth > 0 || draining) {
+    pendingNotifications.add(seq);
+    return;
+  }
+  void enqueueDelivery(seq).then(() => drainNotifications());
+}
+
+/** Replay every durable row after `floor` to the still-open streams. Called
+ * after LISTEN is re-established, so events published during the outage are
+ * no longer lost just because the notification connection was down. */
+async function replayEventsAfter(floor) {
+  if (clients.size === 0) return;
+  const batchSize = 500;
+  let cursor = floor;
+  for (;;) {
+    const result = await pool.query(
+      `SELECT seq, topic, payload, published_at FROM realtime_events
+       WHERE seq > $1 ORDER BY seq ASC LIMIT $2`,
+      [cursor, batchSize],
+    );
+    if (!result.rowCount) return;
+    for (const event of result.rows) {
+      broadcast(event);
+      cursor = Number(event.seq);
+    }
+    if (result.rows.length < batchSize) return;
+  }
+}
+
 async function startListener() {
   const client = new pg.Client({ connectionString: env.DATABASE_URL });
-  client.on("notification", async (msg) => {
-    const seq = Number(msg.payload);
-    if (!Number.isFinite(seq)) return;
-    try {
-      const result = await pool.query(
-        `SELECT seq, topic, payload, published_at FROM realtime_events WHERE seq = $1`,
-        [seq],
-      );
-      if (result.rowCount) broadcast(result.rows[0]);
-    } catch (err) {
-      app.log.warn({ err }, "failed to load notified event");
-    }
-  });
+  client.on("notification", onNotification);
   client.on("error", (err) => {
     app.log.warn({ err }, "realtime LISTEN connection failed");
     scheduleReconnect();
   });
   client.on("end", () => scheduleReconnect());
+  // Hold notifications from the moment LISTEN is acquired until the durable
+  // replay has caught up, otherwise a live seq could overtake a replayed one.
+  replayDepth++;
   try {
     await client.connect();
     await client.query("LISTEN realtime_events");
     listener = client;
     app.log.info("realtime listening on realtime_events");
+    const floors = [...clients].map((entry) => entry.lastSeq);
+    if (floors.length) await replayEventsAfter(Math.min(...floors));
   } catch (err) {
     app.log.warn({ err }, "initial LISTEN failed");
     scheduleReconnect();
+  } finally {
+    replayDepth--;
+    void drainNotifications();
   }
 }
 
@@ -173,16 +253,10 @@ app.get("/v1/events/stream", async (req, reply) => {
   });
   res.write(": connected\n\n");
 
-  const backlog = await pool.query(
-    `SELECT seq, topic, payload, published_at FROM realtime_events
-     WHERE seq > $1 ORDER BY seq ASC LIMIT 500`,
-    [since],
-  );
+  // Register before taking the snapshot: a publish between the snapshot query
+  // and clients.add() would otherwise notify existing streams only and leave
+  // this one permanently behind. Live notifications are buffered meanwhile.
   const client = { res, lastSeq: since };
-  for (const event of backlog.rows) {
-    writeEvent(res, event);
-    client.lastSeq = Number(event.seq);
-  }
   clients.add(client);
 
   const heartbeat = setInterval(() => {
@@ -198,6 +272,19 @@ app.get("/v1/events/stream", async (req, reply) => {
     clearInterval(heartbeat);
     clients.delete(client);
   });
+
+  replayDepth++;
+  try {
+    await replayEventsAfter(since);
+  } catch (err) {
+    req.log.error({ err }, "event snapshot replay failed");
+    clearInterval(heartbeat);
+    clients.delete(client);
+    res.end();
+  } finally {
+    replayDepth--;
+    void drainNotifications();
+  }
 });
 
 app.get("/health", async () => ({

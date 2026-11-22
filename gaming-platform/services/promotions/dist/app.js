@@ -4,6 +4,16 @@ import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { createHash, randomUUID } from "node:crypto";
 import { ERROR_CODES, moneyMul, toMoney, serviceTokenOk } from "@gp/shared-types";
+/** A wallet failure is only safe to roll back when the request was definitely
+ * rejected. Network timeouts and 5xx responses may hide a committed credit. */
+export class WalletCreditError extends Error {
+    ambiguous;
+    constructor(message, ambiguous) {
+        super(message);
+        this.ambiguous = ambiguous;
+        this.name = "WalletCreditError";
+    }
+}
 function headerString(headers, name) {
     const value = headers[name];
     return typeof value === "string" && value.length > 0 ? value : null;
@@ -191,19 +201,33 @@ export async function buildPromotionsService(deps) {
             return deny(reply, 409, ERROR_CODES.IDEMPOTENCY_CONFLICT, "already claimed");
         }
         if (deps.wallet) {
+            const creditInput = {
+                userId,
+                amount: claim.bonusAmount,
+                type: "bonus",
+                referenceType: "admin",
+                referenceId: claim.id,
+                idempotencyKey: claim.idempotencyKey,
+            };
             try {
-                await deps.wallet.credit({
-                    userId,
-                    amount: claim.bonusAmount,
-                    type: "bonus",
-                    referenceType: "admin",
-                    referenceId: claim.id,
-                    idempotencyKey: claim.idempotencyKey,
-                });
+                await deps.wallet.credit(creditInput);
             }
-            catch {
-                await repo.deleteClaim(claim.id);
-                return deny(reply, 503, ERROR_CODES.SERVICE_UNAVAILABLE, "wallet credit failed; claim was rolled back");
+            catch (err) {
+                const ambiguous = err instanceof WalletCreditError ? err.ambiguous : true;
+                if (!ambiguous) {
+                    await repo.deleteClaim(claim.id);
+                    return deny(reply, 503, ERROR_CODES.SERVICE_UNAVAILABLE, "wallet credit failed; claim was rolled back");
+                }
+                // The wallet may have committed before the response was lost. Keep the
+                // claim and replay the same idempotency key: a committed credit is
+                // returned as a replay, otherwise it is applied exactly once here.
+                try {
+                    await deps.wallet.credit(creditInput);
+                }
+                catch (reconcileError) {
+                    req.log.warn({ err, reconcileError }, "wallet credit needs reconciliation");
+                    return deny(reply, 503, ERROR_CODES.SERVICE_UNAVAILABLE, "wallet credit status is unknown; claim retained for idempotent retry", { claimId: claim.id, idempotencyKey: claim.idempotencyKey });
+                }
             }
         }
         if (deps.publish) {

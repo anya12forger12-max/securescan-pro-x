@@ -144,8 +144,21 @@ export async function isTeamSpymaster(pool, sessionId, userId, team) {
      ) ranked WHERE team = $2 AND seat = 1`, [sessionId, team]);
     return result.rows[0]?.user_id === userId;
 }
-export async function setGameStatus(pool, id, status) {
-    await pool.query(`UPDATE codenames_games SET status = $2 WHERE id = $1`, [id, status]);
+/** Conditional status write. The route validates the transition, but only the
+ * WHERE clause makes it atomic: a delayed request cannot reopen a game that
+ * another request already moved on. */
+export async function setGameStatus(pool, id, status, expectedStatus) {
+    const params = [id, status];
+    let guard = "";
+    if (expectedStatus) {
+        const allowed = Array.isArray(expectedStatus) ? expectedStatus : [expectedStatus];
+        const placeholders = allowed.map((value) => `$${params.push(value)}`).join(", ");
+        guard = ` AND status IN (${placeholders})`;
+    }
+    const result = await pool.query(`UPDATE codenames_games
+        SET status = $2, ended_at = CASE WHEN $2 = 'ended' THEN now() ELSE ended_at END
+      WHERE id = $1${guard} RETURNING id`, params);
+    return (result.rowCount ?? 0) > 0;
 }
 export async function submitClue(pool, input) {
     const result = await pool.query(`INSERT INTO codenames_clues (id, game_id, spymaster_id, word, number)
@@ -187,7 +200,7 @@ export async function submitGuess(pool, input) {
                 team: input.outcome === "assassin" ? "assassin" : input.team,
                 revealed_by: input.user_id,
             });
-            await setGameStatus(client, input.game_id, "ended");
+            await setGameStatus(client, input.game_id, "ended", "active");
             await setGameWinner(client, input.game_id, input.winner);
         }
         else if (input.outcome === "wrong_team" || input.outcome === "neutral") {

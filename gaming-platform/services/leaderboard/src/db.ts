@@ -128,10 +128,12 @@ export async function getUserBestScores(pool: PoolType, userId: string): Promise
 }
 
 export async function getUserStats(pool: PoolType, userId: string): Promise<UserStats | null> {
+  // pg returns COUNT/SUM/MAX as strings; cast here so the API keeps its
+  // declared numeric contract instead of leaking "3" to typed clients.
   const result = await pool.query<UserStats>(`SELECT user_id, username,
-            COUNT(*) as total_games,
-            SUM(score) as total_score,
-            MAX(score) as best_score
+            COUNT(*)::int as total_games,
+            COALESCE(SUM(score), 0)::int as total_score,
+            COALESCE(MAX(score), 0)::int as best_score
      FROM leaderboard_entries
      WHERE user_id = $1
      GROUP BY user_id, username`, [userId]);

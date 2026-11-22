@@ -127,10 +127,11 @@ export async function buildPictionaryService(env) {
         if (!guess) {
             return reply.code(409).send({ error: "ROUND_NOT_DRAWING", message: "round closed before the guess was recorded" });
         }
-        // Only the caller that actually closes the round is told it won. A second
-        // correct guess racing the first is recorded but cannot claim the word.
+        // Keep the recorded answer and the round outcome separate. A losing racer
+        // still guessed correctly; only the caller that atomically closes the
+        // round wins, and only the winner is shown the word.
         const won = correct && await endRound(pool, roundId, decoded.userId);
-        return reply.send({ guess, correct: won, ...(won ? { word: round.word } : {}) });
+        return reply.send({ guess, correctGuess: correct, won, ...(won ? { word: round.word } : {}) });
     });
     // ---- health and readiness ----
     app.get("/health", async () => ({ status: "ok", service: "pictionary" }));

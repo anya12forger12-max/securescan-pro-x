@@ -3,7 +3,7 @@ import pg from "pg";
 import { EventBus } from "@gp/event-bus";
 import { promotionsEnvSchema } from "./env.js";
 import { PgPromotionsRepository } from "./repo.js";
-import { buildPromotionsService } from "./app.js";
+import { buildPromotionsService, WalletCreditError } from "./app.js";
 /** Entry point. Env is validated before anything binds a port or opens a socket. */
 const env = loadEnv(promotionsEnvSchema);
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
@@ -21,12 +21,15 @@ const wallet = env.WALLET_URL
                 });
             }
             catch (err) {
-                throw new Error(`wallet credit request failed: ${err.message}`);
+                // The request never got a usable response; the wallet may still have
+                // committed before the connection failed.
+                throw new WalletCreditError(`wallet credit request failed: ${err.message}`, true);
             }
-            // buildPromotionsService rolls the claim back on a rejection.
-            // Returning false here used to keep the claim and its liability.
+            // A 4xx is a deterministic rejection and may be rolled back. 5xx/408
+            // can follow a committed ledger write, so the claim must be retained
+            // and reconciled with the same idempotency key instead.
             if (!res.ok) {
-                throw new Error(`wallet credit rejected with HTTP ${res.status}`);
+                throw new WalletCreditError(`wallet credit rejected with HTTP ${res.status}`, res.status >= 500 || res.status === 408);
             }
             return true;
         },
