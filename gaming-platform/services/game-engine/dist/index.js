@@ -15,4 +15,16 @@ const start = async () => {
     }
 };
 start();
+// app.close() runs the service's onClose hook, which drains requests and ends
+// every pooled Postgres client before Compose kills the container.
+for (const signal of ["SIGTERM", "SIGINT"]) {
+    process.once(signal, async () => {
+        try {
+            await app.close();
+        }
+        finally {
+            process.exit(0);
+        }
+    });
+}
 export { pool, env };

@@ -1,6 +1,6 @@
 declare const env: {
-    PORT: number;
     DATABASE_URL: string;
+    PORT: number;
     JWT_ACCESS_SECRET: string;
     REALTIME_URL: string;
     CORS_ORIGIN: string;

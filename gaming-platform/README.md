@@ -74,12 +74,26 @@ These are fixed here (each fix is commented inline at the site):
   `/ready` backed by a database query. The gateway adds an aggregate `/ready`
   that reports healthy only when all thirteen downstream services are ready.
 - **Migration idempotency** — `npm run migrate` records applied files in
-  `schema_migrations` and skips them on subsequent runs.
+  `schema_migrations` and skips them on subsequent runs, and now takes a
+  Postgres advisory lock so two simultaneous migrators cannot race.
+- **Database connection budget** — every service used a private `max: 20` pool,
+  allowing roughly 270 connections against Postgres's default ceiling of 100.
+  `@gp/config/dbPoolOptions` is now the single source of truth: `DB_POOL_MAX`
+  (default 5) sizes every pool, with idle/connection timeouts, and Compose
+  raises `max_connections` to 200. `npm run validate:compose` proves the budget.
+- **Graceful shutdown** — all fourteen services now handle SIGTERM/SIGINT by
+  calling `app.close()`, which drains requests and runs each service's
+  `onClose` pool teardown. Compose allows 25s before a hard kill.
+- **Smaller attack surface** — the thirteen internal services are exposed only
+  on the Compose network (`expose`, no host port publishing). Only the gateway
+  is reachable from the host.
+- **Resource limits** — every application container is capped at 512 MiB and
+  1 CPU so a single leaking process cannot starve the rest of the stack.
 
 ## Shared packages
 
 - `packages/config` — `baseEnvSchema`, `loadEnv`, `registerErrorHandler`,
-  `fetchWithTimeout`.
+  `fetchWithTimeout`, and `dbPoolOptions` (the fleet-wide connection budget).
 - `packages/event-bus` — Redis-backed `EventBus.publish`/`close`. Publish
   failures are logged and swallowed so a committed claim never fails the user.
 - `packages/shared-types` — shared error codes, decimal-safe `toMoney`/
@@ -117,10 +131,11 @@ token, writes a `0600` `.env`, and refuses to replace an existing one unless
 `JWT_ACCESS_SECRET`, `SERVICE_TOKEN`, `CORS_ORIGIN` or `POSTGRES_PASSWORD` is
 blank.
 
-Only the gateway is published on `0.0.0.0:3000`. Postgres, Redis and the peer
-services bind to `127.0.0.1` for local administration; all application traffic
-goes through `http://<host>:3000`. The image is self-contained — source,
-migrations and operational scripts are baked in, with no host bind mount.
+Only the gateway is published on `0.0.0.0:3000`. Postgres and Redis bind to
+`127.0.0.1` for local administration; the other thirteen services are reachable
+only from inside the Compose network. All application traffic goes through
+`http://<host>:3000`. The image is self-contained — source, migrations and
+operational scripts are baked in, with no host bind mount.
 
 ### Operations
 
@@ -264,8 +279,10 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/jso
 
 - `npm run check` — syntax-checks every JavaScript file outside `node_modules`.
 - `npm run typecheck` — strict type-checks all seven TypeScript services.
-- `npm run validate:compose` — checks Compose paths, commands and host ports
-  without requiring a Docker daemon.
+- `npm run validate:compose` — checks Compose paths, commands, unique host
+  ports, gateway-only public exposure, the database connection budget,
+  `/ready` probes, shutdown handlers and resource limits without a Docker
+  daemon.
 - `npm audit --omit=dev` — reports 0 vulnerabilities with the pinned
   `@fastify/jwt` 10.x and `zod` 4.x dependency set.
 - `npm run smoke` — gateway liveness, aggregate `/ready`, and register/login/me

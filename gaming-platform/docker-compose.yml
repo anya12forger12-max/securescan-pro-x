@@ -6,6 +6,8 @@ name: gaming-platform
 x-common-env: &common-env
   NODE_ENV: ${NODE_ENV:-production}
   DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
+  # One knob for the whole fleet; keep services * max below postgres max_connections.
+  DB_POOL_MAX: ${DB_POOL_MAX:-5}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379}
   JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET must be at least 32 random characters}
   SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
@@ -20,6 +22,11 @@ x-app: &app
   build: .
   working_dir: /app
   restart: unless-stopped
+  # Give SIGTERM handlers time to drain requests and close their DB pools.
+  stop_grace_period: 25s
+  # Bound each process so one leaking service cannot OOM the host.
+  mem_limit: 512m
+  cpus: 1.0
   depends_on:
     postgres:
       condition: service_healthy
@@ -32,15 +39,18 @@ x-app: &app
       - CMD
       - node
       - -e
-      - "fetch('http://127.0.0.1:'+process.env.PORT+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      - "fetch('http://127.0.0.1:'+process.env.PORT+'/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
     interval: 10s
     timeout: 3s
     retries: 6
-    start_period: 10s
+    start_period: 20s
 
 services:
   postgres:
     image: postgres:16-alpine
+    # 13 app services x DB_POOL_MAX(5) + the LISTEN connection + migrations
+    # stays well under this ceiling; the default 100 would be exhausted.
+    command: ["postgres", "-c", "max_connections=200"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
@@ -110,8 +120,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3015
-    ports:
-      - "127.0.0.1:3015:3015"
+    expose:
+      - "3015"
 
   admin-risk:
     <<: *app
@@ -119,8 +129,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3013
-    ports:
-      - "127.0.0.1:3013:3013"
+    expose:
+      - "3013"
 
   realtime:
     <<: *app
@@ -128,8 +138,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3010
-    ports:
-      - "127.0.0.1:3010:3010"
+    expose:
+      - "3010"
 
   wallet:
     <<: *app
@@ -137,8 +147,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3011
-    ports:
-      - "127.0.0.1:3011:3011"
+    expose:
+      - "3011"
 
   responsible-gaming:
     <<: *app
@@ -146,8 +156,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3012
-    ports:
-      - "127.0.0.1:3012:3012"
+    expose:
+      - "3012"
 
   tournaments:
     <<: *app
@@ -155,8 +165,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3014
-    ports:
-      - "127.0.0.1:3014:3014"
+    expose:
+      - "3014"
 
   chat:
     <<: *app
@@ -164,8 +174,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3016
-    ports:
-      - "127.0.0.1:3016:3016"
+    expose:
+      - "3016"
 
   codenames:
     <<: *app
@@ -173,8 +183,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3017
-    ports:
-      - "127.0.0.1:3017:3017"
+    expose:
+      - "3017"
 
   game-engine:
     <<: *app
@@ -182,8 +192,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3018
-    ports:
-      - "127.0.0.1:3018:3018"
+    expose:
+      - "3018"
 
   gin-rummy:
     <<: *app
@@ -191,8 +201,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3019
-    ports:
-      - "127.0.0.1:3019:3019"
+    expose:
+      - "3019"
 
   leaderboard:
     <<: *app
@@ -200,8 +210,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3020
-    ports:
-      - "127.0.0.1:3020:3020"
+    expose:
+      - "3020"
 
   pictionary:
     <<: *app
@@ -209,8 +219,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3021
-    ports:
-      - "127.0.0.1:3021:3021"
+    expose:
+      - "3021"
 
   promotions:
     <<: *app
@@ -218,8 +228,8 @@ services:
     environment:
       <<: *common-env
       PORT: 3022
-    ports:
-      - "127.0.0.1:3022:3022"
+    expose:
+      - "3022"
 
 volumes:
   pgdata:

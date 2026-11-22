@@ -1,10 +1,11 @@
 import pg from "pg";
+import { dbPoolOptions } from "@gp/config";
 const { Pool } = pg;
 const pools = new Map();
 export function getPool(connectionString) {
     let pool = pools.get(connectionString);
     if (!pool) {
-        pool = new Pool({ connectionString, max: 20 });
+        pool = new Pool(dbPoolOptions(connectionString));
         pools.set(connectionString, pool);
     }
     return pool;

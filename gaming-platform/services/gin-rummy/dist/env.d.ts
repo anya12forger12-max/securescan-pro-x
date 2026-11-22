@@ -1,26 +1,12 @@
 import { z } from "zod";
 export declare const GinRummyEnvSchema: z.ZodObject<{
     DATABASE_URL: z.ZodString;
-    PORT: z.ZodDefault<z.ZodNumber>;
+    PORT: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
     JWT_ACCESS_SECRET: z.ZodString;
     REALTIME_URL: z.ZodDefault<z.ZodString>;
     CORS_ORIGIN: z.ZodDefault<z.ZodString>;
     LOG_LEVEL: z.ZodDefault<z.ZodString>;
-}, "strip", z.ZodTypeAny, {
-    DATABASE_URL: string;
-    PORT: number;
-    JWT_ACCESS_SECRET: string;
-    REALTIME_URL: string;
-    CORS_ORIGIN: string;
-    LOG_LEVEL: string;
-}, {
-    DATABASE_URL: string;
-    JWT_ACCESS_SECRET: string;
-    PORT?: number | undefined;
-    REALTIME_URL?: string | undefined;
-    CORS_ORIGIN?: string | undefined;
-    LOG_LEVEL?: string | undefined;
-}>;
+}, z.core.$strip>;
 export type GinRummyEnv = z.infer<typeof GinRummyEnvSchema>;
 export declare function loadGinRummyEnv(): GinRummyEnv;
 //# sourceMappingURL=env.d.ts.map

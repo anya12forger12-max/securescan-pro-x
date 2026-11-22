@@ -16,6 +16,26 @@ export const baseEnvSchema = z.object({
 });
 
 /**
+ * Bounded Postgres pool settings shared by every service.
+ *
+ * Thirteen services previously opened up to 20 connections each (~270) while
+ * Postgres defaults to max_connections=100. Under load the fleet starved
+ * itself of connections instead of queueing. DB_POOL_MAX is now the one knob
+ * that sizes the whole deployment; idle and connection timeouts stop a leaked
+ * client from holding a slot indefinitely.
+ */
+export function dbPoolOptions(connectionString, fallbackMax = 5) {
+  const configured = Number(process.env.DB_POOL_MAX);
+  const max = Number.isInteger(configured) && configured > 0 ? configured : fallbackMax;
+  return {
+    connectionString,
+    max,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 5_000,
+  };
+}
+
+/**
  * Validate process.env against a service schema. Startup fails loudly rather
  * than binding a port with half-configured state.
  */

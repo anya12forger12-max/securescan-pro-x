@@ -23,6 +23,8 @@ POSTGRES_USER=gp
 POSTGRES_PASSWORD=${postgresPassword}
 POSTGRES_DB=gaming_platform
 DATABASE_URL=postgresql://gp:${encodeURIComponent(postgresPassword)}@postgres:5432/gaming_platform
+# Per-service Postgres pool size; keep 13 * DB_POOL_MAX below max_connections.
+DB_POOL_MAX=5
 REDIS_URL=redis://redis:6379
 JWT_ACCESS_SECRET=${jwtSecret}
 SERVICE_TOKEN=${serviceToken}

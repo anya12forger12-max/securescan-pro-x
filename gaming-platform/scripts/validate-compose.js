@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 /**
  * Static validation for docker-compose.yml. Docker is not always available in
- * CI/build sandboxes, so this checks the invariants that most often break the
- * deployment: every mounted migration and every container command must point
- * at a real file, and published host ports must be unique.
+ * CI/build sandboxes, so this checks the invariants that most often break a
+ * deployment: real paths, unique ports, a bounded database connection budget,
+ * graceful shutdown hooks and a gateway-only public surface.
  */
 const root = fileURLToPath(new URL("..", import.meta.url));
 const compose = await readFile(join(root, "docker-compose.yml"), "utf8");
@@ -21,36 +21,99 @@ const exists = async (rel) => {
   }
 };
 
-// ./migrations/0001_init.sql:/docker-entrypoint-initdb.d/...
 for (const match of compose.matchAll(/^\s+-\s+\.\/([\w./-]+):/gm)) {
   const source = match[1];
   if (!(await exists(source))) errors.push(`missing bind-mount source: ${source}`);
 }
 
-// command: node services/<name>/...
 for (const match of compose.matchAll(/command:\s*node\s+(\S+)/g)) {
   const entry = match[1];
   if (!(await exists(entry))) errors.push(`missing command entrypoint: ${entry}`);
 }
 
-// "3000:3000" style published ports must not collide.
-const ports = new Map();
-for (const match of compose.matchAll(/-\s+"(\d+):(\d+)"/g)) {
-  const host = match[1];
-  if (ports.has(host)) errors.push(`duplicate host port ${host}`);
-  ports.set(host, true);
+// --- parse the services block into indented chunks ---
+const lines = compose.split("\n");
+const start = lines.indexOf("services:") + 1;
+const blocks = new Map();
+let current = null;
+for (let i = start; i < lines.length; i += 1) {
+  const line = lines[i];
+  if (/^[A-Za-z]/.test(line)) break;
+  const header = line.match(/^  ([a-z][\w-]*):\s*$/);
+  if (header) {
+    current = header[1];
+    blocks.set(current, []);
+  } else if (current) {
+    blocks.get(current).push(line);
+  }
+}
+const body = (name) => (blocks.get(name) ?? []).join("\n");
+
+if (!blocks.has("postgres")) errors.push("missing postgres service");
+if (!blocks.has("gateway")) errors.push("missing gateway service");
+
+// --- published ports: unique, and only the gateway is public ---
+const published = [];
+for (const [name, serviceLines] of blocks) {
+  let inPorts = false;
+  for (const line of serviceLines) {
+    if (/^\s{4}(ports|expose):\s*$/.test(line)) {
+      inPorts = line.trim() === "ports:";
+      continue;
+    }
+    if (!inPorts) continue;
+    const mapping = line.match(/^\s+-\s+"([^"]+)"\s*$/);
+    if (!mapping) continue;
+    const spec = mapping[1];
+    published.push({ name, spec, loopback: spec.includes(":") && /^\d+\.\d+\.\d+\.\d+:/.test(spec) });
+  }
+}
+const hosts = new Map();
+for (const { name, spec } of published) {
+  const hostPort = spec.split(":").at(-2);
+  if (hosts.has(hostPort)) errors.push(`duplicate host port ${hostPort} (${hosts.get(hostPort)} and ${name})`);
+  hosts.set(hostPort, name);
+}
+for (const { name, spec, loopback } of published) {
+  if (!loopback && name !== "gateway") {
+    errors.push(`${name} publishes ${spec} on all interfaces; only gateway may be public`);
+  }
 }
 
-const serviceBlock = compose.slice(
-  compose.indexOf("\nservices:\n"),
-  compose.search(/\n(volumes|networks|configs):\n/),
-);
-const services = [...serviceBlock.matchAll(/^  ([a-z][\w-]*):$/gm)].map((m) => m[1]);
-if (!services.includes("postgres")) errors.push("missing postgres service");
-if (!services.includes("gateway")) errors.push("missing gateway service");
+// --- database connection budget ---
+const poolMax = Number(compose.match(/DB_POOL_MAX:\s*\$\{DB_POOL_MAX:-(\d+)\}/)?.[1] ?? 0);
+const pgMax = Number(compose.match(/max_connections=(\d+)/)?.[1] ?? 0);
+const appServices = [...blocks.keys()]
+  .map((name) => [name, body(name)])
+  .filter(([, text]) => /command:\s*node services\//.test(text));
+const dbServices = appServices.filter(([name]) => name !== "gateway" && name !== "migrate");
+if (!poolMax) errors.push("DB_POOL_MAX default is missing");
+if (!pgMax) errors.push("postgres max_connections is not configured");
+if (poolMax && pgMax) {
+  // One LISTEN connection in realtime plus headroom for the migrator.
+  const required = dbServices.length * poolMax + 2;
+  if (required > pgMax) {
+    errors.push(`connection budget ${required} exceeds postgres max_connections=${pgMax}`);
+  }
+}
+
+// --- lifecycle ---
+if (!/stop_grace_period:/.test(compose)) errors.push("stop_grace_period is required for graceful shutdown");
+if (!/\/ready/.test(compose.match(/healthcheck:\s*&app-health[\s\S]*?start_period:/)?.[0] ?? "")) {
+  errors.push("app healthcheck must probe /ready, not /health");
+}
+for (const [name, text] of appServices) {
+  const entry = text.match(/command:\s*node\s+(\S+)/)?.[1];
+  if (!entry || !(await exists(entry))) continue;
+  const source = await readFile(join(root, entry), "utf8");
+  if (!/SIGTERM/.test(source)) errors.push(`${name} has no SIGTERM shutdown handler`);
+}
 
 if (errors.length) {
   for (const error of errors) console.error(`[compose] ${error}`);
   process.exit(1);
 }
-console.log(`[compose] ${services.length} services, ${ports.size} unique host ports, all paths valid`);
+console.log(
+  `[compose] ${blocks.size} services, ${hosts.size} published ports, ` +
+    `${dbServices.length} DB clients x ${poolMax} <= ${pgMax} connections, all paths valid`,
+);

@@ -1,5 +1,6 @@
 import pg from "pg";
 import { randomInt } from "node:crypto";
+import { dbPoolOptions } from "@gp/config";
 const { Pool } = pg;
 // A game needs a shuffled deck and a deal before either player can draw. The
 // recovered service created rows with empty hands and piles, so every draw
@@ -32,7 +33,7 @@ const pools = new Map();
 export function getPool(connectionString) {
     let pool = pools.get(connectionString);
     if (!pool) {
-        pool = new Pool({ connectionString, max: 20 });
+        pool = new Pool(dbPoolOptions(connectionString));
         pools.set(connectionString, pool);
     }
     return pool;

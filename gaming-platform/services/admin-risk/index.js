@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { createHash, randomUUID } from "node:crypto";
-import { baseEnvSchema, loadEnv, registerErrorHandler } from "@gp/config";
+import { baseEnvSchema, dbPoolOptions, loadEnv, registerErrorHandler } from "@gp/config";
 import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
 
 /**
@@ -23,7 +23,7 @@ const envSchema = baseEnvSchema.extend({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
 const env = loadEnv(envSchema);
-const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 20 });
+const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 
 /** Static RBAC model. `admin` also acts as a wildcard in hasPermission(). */
 const ROLE_PERMISSIONS = Object.freeze({
@@ -334,4 +334,16 @@ try {
   app.log.error({ err }, "admin-risk failed to start");
   await pool.end().catch(() => undefined);
   process.exit(1);
+}
+
+// Drain in-flight requests and let the onClose hook end the pool before the
+// container is killed; without this SIGTERM drops active transactions.
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.once(signal, async () => {
+    try {
+      await app.close();
+    } finally {
+      process.exit(0);
+    }
+  });
 }

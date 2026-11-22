@@ -12,7 +12,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { promisify } from "node:util";
-import { baseEnvSchema, loadEnv, registerErrorHandler } from "@gp/config";
+import { baseEnvSchema, dbPoolOptions, loadEnv, registerErrorHandler } from "@gp/config";
 import { ERROR_CODES } from "@gp/shared-types";
 
 /**
@@ -33,7 +33,7 @@ const envSchema = baseEnvSchema.extend({
   REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
 });
 const env = loadEnv(envSchema);
-const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 20 });
+const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
 await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
@@ -312,4 +312,16 @@ try {
   app.log.error({ err }, "auth failed to start");
   await pool.end().catch(() => undefined);
   process.exit(1);
+}
+
+// Drain in-flight requests and let the onClose hook end the pool before the
+// container is killed; without this SIGTERM drops active transactions.
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.once(signal, async () => {
+    try {
+      await app.close();
+    } finally {
+      process.exit(0);
+    }
+  });
 }

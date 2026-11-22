@@ -7,6 +7,20 @@ export declare const baseEnvSchema: z.ZodObject<{
   NODE_ENV: z.ZodDefault<z.ZodEnum<["development", "test", "production"]>>;
 }>;
 
+/**
+ * Bounded Postgres pool settings. DB_POOL_MAX overrides fallbackMax for the
+ * whole fleet; leaks are bounded by idle/connection timeouts.
+ */
+export declare function dbPoolOptions(
+  connectionString: string,
+  fallbackMax?: number,
+): {
+  connectionString: string;
+  max: number;
+  idleTimeoutMillis: number;
+  connectionTimeoutMillis: number;
+};
+
 /** Parse process.env against a service schema; exits the process on failure. */
 export declare function loadEnv<T extends z.ZodTypeAny>(schema: T): z.infer<T>;
 

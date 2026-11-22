@@ -1,13 +1,12 @@
-import { fetchWithTimeout } from "@gp/config";
+import { dbPoolOptions, fetchWithTimeout, loadEnv } from "@gp/config";
 import pg from "pg";
-import { loadEnv } from "@gp/config";
 import { EventBus } from "@gp/event-bus";
 import { promotionsEnvSchema } from "./env.js";
 import { PgPromotionsRepository } from "./repo.js";
 import { buildPromotionsService } from "./app.js";
 /** Entry point. Env is validated before anything binds a port or opens a socket. */
 const env = loadEnv(promotionsEnvSchema);
-const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 20 });
+const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 const bus = new EventBus(env.REDIS_URL);
 const repo = new PgPromotionsRepository(pool);
 const wallet = env.WALLET_URL

@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { randomUUID } from "node:crypto";
-import { baseEnvSchema, loadEnv } from "@gp/config";
+import { baseEnvSchema, dbPoolOptions, loadEnv } from "@gp/config";
 import { ERROR_CODES, serviceTokenOk, toMoney } from "@gp/shared-types";
 
 /**
@@ -20,7 +20,7 @@ const envSchema = baseEnvSchema.extend({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
 const env = loadEnv(envSchema);
-const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 20 });
+const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
 await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
@@ -182,4 +182,16 @@ try {
   app.log.error({ err }, "tournaments failed to start");
   await pool.end().catch(() => undefined);
   process.exit(1);
+}
+
+// Drain in-flight requests and let the onClose hook end the pool before the
+// container is killed; without this SIGTERM drops active transactions.
+for (const signal of ["SIGTERM", "SIGINT"]) {
+  process.once(signal, async () => {
+    try {
+      await app.close();
+    } finally {
+      process.exit(0);
+    }
+  });
 }

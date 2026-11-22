@@ -1,6 +1,7 @@
 import pg from "pg";
 import type { Pool as PoolType, PoolClient } from "pg";
 import { randomInt } from "node:crypto";
+import { dbPoolOptions } from "@gp/config";
 
 const { Pool } = pg;
 
@@ -147,7 +148,7 @@ const pools = new Map<string, PoolType>();
 export function getPool(connectionString: string): PoolType {
   let pool = pools.get(connectionString);
   if (!pool) {
-    pool = new Pool({ connectionString, max: 20 });
+    pool = new Pool(dbPoolOptions(connectionString));
     pools.set(connectionString, pool);
   }
   return pool;

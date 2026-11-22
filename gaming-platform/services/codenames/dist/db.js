@@ -1,5 +1,6 @@
 import pg from "pg";
 import { randomInt } from "node:crypto";
+import { dbPoolOptions } from "@gp/config";
 const { Pool } = pg;
 // A game needs a board before anyone can submit a clue or a guess. The
 // recovered service only inserted ids, leaving every word list empty, so a
@@ -91,7 +92,7 @@ const pools = new Map();
 export function getPool(connectionString) {
     let pool = pools.get(connectionString);
     if (!pool) {
-        pool = new Pool({ connectionString, max: 20 });
+        pool = new Pool(dbPoolOptions(connectionString));
         pools.set(connectionString, pool);
     }
     return pool;

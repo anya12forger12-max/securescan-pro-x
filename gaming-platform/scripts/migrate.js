@@ -19,6 +19,10 @@ if (process.argv[2]) {
 const pool = new pg.Pool({ connectionString: url, max: 1 });
 const client = await pool.connect();
 try {
+  // Serialise concurrent `docker compose up` / rolling deploys. Without the
+  // advisory lock two migrators can both see a file as unapplied and race to
+  // execute the same DDL.
+  await client.query("SELECT pg_advisory_lock(hashtext('gaming-platform:migrations'))");
   await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
     filename   text PRIMARY KEY,
     applied_at timestamptz NOT NULL DEFAULT now()
@@ -47,6 +51,7 @@ try {
   console.error("[migrate] failed:", err.message);
   process.exitCode = 1;
 } finally {
+  await client.query("SELECT pg_advisory_unlock(hashtext('gaming-platform:migrations'))").catch(() => undefined);
   client.release();
   await pool.end();
 }
