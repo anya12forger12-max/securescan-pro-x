@@ -58,7 +58,9 @@ for (const name of services) {
   const child = spawn(process.execPath, [join("services", name, entry)], {
     cwd: root,
     stdio: "inherit",
-    env: { ...process.env, PORT: String(ports[name]) },
+    // Local development binds every peer to loopback. The Compose network
+    // leaves HOST unset, so containers still listen on all interfaces.
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(ports[name]) },
   });
   children.push({ name, child });
 }

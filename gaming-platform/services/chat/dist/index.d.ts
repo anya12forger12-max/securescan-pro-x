@@ -3,7 +3,7 @@ declare const env: {
     PORT: number;
     JWT_ACCESS_SECRET: string;
     REALTIME_URL: string;
-    SERVICE_TOKEN: string;
+    REALTIME_SERVICE_TOKEN: string;
     CORS_ORIGIN: string;
     LOG_LEVEL: string;
 };

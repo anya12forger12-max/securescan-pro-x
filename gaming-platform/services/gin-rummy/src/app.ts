@@ -6,6 +6,7 @@ import type { PoolClient } from "pg";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { getPool, closePool, createGame, getGame, getGameForUpdate, joinGame, setGameStatus, updateGameState, } from "./db.js";
+import type { GameRow } from "./db.js";
 import type { GinRummyEnv } from "./env.js";
 
 type RequestWithRouterPath = FastifyRequest & { routerPath?: string };
@@ -33,6 +34,28 @@ function requestPath(req: FastifyRequest): string {
 
 function headerBearer(value: string | string[] | undefined): string | null {
   return typeof value === "string" && value.startsWith("Bearer ") ? value.slice(7) : null;
+}
+
+/**
+ * Never return both hands to one caller. A player may see only their own cards;
+ * spectators see neither. The internal move code still uses the full row.
+ */
+type PublicGame = Omit<GameRow, "player1_hand" | "player2_hand" | "stock_pile"> & {
+  player1_hand?: string[];
+  player2_hand?: string[];
+};
+
+function publicGame(game: GameRow, userId?: string): PublicGame {
+  const safe: PublicGame = { ...game };
+  delete (safe as { stock_pile?: string[] }).stock_pile;
+  delete safe.player1_hand;
+  delete safe.player2_hand;
+  const isPlayer = userId === game.player1_id || userId === game.player2_id;
+  if (isPlayer) {
+    if (userId === game.player1_id) safe.player1_hand = game.player1_hand;
+    if (userId === game.player2_id) safe.player2_hand = game.player2_hand;
+  }
+  return safe;
 }
 
 const CreateGameSchema = z.object({
@@ -141,18 +164,28 @@ export async function buildGinRummyService(env: GinRummyEnv) {
       session_id: parsed.data.session_id,
       player1_id: decoded.userId,
     });
-    return reply.code(201).send({ game });
+    return reply.code(201).send({ game: publicGame(game, decoded.userId) });
   });
 
   // ---------- get game ----------
   app.get("/v1/gin-rummy/games/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const token = headerBearer(req.headers.authorization);
+    let viewerId: string | undefined;
+    if (token) {
+      try {
+        viewerId = (await app.jwt.verify(token) as JwtPayload).userId;
+      } catch {
+        // An invalid token is handled by the global auth hook. Spectators with
+        // no usable identity simply receive a game with both hands hidden.
+      }
+    }
     const pool = getPool(env.DATABASE_URL);
     const game = await getGame(pool, id);
     if (!game) {
       return reply.code(404).send({ error: "GAME_NOT_FOUND", message: "game not found" });
     }
-    return reply.send({ game });
+    return reply.send({ game: publicGame(game, viewerId) });
   });
 
   // ---------- join game ----------
@@ -172,11 +205,18 @@ export async function buildGinRummyService(env: GinRummyEnv) {
     if (!game) {
       return reply.code(404).send({ error: "GAME_NOT_FOUND", message: "game not found" });
     }
-    if (game.status !== "waiting") {
+    if (game.status !== "waiting" || game.player2_id) {
       return reply.code(409).send({ error: "GAME_NOT_WAITING", message: "game is not waiting for players" });
     }
+    if (game.player1_id === decoded.userId) {
+      return reply.code(409).send({ error: "ALREADY_SEATED", message: "the host already occupies player one" });
+    }
     const updated = await joinGame(pool, parsed.data.id, decoded.userId);
-    return reply.send({ game: updated });
+    if (!updated) {
+      // Another join won the race between our read and the atomic UPDATE.
+      return reply.code(409).send({ error: "GAME_NOT_WAITING", message: "game is not waiting for players" });
+    }
+    return reply.send({ game: publicGame(updated, decoded.userId) });
   });
 
   // ---------- draw a card ----------
@@ -221,7 +261,7 @@ export async function buildGinRummyService(env: GinRummyEnv) {
       // has_drawn records the owed discard; it is cleared by /discard.
       const updated = await updateGameState(client, id, { [handKey]: hand, [sourceKey]: pile, has_drawn: true });
       await client.query("COMMIT");
-      return reply.send({ game: updated, card });
+      return reply.send({ game: publicGame(updated, decoded.userId), card });
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
@@ -274,7 +314,7 @@ export async function buildGinRummyService(env: GinRummyEnv) {
         current_turn: nextTurn,
       });
       await client.query("COMMIT");
-      return reply.send({ game: updated });
+      return reply.send({ game: publicGame(updated, decoded.userId) });
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
@@ -309,6 +349,8 @@ export async function buildGinRummyService(env: GinRummyEnv) {
         return await rejectMove(client, reply, 409, "GAME_NOT_ACTIVE", "game is not active");
       if (game.current_turn !== decoded.userId)
         return await rejectMove(client, reply, 403, "NOT_YOUR_TURN", "it is not your turn");
+      if (!game.has_drawn)
+        return await rejectMove(client, reply, 409, "MUST_DRAW_FIRST", "draw a card before declaring a win");
       const hand = game.player1_id === decoded.userId ? game.player1_hand : game.player2_hand;
       const meldedCards = parsed.data.melds.flat();
       // A card can only be laid down once, even if it appears in two groups.
@@ -318,10 +360,26 @@ export async function buildGinRummyService(env: GinRummyEnv) {
       if (meldedCards.some((card) => !(hand ?? []).includes(card))) {
         return await rejectMove(client, reply, 409, "CARD_NOT_IN_HAND", "every melded card must be in your hand");
       }
+      // A single 3-card meld is not a win. Require a complete hand of disjoint
+      // melds so a player cannot end the game from the initial deal.
+      const handCards = hand ?? [];
+      // Compare the full multiset, not just cardinalities: a duplicate card
+      // name must still be present in the hand it claims to come from.
+      const remaining = [...handCards];
+      for (const card of meldedCards) {
+        const index = remaining.indexOf(card);
+        if (index < 0) {
+          return await rejectMove(client, reply, 409, "INCOMPLETE_HAND", "every card in your hand must belong to a meld");
+        }
+        remaining.splice(index, 1);
+      }
+      if (remaining.length > 0) {
+        return await rejectMove(client, reply, 409, "INCOMPLETE_HAND", "every card in your hand must belong to a meld");
+      }
       await setGameStatus(client, id, "ended", decoded.userId);
       const updated = await getGame(client, id);
       await client.query("COMMIT");
-      return reply.send({ game: updated });
+      return reply.send({ game: publicGame(updated, decoded.userId) });
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
@@ -351,9 +409,11 @@ export async function buildGinRummyService(env: GinRummyEnv) {
       return reply.code(404).send({ error: "GAME_NOT_FOUND", message: "game not found" });
     if (decoded.userId !== game.player1_id && decoded.userId !== game.player2_id)
       return reply.code(403).send({ error: "FORBIDDEN", message: "only players may end a game" });
-    const winnerId = body.data.winner_id ?? null;
-    if (winnerId && winnerId !== game.player1_id && winnerId !== game.player2_id)
-      return reply.code(400).send({ error: "VALIDATION_ERROR", message: "winner must be a player in the game" });
+    if (game.status !== "active" || !game.player2_id)
+      return reply.code(409).send({ error: "GAME_NOT_ACTIVE", message: "game is not active" });
+    // Ending is a concession, not a way to choose an arbitrary winner. A
+    // validated win comes from /meld, which sets the winner from the hand.
+    const winnerId = decoded.userId === game.player1_id ? game.player2_id : game.player1_id;
     await setGameStatus(pool, id, "ended", winnerId);
     return reply.send({ ok: true });
   });

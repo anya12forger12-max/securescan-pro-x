@@ -4,6 +4,11 @@ import type { FastifyInstance } from "fastify";
 /** Base environment schema shared by every service. */
 export declare const baseEnvSchema: z.ZodObject<{
   SERVICE_TOKEN: z.ZodString;
+  ADMIN_SERVICE_TOKEN: z.ZodString;
+  WALLET_SERVICE_TOKEN: z.ZodString;
+  REALTIME_SERVICE_TOKEN: z.ZodString;
+  PROMOTIONS_SERVICE_TOKEN: z.ZodString;
+  ADMIN_BOOTSTRAP_TOKEN: z.ZodString;
   NODE_ENV: z.ZodDefault<z.ZodEnum<["development", "test", "production"]>>;
 }>;
 

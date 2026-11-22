@@ -4,7 +4,7 @@ export declare const ChatEnvSchema: z.ZodObject<{
     PORT: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
     JWT_ACCESS_SECRET: z.ZodString;
     REALTIME_URL: z.ZodDefault<z.ZodString>;
-    SERVICE_TOKEN: z.ZodDefault<z.ZodString>;
+    REALTIME_SERVICE_TOKEN: z.ZodString;
     CORS_ORIGIN: z.ZodDefault<z.ZodString>;
     LOG_LEVEL: z.ZodDefault<z.ZodString>;
 }, z.core.$strip>;

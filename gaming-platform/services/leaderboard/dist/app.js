@@ -16,7 +16,8 @@ function requestPath(req) {
 }
 const SubmitScoreSchema = z.object({
     game_type: z.string().min(1).max(32),
-    score: z.coerce.number().int().min(0).max(1000000000),
+    // Accepted only for backwards compatibility; the value is never used.
+    score: z.coerce.number().int().min(0).max(1000000000).optional(),
     session_id: z.string().uuid(),
 });
 const LimitSchema = z.coerce.number().int().min(1).max(100).default(50);
@@ -63,14 +64,14 @@ export async function buildLeaderboardService(env) {
             userId: decoded.userId,
             gameType: parsed.data.game_type,
         });
-        if (!verified) {
+        if (verified === null) {
             return reply.code(403).send({ error: "INVALID_GAME_RESULT", message: "score must come from a completed game the player joined" });
         }
         const entry = await createLeaderboardEntry(pool, {
             user_id: decoded.userId,
             username: decoded.username,
             game_type: parsed.data.game_type,
-            score: parsed.data.score,
+            score: verified,
             session_id: parsed.data.session_id,
         });
         return reply.code(201).send({ entry });

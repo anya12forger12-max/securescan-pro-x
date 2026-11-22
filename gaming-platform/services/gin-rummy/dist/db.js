@@ -74,10 +74,14 @@ export async function getGameForUpdate(pool, id) {
     return result.rows[0];
 }
 export async function joinGame(pool, id, player2_id) {
-    const result = await pool.query(`UPDATE gin_rummy_games SET player2_id = $2, status = 'active', current_turn = $2
-     WHERE id = $1
+    // The seat claim and the status change must be one atomic operation. Two
+    // concurrent joins used to both pass the caller's `status = waiting` check
+    // and the second UPDATE silently overwrote the first player's seat.
+    const result = await pool.query(`UPDATE gin_rummy_games
+     SET player2_id = $2, status = 'active', current_turn = $2
+     WHERE id = $1 AND status = 'waiting' AND player2_id IS NULL
      RETURNING ${GAME_COLUMNS}`, [id, player2_id]);
-    return result.rows[0];
+    return result.rows[0] ?? null;
 }
 export async function setGameStatus(pool, id, status, winnerId) {
     await pool.query(`UPDATE gin_rummy_games SET status = $2, winner_id = $3, ended_at = now() WHERE id = $1`, [id, status, winnerId]);

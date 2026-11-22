@@ -38,7 +38,7 @@ export declare function closePool(): Promise<void>;
 export declare function createGame(pool: Queryable, input: CreateGameInput): Promise<GameRow>;
 export declare function getGame(pool: Queryable, id: string): Promise<GameRow>;
 export declare function getGameForUpdate(pool: Queryable, id: string): Promise<GameRow>;
-export declare function joinGame(pool: Queryable, id: string, player2_id: string): Promise<GameRow>;
+export declare function joinGame(pool: Queryable, id: string, player2_id: string): Promise<GameRow | null>;
 export declare function setGameStatus(pool: Queryable, id: string, status: string, winnerId: string | null): Promise<void>;
 export declare function updateGameState(pool: Queryable, id: string, patch: GameStatePatch): Promise<GameRow>;
 export declare function setHasDrawn(pool: Queryable, id: string, value: boolean): Promise<GameRow>;

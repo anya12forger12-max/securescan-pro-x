@@ -77,7 +77,7 @@ const WORD_BANK = [
 type Queryable = PoolType | PoolClient;
 
 export type Team = "red" | "blue";
-export type GameStatus = "setup" | "active" | "ended";
+export type GameStatus = "waiting" | "setup" | "active" | "ended";
 export type GuessOutcome = "correct" | "wrong_team" | "neutral" | "assassin" | "invalid_word";
 
 export interface GameRow {
@@ -177,6 +177,36 @@ export async function getGame(pool: Queryable, id: string): Promise<GameRow | un
   return result.rows[0];
 }
 
+/**
+ * Codenames has no persisted team column. Use session join order as the
+ * house-rule assignment: first/third/... seat is red, second/fourth/... blue.
+ * This makes the server, not the client, authoritative for a player's team.
+ */
+export async function playerTeam(pool: Queryable, sessionId: string, userId: string): Promise<Team | null> {
+  const result = await pool.query<{ team: Team }>(`SELECT team FROM (
+       SELECT user_id,
+              CASE WHEN row_number() OVER (ORDER BY joined_at, user_id) % 2 = 1
+                   THEN 'red' ELSE 'blue' END AS team
+         FROM game_players WHERE session_id = $1
+     ) seats WHERE user_id = $2`, [sessionId, userId]);
+  return result.rows[0]?.team ?? null;
+}
+
+/** The first seat of each team is that team's spymaster. */
+export async function isTeamSpymaster(pool: Queryable, sessionId: string, userId: string, team: Team): Promise<boolean> {
+  const result = await pool.query<{ user_id: string }>(`SELECT user_id FROM (
+       SELECT user_id, team,
+              row_number() OVER (PARTITION BY team ORDER BY joined_at, user_id) AS seat
+         FROM (
+           SELECT user_id, joined_at,
+                  CASE WHEN row_number() OVER (ORDER BY joined_at, user_id) % 2 = 1
+                       THEN 'red' ELSE 'blue' END AS team
+             FROM game_players WHERE session_id = $1
+         ) seats
+     ) ranked WHERE team = $2 AND seat = 1`, [sessionId, team]);
+  return result.rows[0]?.user_id === userId;
+}
+
 export async function setGameStatus(pool: Queryable, id: string, status: GameStatus): Promise<void> {
   await pool.query(`UPDATE codenames_games SET status = $2 WHERE id = $1`, [id, status]);
 }
@@ -208,10 +238,21 @@ export async function submitGuess(pool: PoolType, input: {
   outcome: GuessOutcome;
   winner: Team | null;
   next_team: Team;
-}): Promise<GuessRow> {
+}): Promise<GuessRow | null> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // Lock the game row before recording the guess. The status check in the
+    // route is outside this transaction; without the lock, two winning guesses
+    // could both commit and the last winner update would silently overwrite.
+    const locked = await client.query<{ status: string; winner: string | null }>(
+      `SELECT status, winner FROM codenames_games WHERE id = $1 FOR UPDATE`,
+      [input.game_id],
+    );
+    if (!locked.rowCount || locked.rows[0]!.status !== "active" || locked.rows[0]!.winner) {
+      await client.query("ROLLBACK");
+      return null;
+    }
     const result = await client.query<GuessRow>(`INSERT INTO codenames_guesses (id, game_id, user_id, username, word, team, outcome)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id, game_id, user_id, username, word, team, outcome, created_at`, [input.id, input.game_id, input.user_id, input.username, input.word, input.team, input.outcome]);

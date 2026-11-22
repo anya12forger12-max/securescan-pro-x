@@ -8,7 +8,7 @@ const app = await buildGameEngineService(env);
 
 const start = async (): Promise<void> => {
   try {
-    await app.listen({ port: env.PORT, host: "0.0.0.0" });
+    await app.listen({ port: env.PORT, host: process.env.HOST ?? "0.0.0.0" });
     app.log.info(`game-engine service listening on port ${env.PORT}`);
   } catch (err) {
     app.log.error(err, "game-engine service failed to start");

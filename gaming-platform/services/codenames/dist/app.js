@@ -3,7 +3,7 @@ import { z } from "zod";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { getPool, closePool, createGame, getGame, setGameStatus, submitClue, getCluesForGame, submitGuess, listGuessesForGame, listRevealedWords } from "./db.js";
+import { getPool, closePool, createGame, getGame, setGameStatus, submitClue, getCluesForGame, submitGuess, listGuessesForGame, listRevealedWords, playerTeam, isTeamSpymaster } from "./db.js";
 /**
  * The request's route path.
  *
@@ -28,7 +28,8 @@ const SubmitClueSchema = z.object({
 });
 const SubmitGuessSchema = z.object({
     word: z.string().min(1).max(64),
-    team: z.enum(["red", "blue"]),
+    // `team` is deliberately not accepted from the client. The server derives it
+    // from game.current_team so a player cannot guess on the opposing team.
 });
 export async function buildCodenamesService(env) {
     const app = Fastify({ logger: { level: env.LOG_LEVEL } });
@@ -78,7 +79,10 @@ export async function buildCodenamesService(env) {
             session_id: parsed.data.session_id,
             host_id: decoded.userId,
         });
-        return reply.code(201).send({ game });
+        // The host is not automatically a spymaster. The full board stays server
+        // side and is only ever exposed through the reveal log.
+        const { red_team_words, blue_team_words, neutral_words, assassin_word, ...safeGame } = game;
+        return reply.code(201).send({ game: safeGame });
     });
     // ---------- get game ----------
     app.get("/v1/codenames/games/:id", async (req, reply) => {
@@ -123,7 +127,18 @@ export async function buildCodenamesService(env) {
         if (game.status !== "active") {
             return reply.code(409).send({ error: "GAME_NOT_ACTIVE", message: "game is not active" });
         }
-        const { word, team } = parsed.data;
+        if (!game.session_id) {
+            return reply.code(409).send({ error: "NO_SESSION", message: "game is not bound to a session" });
+        }
+        const { word } = parsed.data;
+        if (game.current_team !== "red" && game.current_team !== "blue") {
+            return reply.code(409).send({ error: "INVALID_TURN", message: "game has no current team" });
+        }
+        const team = game.current_team;
+        const playerSide = await playerTeam(pool, game.session_id, decoded.userId);
+        if (playerSide !== team) {
+            return reply.code(403).send({ error: "FORBIDDEN", message: "it is not your team's turn to guess" });
+        }
         const opposingTeam = team === "red" ? "blue" : "red";
         const ownWords = team === "red" ? game.red_team_words : game.blue_team_words;
         const otherWords = team === "red" ? game.blue_team_words : game.red_team_words;
@@ -156,8 +171,11 @@ export async function buildCodenamesService(env) {
             team,
             outcome,
             winner,
-            next_team: game.current_team === "red" ? "blue" : "red",
+            next_team: opposingTeam,
         });
+        if (!guess) {
+            return reply.code(409).send({ error: "GAME_NOT_ACTIVE", message: "game was closed by another guess" });
+        }
         return reply.send({ guess, outcome, ...(winner ? { winner } : {}) });
     });
     // ---------- submit clue ----------
@@ -193,6 +211,22 @@ export async function buildCodenamesService(env) {
         if (game.status !== "active") {
             return reply.code(409).send({ error: "GAME_NOT_ACTIVE", message: "game is not active" });
         }
+        if (!game.session_id) {
+            return reply.code(409).send({ error: "NO_SESSION", message: "game is not bound to a session" });
+        }
+        if (game.current_team !== "red" && game.current_team !== "blue") {
+            return reply.code(409).send({ error: "INVALID_TURN", message: "game has no current team" });
+        }
+        const team = game.current_team;
+        if (!(await isTeamSpymaster(pool, game.session_id, decoded.userId, team))) {
+            return reply.code(403).send({ error: "FORBIDDEN", message: "only the current team's spymaster may give a clue" });
+        }
+        const revealed = await listRevealedWords(pool, gameId);
+        const ownWords = team === "red" ? game.red_team_words : game.blue_team_words;
+        const remaining = (ownWords ?? []).filter((word) => !revealed.some((row) => row.word === word)).length;
+        if (parsed.data.number > remaining) {
+            return reply.code(400).send({ error: "VALIDATION_ERROR", message: "clue exceeds the remaining words" });
+        }
         const clue = await submitClue(pool, {
             id: randomUUID(),
             game_id: gameId,
@@ -225,6 +259,10 @@ export async function buildCodenamesService(env) {
             return reply.code(404).send({ error: "GAME_NOT_FOUND", message: "game not found" });
         if (game.host_id !== decoded.userId)
             return reply.code(403).send({ error: "FORBIDDEN", message: "only the host may change game status" });
+        const legal = ((game.status === "setup" || game.status === "waiting") && body.data.status === "active") ||
+            (game.status === "active" && body.data.status === "ended");
+        if (!legal)
+            return reply.code(409).send({ error: "INVALID_TRANSITION", message: `cannot move from ${game.status} to ${body.data.status}` });
         await setGameStatus(pool, id, body.data.status);
         return reply.send({ ok: true });
     });

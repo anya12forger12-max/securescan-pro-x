@@ -22,7 +22,7 @@ export declare function getPool(connectionString: string): PoolType;
 export declare function closePool(): Promise<void>;
 export declare function createSession(pool: PoolType, input: CreateSessionInput): Promise<GameSession>;
 export declare function getSession(pool: PoolType, id: string): Promise<GameSession | undefined>;
-export declare function endSession(pool: PoolType, id: string): Promise<void>;
+export declare function endSession(pool: PoolType, id: string): Promise<boolean>;
 export declare function joinSession(pool: PoolType, sessionId: string, userId: string): Promise<GamePlayer | null>;
 export declare function listSessionPlayers(pool: PoolType, sessionId: string): Promise<GamePlayer[]>;
 //# sourceMappingURL=db.d.ts.map

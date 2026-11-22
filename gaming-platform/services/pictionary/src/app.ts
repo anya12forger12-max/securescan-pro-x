@@ -13,6 +13,7 @@ import {
   submitGuess,
   getGuessesForRound,
   getRandomWord,
+  isSessionParticipant,
 } from "./db.js";
 import type { PictionaryEnv } from "./env.js";
 
@@ -76,6 +77,9 @@ export async function buildPictionaryService(env: PictionaryEnv) {
     const token = authHeader.replace("Bearer ", "");
     const decoded = await app.jwt.verify<JwtClaims>(token);
     const pool = getPool(env.DATABASE_URL);
+    if (!(await isSessionParticipant(pool, parsed.data.session_id, decoded.userId))) {
+      return reply.code(403).send({ error: "FORBIDDEN", message: "join the session before creating a round" });
+    }
     const word = await getRandomWord(pool);
     if (!word?.word) {
       return reply.code(503).send({ error: "SERVICE_UNAVAILABLE", message: "no words available" });
@@ -128,6 +132,9 @@ export async function buildPictionaryService(env: PictionaryEnv) {
     if (round.drawer_id === decoded.userId) {
       return reply.code(403).send({ error: "FORBIDDEN", message: "the drawer may not guess" });
     }
+    if (!(await isSessionParticipant(pool, round.session_id, decoded.userId))) {
+      return reply.code(403).send({ error: "FORBIDDEN", message: "join the session before guessing" });
+    }
     const correct = parsed.data.guess.toLowerCase() === round.word.toLowerCase();
     const guess = await submitGuess(pool, {
       id: randomUUID(),
@@ -137,10 +144,13 @@ export async function buildPictionaryService(env: PictionaryEnv) {
       guess: parsed.data.guess,
       correct,
     });
-    if (correct) {
-      await endRound(pool, roundId, decoded.userId);
+    if (!guess) {
+      return reply.code(409).send({ error: "ROUND_NOT_DRAWING", message: "round closed before the guess was recorded" });
     }
-    return reply.send({ guess, correct, ...(correct ? { word: round.word } : {}) });
+    // Only the caller that actually closes the round is told it won. A second
+    // correct guess racing the first is recorded but cannot claim the word.
+    const won = correct && await endRound(pool, roundId, decoded.userId);
+    return reply.send({ guess, correct: won, ...(won ? { word: round.word } : {}) });
   });
 
   // ---- health and readiness ----

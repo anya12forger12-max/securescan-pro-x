@@ -58,13 +58,39 @@ export async function closePool(): Promise<void> {
   pools.clear();
 }
 
-export async function verifyGameResult(pool: PoolType, input: VerifyGameResultInput): Promise<boolean> {
-  const result = await pool.query<GameSessionRow>(`SELECT s.id
+/**
+ * Derive the score from authoritative game state instead of trusting the
+ * client. Winners get 100, other participants in a completed session get 10.
+ * SQL updates are what decide winners; the score submit endpoint only records
+ * the result.
+ */
+export async function verifyGameResult(pool: PoolType, input: VerifyGameResultInput): Promise<number | null> {
+  const result = await pool.query<{ score: number }>(`WITH seats AS (
+       SELECT user_id,
+              row_number() OVER (ORDER BY joined_at, user_id) AS seat
+         FROM game_players WHERE session_id = $1
+     )
+     SELECT CASE
+       WHEN s.game_type = 'gin-rummy' AND EXISTS (
+         SELECT 1 FROM gin_rummy_games g
+          WHERE g.session_id = s.id AND g.winner_id = $2) THEN 100
+       WHEN s.game_type = 'pictionary' AND EXISTS (
+         SELECT 1 FROM pictionary_rounds r
+          WHERE r.session_id = s.id AND r.winner_id = $2) THEN 100
+       WHEN s.game_type = 'codenames' AND EXISTS (
+         SELECT 1 FROM codenames_games c
+          JOIN seats me ON me.user_id = $2
+          WHERE c.session_id = s.id AND c.winner IS NOT NULL
+            AND ((c.winner = 'red' AND me.seat % 2 = 1) OR
+                 (c.winner = 'blue' AND me.seat % 2 = 0))) THEN 100
+       ELSE 10
+     END AS score
      FROM game_sessions s
-     JOIN game_players p ON p.session_id = s.id
-     WHERE s.id = $1 AND s.status = 'ended' AND s.game_type = $2 AND p.user_id = $3
-     LIMIT 1`, [input.sessionId, input.gameType, input.userId]);
-  return (result.rowCount as number) > 0;
+     JOIN seats ON seats.user_id = $2
+    WHERE s.id = $1 AND s.status = 'ended' AND s.game_type = $3
+    LIMIT 1`, [input.sessionId, input.userId, input.gameType]);
+  if (!result.rowCount) return null;
+  return Number(result.rows[0].score);
 }
 
 export async function createLeaderboardEntry(pool: PoolType, input: CreateLeaderboardEntryInput): Promise<LeaderboardEntryWithSession> {

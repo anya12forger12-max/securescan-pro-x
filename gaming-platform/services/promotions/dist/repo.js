@@ -15,13 +15,14 @@ export class InMemoryPromotionsRepository {
         return this.promotions.find((p) => p.id === id) ?? null;
     }
     async createClaim(claim) {
+        const p = this.promotions.find((x) => x.id === claim.promotionId);
+        if (!p || p.claimsCount >= p.maxClaims)
+            return null;
         if (this.claims.some((c) => c.userId === claim.userId && c.promotionId === claim.promotionId))
             return null;
         const c = { id: randomUUID(), ...claim };
         this.claims.push(c);
-        const p = this.promotions.find((x) => x.id === claim.promotionId);
-        if (p)
-            p.claimsCount += 1;
+        p.claimsCount += 1;
         return c;
     }
     async deleteClaim(claimId) {
@@ -94,6 +95,7 @@ function toClaim(r) {
         id: r.id,
         promotionId: r.promotion_id,
         userId: r.user_id,
+        idempotencyKey: r.idempotency_key,
         claimedAt: iso(r.claimed_at),
         bonusAmount: r.bonus_amount,
         wageringProgress: r.wagering_progress,
@@ -130,12 +132,23 @@ export class PgPromotionsRepository {
         const client = await this.pool.connect();
         try {
             await client.query("BEGIN");
+            // The cap is enforced here, not in the route's pre-check. Two distinct
+            // users can otherwise both pass `claimsCount < maxClaims` and both be
+            // credited. The conditional UPDATE reserves one slot atomically.
+            const reserved = await client.query(`UPDATE promotions.promotions
+            SET claims_count = claims_count + 1, updated_at = now()
+          WHERE id = $1 AND claims_count < max_claims
+          RETURNING 1`, [claim.promotionId]);
+            if (!reserved.rowCount) {
+                await client.query("ROLLBACK");
+                return null;
+            }
             const { rows } = await client.query(`INSERT INTO promotions.promotion_claims
-           (promotion_id, user_id, claimed_at, bonus_amount, wagering_progress, wagering_target, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+           (promotion_id, user_id, idempotency_key, claimed_at, bonus_amount, wagering_progress, wagering_target, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (user_id, promotion_id) DO NOTHING
          RETURNING *`, [
-                claim.promotionId, claim.userId, claim.claimedAt, claim.bonusAmount,
+                claim.promotionId, claim.userId, claim.idempotencyKey, claim.claimedAt, claim.bonusAmount,
                 claim.wageringProgress, claim.wageringTarget, claim.status,
             ]);
             const row = rows[0];
@@ -143,7 +156,6 @@ export class PgPromotionsRepository {
                 await client.query("ROLLBACK");
                 return null;
             }
-            await client.query(`UPDATE promotions.promotions SET claims_count = claims_count + 1, updated_at = now() WHERE id = $1`, [claim.promotionId]);
             await client.query("COMMIT");
             return toClaim(row);
         }

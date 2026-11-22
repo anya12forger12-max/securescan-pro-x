@@ -2,7 +2,7 @@ import { registerErrorHandler } from "@gp/config";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ERROR_CODES, moneyMul, toMoney, serviceTokenOk } from "@gp/shared-types";
 function headerString(headers, name) {
     const value = headers[name];
@@ -104,7 +104,7 @@ export async function buildPromotionsService(deps) {
     // "header is present" check would let any caller with an arbitrary token
     // create promotions -- i.e. mint wallet liabilities -- through /internal/*.
     const requireService = (req, reply) => {
-        if (!serviceTokenOk(req.headers, env.SERVICE_TOKEN)) {
+        if (!serviceTokenOk(req.headers, env.PROMOTIONS_SERVICE_TOKEN)) {
             void deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
             return false;
         }
@@ -169,11 +169,17 @@ export async function buildPromotionsService(deps) {
                 return deny(reply, 403, ERROR_CODES.VALIDATION_ERROR, check.reason ?? "not eligible");
             }
         }
+        // A stable wallet key is derived from the user + promotion, never from the
+        // claim UUID. If the wallet commits but its HTTP response is lost, the
+        // retried claim uses the same key and the wallet replays instead of paying
+        // a second time.
+        const walletKey = `promo-claim-${createHash("sha256").update(`${userId}:${promo.id}`).digest("hex")}`;
         // decimal.js, not a JS float: a float here would round a bonus differently
         // from the DB NUMERIC and the ledger would drift on every claim.
         const claim = await repo.createClaim({
             promotionId: promo.id,
             userId,
+            idempotencyKey: walletKey,
             claimedAt: now,
             bonusAmount: toMoney(promo.bonusAmount),
             wageringProgress: "0",
@@ -193,7 +199,7 @@ export async function buildPromotionsService(deps) {
                     type: "bonus",
                     referenceType: "admin",
                     referenceId: claim.id,
-                    idempotencyKey: `promo-claim-${claim.id}`,
+                    idempotencyKey: claim.idempotencyKey,
                 });
             }
             catch {

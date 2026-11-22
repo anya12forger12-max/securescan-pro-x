@@ -8,7 +8,7 @@ const app = await buildPictionaryService(env);
 
 const start = async (): Promise<void> => {
   try {
-    await app.listen({ port: env.PORT, host: "0.0.0.0" });
+    await app.listen({ port: env.PORT, host: process.env.HOST ?? "0.0.0.0" });
     app.log.info(`pictionary service listening on port ${env.PORT}`);
   } catch (err) {
     app.log.error(err, "pictionary service failed to start");

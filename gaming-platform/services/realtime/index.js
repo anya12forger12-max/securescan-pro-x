@@ -111,7 +111,9 @@ const EventSchema = z.object({
 });
 
 app.post("/internal/events", async (req, reply) => {
-  if (!serviceTokenOk(req.headers, env.SERVICE_TOKEN))
+  // Publishing is capability scoped so a compromised game process cannot
+  // forge arbitrary realtime events with the general service token.
+  if (!serviceTokenOk(req.headers, env.REALTIME_SERVICE_TOKEN))
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
 
   const parsed = EventSchema.safeParse(req.body);
@@ -237,7 +239,7 @@ app.addHook("onClose", async () => {
 await startListener();
 
 try {
-  await app.listen({ port: env.PORT, host: "0.0.0.0" });
+  await app.listen({ port: env.PORT, host: process.env.HOST ?? "0.0.0.0" });
 } catch (err) {
   app.log.error({ err }, "realtime failed to start");
   await pool.end().catch(() => undefined);

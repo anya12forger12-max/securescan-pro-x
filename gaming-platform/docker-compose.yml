@@ -11,6 +11,13 @@ x-common-env: &common-env
   REDIS_URL: ${REDIS_URL:-redis://redis:6379}
   JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET must be at least 32 random characters}
   SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
+  # Capability-scoped internal credentials: a compromised service cannot use
+  # its own token to reach the wallet, admin or event APIs.
+  ADMIN_SERVICE_TOKEN: ${ADMIN_SERVICE_TOKEN:?ADMIN_SERVICE_TOKEN must be set}
+  WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
+  REALTIME_SERVICE_TOKEN: ${REALTIME_SERVICE_TOKEN:?REALTIME_SERVICE_TOKEN must be set}
+  PROMOTIONS_SERVICE_TOKEN: ${PROMOTIONS_SERVICE_TOKEN:?PROMOTIONS_SERVICE_TOKEN must be set}
+  ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:?ADMIN_BOOTSTRAP_TOKEN must be set}
   CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN must be the public browser origin}
   LOG_LEVEL: ${LOG_LEVEL:-info}
   REALTIME_URL: http://realtime:3010

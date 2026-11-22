@@ -54,15 +54,19 @@ export async function getSession(pool: PoolType, id: string): Promise<GameSessio
   return result.rows[0];
 }
 
-export async function endSession(pool: PoolType, id: string): Promise<void> {
-  await pool.query(`UPDATE game_sessions SET status = 'ended', ended_at = now() WHERE id = $1`, [id]);
+export async function endSession(pool: PoolType, id: string): Promise<boolean> {
+  // Conditional so a late duplicate end request cannot move ended_at.
+  const result = await pool.query(`UPDATE game_sessions SET status = 'ended', ended_at = now()
+     WHERE id = $1 AND status <> 'ended'`, [id]);
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function joinSession(pool: PoolType, sessionId: string, userId: string): Promise<GamePlayer | null> {
-  // The unique (session_id, user_id) constraint is a duplicate join, not a
-  // server error. Return null so the route can answer 409 instead of 500.
+  // The session state check and the insert are one statement. The unique
+  // (session_id, user_id) constraint remains the duplicate-join guard.
   const result = await pool.query<GamePlayer>(`INSERT INTO game_players (session_id, user_id)
-     VALUES ($1, $2)
+     SELECT $1, $2
+      WHERE EXISTS (SELECT 1 FROM game_sessions WHERE id = $1 AND status = 'waiting')
      ON CONFLICT (session_id, user_id) DO NOTHING
      RETURNING id, session_id, user_id, joined_at`, [sessionId, userId]);
   return result.rows[0] ?? null;

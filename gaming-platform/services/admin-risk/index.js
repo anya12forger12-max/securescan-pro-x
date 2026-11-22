@@ -157,7 +157,7 @@ const GrantSchema = z.object({
 });
 
 app.post("/v1/internal/rbac/check", async (req, reply) => {
-  if (!serviceTokenOk(req.headers, env.SERVICE_TOKEN))
+  if (!serviceTokenOk(req.headers, env.ADMIN_SERVICE_TOKEN))
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
 
   const parsed = CheckSchema.safeParse(req.body);
@@ -179,7 +179,7 @@ app.post("/v1/internal/rbac/check", async (req, reply) => {
 });
 
 app.post("/v1/internal/audit", async (req, reply) => {
-  if (!serviceTokenOk(req.headers, env.SERVICE_TOKEN))
+  if (!serviceTokenOk(req.headers, env.ADMIN_SERVICE_TOKEN))
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
 
   const parsed = AuditSchema.safeParse(req.body);
@@ -196,7 +196,7 @@ app.post("/v1/internal/audit", async (req, reply) => {
 });
 
 app.get("/v1/internal/audit/verify", async (req, reply) => {
-  if (!serviceTokenOk(req.headers, env.SERVICE_TOKEN))
+  if (!serviceTokenOk(req.headers, env.ADMIN_SERVICE_TOKEN))
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
 
   try {
@@ -233,7 +233,7 @@ app.get("/v1/internal/audit/verify", async (req, reply) => {
 });
 
 app.get("/v1/internal/audit", async (req, reply) => {
-  if (!serviceTokenOk(req.headers, env.SERVICE_TOKEN))
+  if (!serviceTokenOk(req.headers, env.ADMIN_SERVICE_TOKEN))
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
 
   const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
@@ -253,7 +253,7 @@ app.get("/v1/internal/audit", async (req, reply) => {
 });
 
 app.get("/v1/admin-risk/roles", async (req, reply) => {
-  if (!serviceTokenOk(req.headers, env.SERVICE_TOKEN)) {
+  if (!serviceTokenOk(req.headers, env.ADMIN_SERVICE_TOKEN)) {
     const raw = headerString(req.headers, "authorization");
     if (!raw?.startsWith("Bearer "))
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid credentials");
@@ -279,19 +279,73 @@ app.get("/v1/admin-risk/roles", async (req, reply) => {
   return ok(reply, 200, ROLE_PERMISSIONS, reqId(req));
 });
 
+/**
+ * First-admin bootstrap. The gateway already checked ADMIN_BOOTSTRAP_TOKEN and
+ * a player JWT; we repeat the token check here so a direct call to this port
+ * (if it were ever exposed) cannot skip it. It only works while no admin
+ * exists and only for the authenticated caller.
+ */
+app.post("/v1/admin-risk/bootstrap", async (req, reply) => {
+  if (!serviceTokenOk(req.headers, env.ADMIN_SERVICE_TOKEN))
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
+  if (!serviceTokenOk({ "x-service-token": req.headers["x-bootstrap-token"] }, env.ADMIN_BOOTSTRAP_TOKEN))
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid bootstrap token");
+
+  const parsed = z.object({ userId: z.string().min(1) }).safeParse(req.body);
+  if (!parsed.success)
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+  const actor = headerString(req.headers, "x-user-id");
+  if (!actor || actor !== parsed.data.userId) {
+    return deny(reply, 403, ERROR_CODES.FORBIDDEN, "bootstrap may only grant admin to the authenticated caller");
+  }
+
+  try {
+    const result = await withTransaction(async (client) => {
+      // Serialise concurrent bootstrap attempts so exactly one caller wins.
+      await client.query("SELECT pg_advisory_xact_lock(3013002)");
+      const admins = await client.query("SELECT user_id FROM admin_user_roles WHERE role = 'admin' LIMIT 2");
+      if (admins.rowCount && !(admins.rowCount === 1 && admins.rows[0].user_id === actor)) {
+        return { conflict: true };
+      }
+      const assignment = await client.query(
+        `INSERT INTO admin_user_roles (user_id, role, granted_by, granted_at)
+         VALUES ($1, 'admin', $2, now())
+         ON CONFLICT (user_id, role) DO UPDATE
+           SET granted_by = EXCLUDED.granted_by, granted_at = now()
+         RETURNING user_id, role, granted_by, granted_at`,
+        [actor, `bootstrap:${actor}`],
+      );
+      const entry = await appendAudit(client, {
+        actor: `bootstrap:${actor}`,
+        action: "rbac.bootstrap",
+        target: `${actor}:admin`,
+        metadata: { userId: actor, role: "admin", bootstrap: true },
+      });
+      return { assignment: assignment.rows[0], entry };
+    });
+    if (result.conflict) {
+      return deny(reply, 409, ERROR_CODES.CONFLICT, "an administrator has already been bootstrapped");
+    }
+    return ok(reply, 201, result, reqId(req));
+  } catch (err) {
+    req.log.error({ err }, "admin bootstrap failed");
+    return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "admin bootstrap failed");
+  }
+});
+
 app.post("/v1/admin-risk/roles/grant", async (req, reply) => {
-  if (!serviceTokenOk(req.headers, env.SERVICE_TOKEN))
+  if (!serviceTokenOk(req.headers, env.ADMIN_SERVICE_TOKEN))
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
 
   const parsed = GrantSchema.safeParse(req.body);
   if (!parsed.success)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
 
-  const grantedBy =
-    parsed.data.grantedBy ??
-    headerString(req.headers, "x-user-id") ??
-    headerString(req.headers, "x-actor") ??
-    "system";
+  const actor = headerString(req.headers, "x-user-id") ?? headerString(req.headers, "x-actor");
+  if (!actor) {
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "grant requests must identify the granting user");
+  }
+  const grantedBy = parsed.data.grantedBy ?? actor;
 
   try {
     const result = await withTransaction(async (client) => {
@@ -329,7 +383,7 @@ app.get("/ready", async (_req, reply) => {
 });
 
 try {
-  await app.listen({ port: env.PORT, host: "0.0.0.0" });
+  await app.listen({ port: env.PORT, host: process.env.HOST ?? "0.0.0.0" });
 } catch (err) {
   app.log.error({ err }, "admin-risk failed to start");
   await pool.end().catch(() => undefined);

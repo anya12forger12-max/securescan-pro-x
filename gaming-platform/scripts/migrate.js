@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import pg from "pg";
 
@@ -25,21 +26,30 @@ try {
   await client.query("SELECT pg_advisory_lock(hashtext('gaming-platform:migrations'))");
   await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
     filename   text PRIMARY KEY,
+    checksum   text,
     applied_at timestamptz NOT NULL DEFAULT now()
   )`);
+  await client.query(`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum text`);
 
   for (const file of files) {
-    const already = await client.query("SELECT 1 FROM schema_migrations WHERE filename = $1", [file]);
+    const sql = await readFile(new URL(file, migrationsDir), "utf8");
+    const checksum = createHash("sha256").update(sql).digest("hex");
+    const already = await client.query("SELECT checksum FROM schema_migrations WHERE filename = $1", [file]);
     if (already.rowCount) {
+      const recorded = already.rows[0].checksum;
+      if (!recorded) {
+        await client.query("UPDATE schema_migrations SET checksum = $1 WHERE filename = $2", [checksum, file]);
+      } else if (recorded !== checksum) {
+        throw new Error(`${file} changed after it was applied`);
+      }
       console.log(`[migrate] skipping ${file} (already applied)`);
       continue;
     }
 
-    const sql = await readFile(new URL(file, migrationsDir), "utf8");
     await client.query("BEGIN");
     try {
       await client.query(sql);
-      await client.query("INSERT INTO schema_migrations (filename) VALUES ($1)", [file]);
+      await client.query("INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)", [file, checksum]);
       await client.query("COMMIT");
       console.log(`[migrate] applied ${file}`);
     } catch (err) {

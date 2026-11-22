@@ -34,7 +34,13 @@ export interface UserStats {
 }
 export declare function getPool(connectionString: string): PoolType;
 export declare function closePool(): Promise<void>;
-export declare function verifyGameResult(pool: PoolType, input: VerifyGameResultInput): Promise<boolean>;
+/**
+ * Derive the score from authoritative game state instead of trusting the
+ * client. Winners get 100, other participants in a completed session get 10.
+ * SQL updates are what decide winners; the score submit endpoint only records
+ * the result.
+ */
+export declare function verifyGameResult(pool: PoolType, input: VerifyGameResultInput): Promise<number | null>;
 export declare function createLeaderboardEntry(pool: PoolType, input: CreateLeaderboardEntryInput): Promise<LeaderboardEntryWithSession>;
 export declare function getLeaderboard(pool: PoolType, gameType: string, limit?: number): Promise<LeaderboardEntry[]>;
 export declare function getUserBestScores(pool: PoolType, userId: string): Promise<LeaderboardEntry[]>;

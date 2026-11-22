@@ -1,7 +1,7 @@
 import type { Pool as PoolType, PoolClient } from "pg";
 type Queryable = PoolType | PoolClient;
 export type Team = "red" | "blue";
-export type GameStatus = "setup" | "active" | "ended";
+export type GameStatus = "waiting" | "setup" | "active" | "ended";
 export type GuessOutcome = "correct" | "wrong_team" | "neutral" | "assassin" | "invalid_word";
 export interface GameRow {
     id: string;
@@ -50,6 +50,14 @@ export declare function createGame(pool: PoolType, input: {
     host_id: string;
 }): Promise<GameRow>;
 export declare function getGame(pool: Queryable, id: string): Promise<GameRow | undefined>;
+/**
+ * Codenames has no persisted team column. Use session join order as the
+ * house-rule assignment: first/third/... seat is red, second/fourth/... blue.
+ * This makes the server, not the client, authoritative for a player's team.
+ */
+export declare function playerTeam(pool: Queryable, sessionId: string, userId: string): Promise<Team | null>;
+/** The first seat of each team is that team's spymaster. */
+export declare function isTeamSpymaster(pool: Queryable, sessionId: string, userId: string, team: Team): Promise<boolean>;
 export declare function setGameStatus(pool: Queryable, id: string, status: GameStatus): Promise<void>;
 export declare function submitClue(pool: PoolType, input: {
     id: string;
@@ -69,7 +77,7 @@ export declare function submitGuess(pool: PoolType, input: {
     outcome: GuessOutcome;
     winner: Team | null;
     next_team: Team;
-}): Promise<GuessRow>;
+}): Promise<GuessRow | null>;
 export declare function listGuessesForGame(pool: PoolType, gameId: string): Promise<GuessRow[]>;
 export declare function listRevealedWords(pool: PoolType, gameId: string): Promise<RevealedRow[]>;
 export declare function revealWord(pool: Queryable, input: {

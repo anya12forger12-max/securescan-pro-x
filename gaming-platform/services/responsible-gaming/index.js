@@ -153,7 +153,7 @@ app.get("/ready", async (_req, reply) => {
 });
 
 try {
-  await app.listen({ port: env.PORT, host: "0.0.0.0" });
+  await app.listen({ port: env.PORT, host: process.env.HOST ?? "0.0.0.0" });
 } catch (err) {
   app.log.error({ err }, "responsible-gaming failed to start");
   await pool.end().catch(() => undefined);

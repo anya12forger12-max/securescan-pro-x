@@ -19,6 +19,7 @@ export interface ClaimRow {
     id: string;
     promotion_id: string;
     user_id: string;
+    idempotency_key: string;
     claimed_at: DbTimestamp;
     bonus_amount: string;
     wagering_progress: string;
@@ -46,6 +47,7 @@ export interface Claim {
     id: string;
     promotionId: string;
     userId: string;
+    idempotencyKey: string;
     claimedAt: string;
     bonusAmount: string;
     wageringProgress: string;
@@ -55,6 +57,7 @@ export interface Claim {
 export interface NewClaimInput {
     promotionId: string;
     userId: string;
+    idempotencyKey: string;
     claimedAt: string;
     bonusAmount: string;
     wageringProgress: string;

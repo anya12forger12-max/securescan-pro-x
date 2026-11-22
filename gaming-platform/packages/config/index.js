@@ -3,15 +3,21 @@ import { z } from "zod";
 /**
  * Configuration shared by every service.
  *
- * SERVICE_TOKEN is used by the gateway to assert trusted internal calls
- * (for example x-user-id injection and promotions catalogue management).
- * It has no default: a silent shared fallback would let any deployment that
- * forgot to configure it accept forged internal credentials.
+ * Internal credentials are capability scoped. One shared token used to let a
+ * compromised chat process credit wallets and grant admin roles; each internal
+ * API now has its own token and the gateway injects only the one that route
+ * needs. None has a default, so a half-configured deployment fails closed.
  */
+const internalToken = (name) =>
+  z.string().min(32, `${name} must be at least 32 characters and explicitly configured`);
+
 export const baseEnvSchema = z.object({
-  SERVICE_TOKEN: z
-    .string()
-    .min(32, "SERVICE_TOKEN must be at least 32 characters and explicitly configured"),
+  SERVICE_TOKEN: internalToken("SERVICE_TOKEN"),
+  ADMIN_SERVICE_TOKEN: internalToken("ADMIN_SERVICE_TOKEN"),
+  WALLET_SERVICE_TOKEN: internalToken("WALLET_SERVICE_TOKEN"),
+  REALTIME_SERVICE_TOKEN: internalToken("REALTIME_SERVICE_TOKEN"),
+  PROMOTIONS_SERVICE_TOKEN: internalToken("PROMOTIONS_SERVICE_TOKEN"),
+  ADMIN_BOOTSTRAP_TOKEN: internalToken("ADMIN_BOOTSTRAP_TOKEN"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 });
 

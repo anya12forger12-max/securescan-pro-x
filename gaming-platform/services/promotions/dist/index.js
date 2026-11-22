@@ -16,7 +16,7 @@ const wallet = env.WALLET_URL
             try {
                 res = await fetchWithTimeout(`${env.WALLET_URL}/internal/wallet/credit`, {
                     method: "POST",
-                    headers: { "content-type": "application/json", "x-service-token": env.SERVICE_TOKEN },
+                    headers: { "content-type": "application/json", "x-service-token": env.WALLET_SERVICE_TOKEN },
                     body: JSON.stringify(input),
                 });
             }
@@ -74,7 +74,7 @@ const stop = async () => {
 process.on("SIGTERM", () => void stop());
 process.on("SIGINT", () => void stop());
 try {
-    await app.listen({ port: env.PORT, host: "0.0.0.0" });
+    await app.listen({ port: env.PORT, host: process.env.HOST ?? "0.0.0.0" });
 }
 catch (err) {
     app.log.error({ err }, "promotions service failed to start");

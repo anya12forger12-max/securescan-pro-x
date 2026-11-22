@@ -7,10 +7,10 @@ back to that layout. This project supplies the missing bootstrap layer and the
 peer services those services assume are running, so the platform can be
 installed, migrated and started as one system.
 
-All fourteen services boot, the six migrations apply cleanly, and the main
+All fourteen services boot, the seven migrations apply cleanly, and the main
 auth / RBAC / wallet / chat / realtime / promotions / Codenames / Gin-rummy /
-audit flows pass end to end through the gateway (20 checks in the validation
-run).
+audit flows pass end to end through the gateway (a separate 20-flow integration
+run; `npm run smoke` covers the deploy-critical subset).
 
 ## Services
 
@@ -41,12 +41,12 @@ These are fixed here (each fix is commented inline at the site):
   The previous hard-coded `127.0.0.1` broke every proxied route in Compose.
 - **Identity spoofing at the edge** — the gateway strips caller-supplied
   `x-user-id`, `x-username` and `x-service-token`, asserts identity only from a
-  verified player JWT, and injects the service token only on privileged routes.
-  Previously any caller could set `x-user-id: <victim>` and gain full
-  impersonation against wallet, promotions, RG and tournaments.
+  verified player JWT, and injects only the capability token that route is
+  allowed to use. Previously any caller could set `x-user-id: <victim>` and gain
+  full impersonation against wallet, promotions, RG and tournaments.
 - **Privileged route gating / audit prefix** — admin routes require a verified
   player token plus an admin-risk RBAC permission; peer-to-peer routes require
-  a real service token. A failed RBAC check fails closed. The gateway route and
+  the matching capability token. A failed RBAC check fails closed. The gateway route and
   permission lookup for the audit API were corrected to `/v1/internal/audit`,
   so `GET /v1/internal/audit/verify` now proxies correctly. The old arbitrary
   token dev-login shim is gone; `/v1/auth/*` is served by the auth service.
@@ -62,12 +62,14 @@ These are fixed here (each fix is commented inline at the site):
 - **Promotions/wallet consistency** — the wallet client throws on non-2xx and
   transport errors, so the claim rollback in `app.js` runs instead of leaving a
   claim with no wallet credit.
-- **Leaderboard integrity** — each score is bound to one verified session via
-  `UNIQUE (user_id, session_id)`; replays return the existing entry.
+- **Leaderboard integrity** — scores are derived from authoritative game state,
+  bound to one verified session via `UNIQUE (user_id, session_id)`; replays
+  return the existing entry.
 - **Chat and Codenames URL authority** — the URL `:room` / `:id` is authoritative
   over conflicting body fields; chat also ignores a body `room` mismatch.
-- **Explicit service credentials** — `SERVICE_TOKEN` has no shared default; a
-  deployment that forgets to set it fails at startup.
+- **Capability-scoped credentials** — admin, wallet, realtime and promotions
+  internal APIs each have a distinct token with no shared default; a
+  deployment that forgets any of them fails at startup.
 - **Durable realtime** — events are persisted in `realtime_events` and published
   via `pg_notify`, so SSE polling works across process restarts.
 - **Readiness** — every stateful service, including promotions, exposes
@@ -109,9 +111,11 @@ These are fixed here (each fix is commented inline at the site):
 | `0004_auth.sql` | users, refresh tokens, session metadata |
 | `0005_admin_risk.sql` | RBAC roles/assignments, hash-chained admin audit |
 | `0006_realtime.sql` | durable `realtime_events` table |
+| `0007_promotions_idempotency.sql` | stable wallet idempotency key for claims |
 
-All six are applied by the one-shot `migrate` service before any application
-starts, on first boot and on every upgrade.
+All seven are applied by the one-shot `migrate` service before any application
+starts, on first boot and on every upgrade. Applied files are checksummed, so
+editing an already-applied migration fails the deploy instead of drifting.
 
 ## Deploy with Docker Compose
 
@@ -125,11 +129,11 @@ docker compose up -d --build
 npm run smoke
 ```
 
-`env:init` generates a fresh Postgres password, JWT signing key and service
-token, writes a `0600` `.env`, and refuses to replace an existing one unless
-`--force` is passed. Compose fails before starting anything if `DATABASE_URL`,
-`JWT_ACCESS_SECRET`, `SERVICE_TOKEN`, `CORS_ORIGIN` or `POSTGRES_PASSWORD` is
-blank.
+`env:init` generates a fresh Postgres password, JWT signing key, all five
+internal capability tokens and the one-time admin bootstrap token, writes a
+`0600` `.env`, and refuses to replace an existing one unless `--force` is
+passed. Compose fails before starting anything if any required secret or
+`DATABASE_URL` / `CORS_ORIGIN` is blank.
 
 Only the gateway is published on `0.0.0.0:3000`. Postgres and Redis bind to
 `127.0.0.1` for local administration; the other thirteen services are reachable
@@ -163,7 +167,13 @@ npm ci --omit=dev
 export DATABASE_URL=postgresql://gp:<password>@127.0.0.1:5432/gaming_platform
 export REDIS_URL=redis://127.0.0.1:6379
 export JWT_ACCESS_SECRET='a-long-random-secret-at-least-32-chars'
+# Use the distinct values from .env (or generate fresh ones for a test run).
 export SERVICE_TOKEN='another-long-random-secret-at-least-32-chars'
+export ADMIN_SERVICE_TOKEN='admin-service-secret-at-least-32-characters'
+export WALLET_SERVICE_TOKEN='wallet-service-secret-at-least-32-characters'
+export REALTIME_SERVICE_TOKEN='realtime-service-secret-at-least-32-characters'
+export PROMOTIONS_SERVICE_TOKEN='promotions-service-secret-at-least-32-characters'
+export ADMIN_BOOTSTRAP_TOKEN='bootstrap-secret-at-least-32-characters'
 export REALTIME_URL=http://127.0.0.1:3010
 export WALLET_URL=http://127.0.0.1:3011
 export RESPONSIBLE_GAMING_URL=http://127.0.0.1:3012
@@ -208,33 +218,45 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/v1/auth/me
 ### RBAC and internal routes
 
 Privileged routes need a player token **and** a permission granted through
-admin-risk. `/internal/events` is the exception: it is service-token-only,
-which is how peer services publish events.
+admin-risk. `/internal/events` and `/internal/wallet` are exceptions: they are
+capability-token-only. Each internal API has its own token, so a compromised
+service cannot reuse its own credential to mint credits or admin roles.
+
+Claim the first admin exactly once, through the gateway, with the player token
+of the account that should become admin:
 
 ```bash
-# Grant a role (direct admin-risk call with the service token).
-curl -X POST http://localhost:3013/v1/admin-risk/roles/grant \
+curl -X POST http://localhost:3000/v1/admin-risk/bootstrap \
   -H 'content-type: application/json' \
-  -H "x-service-token: $SERVICE_TOKEN" \
-  -d '{"userId":"<user-id>","role":"admin"}'
+  -H "Authorization: Bearer $TOKEN" \
+  -H "x-bootstrap-token: $ADMIN_BOOTSTRAP_TOKEN" \
+  -d "{\"userId\":\"$USER_ID\"}"
 
-# Now the admin can read the audit chain through the gateway.
+# Further grants require roles.manage (the admin role has it).
+curl -X POST http://localhost:3000/v1/admin-risk/roles/grant \
+  -H 'content-type: application/json' -H "Authorization: Bearer $TOKEN" \
+  -d '{"userId":"<user-id>","role":"support"}'
+
+# Reading the audit chain also goes through the gateway.
 curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/v1/internal/audit/verify
-curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"userId":"<user-id>","permission":"audit.read"}' \
-  http://localhost:3000/v1/internal/rbac/check
 
-# Service-to-service event publish.
+# Service-to-service event publish uses the realtime capability token.
 curl -X POST http://localhost:3000/internal/events \
-  -H 'content-type: application/json' -H "x-service-token: $SERVICE_TOKEN" \
+  -H 'content-type: application/json' -H "x-service-token: $REALTIME_SERVICE_TOKEN" \
   -d '{"topic":"chat.message","payload":{"room":"lobby","text":"hi"}}'
 ```
 
+Tournament creation is an admin action (`tournaments.manage`) because it sets
+entry fees and prize pools.
+
 ### Realtime
 
+Event reads require a player JWT; clients may not subscribe globally with a
+service token.
+
 ```bash
-curl -N 'http://localhost:3000/v1/events/stream?since=0'
-curl 'http://localhost:3000/v1/events'
+curl -N -H "Authorization: Bearer $TOKEN" 'http://localhost:3000/v1/events/stream?since=0'
+curl -H "Authorization: Bearer $TOKEN" 'http://localhost:3000/v1/events'
 ```
 
 ### Codenames

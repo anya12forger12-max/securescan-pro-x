@@ -12,6 +12,11 @@ import { z } from "zod";
  */
 export declare const promotionsEnvSchema: z.ZodObject<{
     SERVICE_TOKEN: z.ZodString;
+    ADMIN_SERVICE_TOKEN: z.ZodString;
+    WALLET_SERVICE_TOKEN: z.ZodString;
+    REALTIME_SERVICE_TOKEN: z.ZodString;
+    PROMOTIONS_SERVICE_TOKEN: z.ZodString;
+    ADMIN_BOOTSTRAP_TOKEN: z.ZodString;
     NODE_ENV: z.ZodDefault<z.ZodEnum<["development", "test", "production"]>>;
     PORT: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
     DATABASE_URL: z.ZodString;
@@ -33,6 +38,11 @@ export declare const promotionsEnvSchema: z.ZodObject<{
 export type PromotionsEnv = z.infer<typeof promotionsEnvSchema>;
 export declare const loadEnv: (data: unknown, params?: z.core.ParseContext<z.core.$ZodIssue>) => {
     SERVICE_TOKEN: string;
+    ADMIN_SERVICE_TOKEN: string;
+    WALLET_SERVICE_TOKEN: string;
+    REALTIME_SERVICE_TOKEN: string;
+    PROMOTIONS_SERVICE_TOKEN: string;
+    ADMIN_BOOTSTRAP_TOKEN: string;
     NODE_ENV: 3 | "development" | "test" | "production" | (() => ArrayIterator<"development" | "test" | "production">) | {
         [x: number]: boolean | undefined;
         length?: boolean | undefined;

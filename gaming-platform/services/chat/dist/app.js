@@ -31,7 +31,7 @@ export async function buildChatService(env) {
                 method: "POST",
                 headers: {
                     "content-type": "application/json",
-                    "x-service-token": env.SERVICE_TOKEN,
+                    "x-service-token": env.REALTIME_SERVICE_TOKEN,
                 },
                 body: JSON.stringify({ topic, payload }),
                 signal: AbortSignal.timeout(2000),

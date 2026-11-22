@@ -79,18 +79,33 @@ export async function getRound(pool: PoolType, id: string): Promise<PictionaryRo
   return result.rows[0];
 }
 
-export async function endRound(pool: PoolType, id: string, winnerId: string): Promise<void> {
+export async function endRound(pool: PoolType, id: string, winnerId: string): Promise<boolean> {
   // Conditional update: two simultaneous correct guesses must not both be
   // able to close the round; the first one wins and the rest are no-ops.
-  await pool.query(`UPDATE pictionary_rounds SET status = 'ended', ended_at = now(), winner_id = $2
+  const result = await pool.query(`UPDATE pictionary_rounds SET status = 'ended', ended_at = now(), winner_id = $2
       WHERE id = $1 AND status = 'drawing'`, [id, winnerId]);
+  return (result.rowCount ?? 0) > 0;
 }
 
-export async function submitGuess(pool: PoolType, input: SubmitGuessInput): Promise<PictionaryGuess> {
+export async function isSessionParticipant(pool: PoolType, sessionId: string, userId: string): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT 1 FROM game_sessions s
+       JOIN game_players p ON p.session_id = s.id
+      WHERE s.id = $1 AND s.status IN ('waiting', 'active') AND p.user_id = $2
+      LIMIT 1`,
+    [sessionId, userId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function submitGuess(pool: PoolType, input: SubmitGuessInput): Promise<PictionaryGuess | null> {
+  // The status predicate is part of the INSERT so a guess can never be written
+  // to a round that closed between the route's read and this write.
   const result = await pool.query<PictionaryGuess>(`INSERT INTO pictionary_guesses (id, round_id, user_id, username, guess, correct)
-     VALUES ($1, $2, $3, $4, $5, $6)
+     SELECT $1, $2, $3, $4, $5, $6
+      WHERE EXISTS (SELECT 1 FROM pictionary_rounds WHERE id = $2 AND status = 'drawing')
      RETURNING id, round_id, user_id, username, guess, correct, created_at`, [input.id, input.round_id, input.user_id, input.username, input.guess, input.correct]);
-  return result.rows[0]!;
+  return result.rows[0] ?? null;
 }
 
 export async function getGuessesForRound(pool: PoolType, roundId: string): Promise<PictionaryGuess[]> {

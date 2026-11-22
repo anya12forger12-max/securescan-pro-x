@@ -42,8 +42,9 @@ export declare function getPool(connectionString: string): PoolType;
 export declare function closePool(): Promise<void>;
 export declare function createRound(pool: PoolType, input: CreateRoundInput): Promise<PictionaryRound>;
 export declare function getRound(pool: PoolType, id: string): Promise<PictionaryRound | undefined>;
-export declare function endRound(pool: PoolType, id: string, winnerId: string): Promise<void>;
-export declare function submitGuess(pool: PoolType, input: SubmitGuessInput): Promise<PictionaryGuess>;
+export declare function endRound(pool: PoolType, id: string, winnerId: string): Promise<boolean>;
+export declare function isSessionParticipant(pool: PoolType, sessionId: string, userId: string): Promise<boolean>;
+export declare function submitGuess(pool: PoolType, input: SubmitGuessInput): Promise<PictionaryGuess | null>;
 export declare function getGuessesForRound(pool: PoolType, roundId: string): Promise<PictionaryGuess[]>;
 export declare function getRandomWord(pool: PoolType): Promise<PictionaryWord | undefined>;
 //# sourceMappingURL=db.d.ts.map

@@ -79,7 +79,9 @@ const TX_COLUMNS = `id, idempotency_key, user_id, amount, type, reference_type,
   reference_id, balance_after, created_at`;
 
 app.post("/internal/wallet/credit", async (req, reply) => {
-  if (!serviceTokenOk(req.headers, env.SERVICE_TOKEN))
+  // Credit is the highest-risk internal capability; it accepts only the
+  // wallet-scoped token, never the general service token.
+  if (!serviceTokenOk(req.headers, env.WALLET_SERVICE_TOKEN))
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
 
   const parsed = CreditSchema.safeParse(req.body);
@@ -185,7 +187,7 @@ app.get("/ready", async (_req, reply) => {
 });
 
 try {
-  await app.listen({ port: env.PORT, host: "0.0.0.0" });
+  await app.listen({ port: env.PORT, host: process.env.HOST ?? "0.0.0.0" });
 } catch (err) {
   app.log.error({ err }, "wallet failed to start");
   await pool.end().catch(() => undefined);
