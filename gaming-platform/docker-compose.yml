@@ -50,7 +50,7 @@ x-app: &app
 services:
   postgres:
     image: postgres:16-alpine
-    # 13 app services x DB_POOL_MAX(5) + the LISTEN connection + migrations
+    # 15 app services x DB_POOL_MAX(5) + the LISTEN connection + migrations
     # stays well under this ceiling; the default 100 would be exhausted.
     command: ["postgres", "-c", "max_connections=200"]
     environment:
@@ -108,6 +108,7 @@ services:
       WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
       REALTIME_SERVICE_TOKEN: ${REALTIME_SERVICE_TOKEN:?REALTIME_SERVICE_TOKEN must be set}
       PROMOTIONS_SERVICE_TOKEN: ${PROMOTIONS_SERVICE_TOKEN:?PROMOTIONS_SERVICE_TOKEN must be set}
+      CRASH_SERVICE_TOKEN: ${CRASH_SERVICE_TOKEN:?CRASH_SERVICE_TOKEN must be set}
       ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:?ADMIN_BOOTSTRAP_TOKEN must be set}
     healthcheck:
       test:
@@ -249,6 +250,25 @@ services:
       WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
     expose:
       - "3022"
+
+  # Unified Aviator/crash game. It holds three distinct capabilities: its own
+  # lifecycle token, the wallet token for stakes/payouts, and the realtime
+  # token for the public event feed. It never receives the admin or promotions
+  # token.
+  crash:
+    <<: *app
+    command: node services/crash/index.js
+    environment:
+      <<: *common-env
+      PORT: 3023
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
+      CRASH_SERVICE_TOKEN: ${CRASH_SERVICE_TOKEN:?CRASH_SERVICE_TOKEN must be set}
+      WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
+      REALTIME_SERVICE_TOKEN: ${REALTIME_SERVICE_TOKEN:?REALTIME_SERVICE_TOKEN must be set}
+      WALLET_INTERNAL_URL: http://wallet:3011
+      REALTIME_INTERNAL_URL: http://realtime:3010
+    expose:
+      - "3023"
 
 volumes:
   pgdata:

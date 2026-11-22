@@ -8,6 +8,7 @@ export declare const capabilityTokenFields: {
   WALLET_SERVICE_TOKEN: z.ZodString;
   REALTIME_SERVICE_TOKEN: z.ZodString;
   PROMOTIONS_SERVICE_TOKEN: z.ZodString;
+  CRASH_SERVICE_TOKEN: z.ZodString;
   ADMIN_BOOTSTRAP_TOKEN: z.ZodString;
 };
 

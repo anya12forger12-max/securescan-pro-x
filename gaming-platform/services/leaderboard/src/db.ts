@@ -83,6 +83,12 @@ export async function verifyGameResult(pool: PoolType, input: VerifyGameResultIn
           WHERE c.session_id = s.id AND c.winner IS NOT NULL
             AND ((c.winner = 'red' AND me.seat % 2 = 1) OR
                  (c.winner = 'blue' AND me.seat % 2 = 0))) THEN 100
+       -- Crash pays only for an actual cash-out at 2x or better inside this
+       -- session. A losing bet, a 1.00x round or another session earns nothing.
+       WHEN s.game_type = 'crash' AND EXISTS (
+         SELECT 1 FROM crash_bets b
+          WHERE b.session_id = s.id AND b.user_id = $2
+            AND b.status = 'cashed_out' AND b.cashout_at >= 2) THEN 100
        ELSE NULL
      END AS score
      FROM game_sessions s

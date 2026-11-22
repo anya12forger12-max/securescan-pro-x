@@ -12,6 +12,7 @@ const ADMIN_SERVICE_TOKEN = process.env.ADMIN_SERVICE_TOKEN;
 const WALLET_SERVICE_TOKEN = process.env.WALLET_SERVICE_TOKEN;
 const REALTIME_SERVICE_TOKEN = process.env.REALTIME_SERVICE_TOKEN;
 const PROMOTIONS_SERVICE_TOKEN = process.env.PROMOTIONS_SERVICE_TOKEN;
+const CRASH_SERVICE_TOKEN = process.env.CRASH_SERVICE_TOKEN;
 const ADMIN_BOOTSTRAP_TOKEN = process.env.ADMIN_BOOTSTRAP_TOKEN;
 const CORS_ORIGINS = (process.env.CORS_ORIGIN ?? "http://localhost:5173")
   .split(",")
@@ -41,6 +42,7 @@ const REQUIRED_SECRETS = {
   WALLET_SERVICE_TOKEN,
   REALTIME_SERVICE_TOKEN,
   PROMOTIONS_SERVICE_TOKEN,
+  CRASH_SERVICE_TOKEN,
   ADMIN_BOOTSTRAP_TOKEN,
 };
 for (const [name, value] of Object.entries(REQUIRED_SECRETS)) {
@@ -66,6 +68,7 @@ const SERVICE_HOSTS = {
   leaderboard: process.env.UPSTREAM_LEADERBOARD_HOST ?? "leaderboard",
   pictionary: process.env.UPSTREAM_PICTIONARY_HOST ?? "pictionary",
   promotions: process.env.UPSTREAM_PROMOTIONS_HOST ?? "promotions",
+  crash: process.env.UPSTREAM_CRASH_HOST ?? "crash",
 };
 const upstreamHost = (service) =>
   UPSTREAM_MODE === "docker" ? SERVICE_HOSTS[service] : "127.0.0.1";
@@ -97,6 +100,10 @@ const ROUTES = [
   { prefix: "/v1/gin-rummy", service: "gin-rummy", port: 3019 },
   { prefix: "/v1/leaderboard", service: "leaderboard", port: 3020 },
   { prefix: "/v1/pictionary", service: "pictionary", port: 3021 },
+  // Unified Aviator/crash game. The internal lifecycle API is declared before
+  // the broad promotions `/internal` rule, which would otherwise swallow it.
+  { prefix: "/v1/crash", service: "crash", port: 3023 },
+  { prefix: "/internal/crash", service: "crash", port: 3023, privileged: true },
   { prefix: "/internal", service: "promotions", port: 3022, privileged: true },
   { prefix: "/v1/internal", service: "promotions", port: 3022, privileged: true },
   { prefix: "/v1/promotions", service: "promotions", port: 3022 },
@@ -109,6 +116,7 @@ const DOWNSTREAM_PORTS = [...new Map(ROUTES.map((route) => [route.service, route
 const SERVICE_TOKEN_ONLY = new Map([
   ["/internal/events", REALTIME_SERVICE_TOKEN],
   ["/internal/wallet", WALLET_SERVICE_TOKEN],
+  ["/internal/crash", CRASH_SERVICE_TOKEN],
 ]);
 
 function tokenMatches(value, expected) {
@@ -126,6 +134,7 @@ function injectedToken(target, peerToken) {
   if (peerToken) return peerToken;
   if (target.service === "admin-risk") return ADMIN_SERVICE_TOKEN;
   if (target.service === "promotions") return PROMOTIONS_SERVICE_TOKEN;
+  if (target.service === "crash") return CRASH_SERVICE_TOKEN;
   return SERVICE_TOKEN;
 }
 

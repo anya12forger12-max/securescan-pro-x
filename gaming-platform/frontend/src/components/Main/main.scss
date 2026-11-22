@@ -167,6 +167,25 @@ button {
   }
 }
 
+.strategy-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+
+  span {
+    padding: 4px 7px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #c8ccdb;
+
+    strong {
+      color: #b7a8ff;
+      text-transform: capitalize;
+    }
+  }
+}
+
 .chat-log {
   max-height: 150px;
   overflow-y: auto;

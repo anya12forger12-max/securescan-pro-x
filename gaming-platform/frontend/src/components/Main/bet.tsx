@@ -24,6 +24,10 @@ export default function Bet() {
     createPictionary,
     guessPictionary,
     loadGame,
+    crash,
+    placeCrashBet,
+    cashOutCrash,
+    runStrategyLab,
   } = useGamingContext();
 
   const [kind, setKind] = React.useState<GameKind>(gameKind);
@@ -33,6 +37,10 @@ export default function Bet() {
   const [clueNumber, setClueNumber] = React.useState(2);
   const [card, setCard] = React.useState('');
   const [melds, setMelds] = React.useState('');
+  const [stake, setStake] = React.useState(10);
+  const [autoCashout, setAutoCashout] = React.useState<number | null>(null);
+  const [labSeed, setLabSeed] = React.useState('');
+  const [labReport, setLabReport] = React.useState<Awaited<ReturnType<typeof runStrategyLab>>>(null);
 
   const activeSessionId = sessionId || session?.id || '';
   const activeGameId = gameId || activeGameFromContext;
@@ -71,6 +79,7 @@ export default function Bet() {
           <option value="codenames">Codenames</option>
           <option value="gin-rummy">Gin-rummy</option>
           <option value="pictionary">Pictionary</option>
+          <option value="crash">Aviator Crash</option>
         </select>
       </div>
 
@@ -91,7 +100,7 @@ export default function Bet() {
         </button>
       </div>
 
-      <div className="control-grid">
+      {kind !== 'crash' && <div className="control-grid">
         <label>
           Game ID
           <input
@@ -122,7 +131,86 @@ export default function Bet() {
         >
           Refresh
         </button>
-      </div>
+      </div>}
+
+      {kind === 'crash' && (
+        <div className="control-actions">
+          <div className="inline-form">
+            <label>
+              Stake
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={stake}
+                onChange={(event) => setStake(Number(event.target.value))}
+              />
+            </label>
+            <label>
+              Auto cash-out
+              <input
+                type="number"
+                min={1.01}
+                step={0.01}
+                placeholder="off"
+                value={autoCashout ?? ''}
+                onChange={(event) => setAutoCashout(event.target.value ? Number(event.target.value) : null)}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={crash.round?.status !== 'betting' || stake <= 0}
+              onClick={() => void placeCrashBet(stake, autoCashout)}
+            >
+              Place stake
+            </button>
+            <button
+              type="button"
+              disabled={crash.myBet?.status !== 'active' || crash.round?.status !== 'running'}
+              onClick={() => void cashOutCrash()}
+            >
+              Cash out
+            </button>
+          </div>
+          <p className="hint">
+            Stakes are debited from your platform wallet. The original betting bot is preserved as a
+            paper-only strategy lab below — it never contacts an external site.
+          </p>
+          <div className="inline-form">
+            <input
+              value={labSeed}
+              onChange={(event) => setLabSeed(event.target.value)}
+              placeholder="strategy seed"
+              aria-label="Strategy seed"
+            />
+            <button
+              type="button"
+              onClick={async () => {
+                const report = await runStrategyLab({
+                  seed: labSeed || 'default',
+                  rounds: 1000,
+                  stake: 10,
+                  target: 2,
+                  strategies: ['flat', 'martingale', 'fibonacci', 'paroli'],
+                });
+                setLabReport(report);
+              }}
+            >
+              Run strategy lab
+            </button>
+          </div>
+          {labReport?.results && (
+            <div className="strategy-results">
+              {labReport.results.map((row) => (
+                <span key={row.strategy}>
+                  <strong>{row.strategy}</strong>: {row.profit >= 0 ? '+' : ''}{row.profit.toFixed(2)}
+                  {row.busted ? ' (bust)' : ''}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {kind === 'codenames' && (
         <div className="control-actions">

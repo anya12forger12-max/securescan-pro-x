@@ -63,7 +63,10 @@ async function requestUserId(req) {
   return null;
 }
 
-const GameTypes = ["crash", "roulette", "slot", "pictionary", "codenames", "gin-rummy"];
+// Extended with the games catalogued in the vendored Win2x reference, while
+// paid entry remains fail-closed until an escrow path exists.
+const GameTypes = ["crash", "dice", "flip", "jackpot", "wheel",
+  "roulette", "slot", "pictionary", "codenames", "gin-rummy"];
 const CreateSchema = z.object({
   gameType: z.enum(GameTypes),
   title: z.string().min(1).max(120),

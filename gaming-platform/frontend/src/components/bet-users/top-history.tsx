@@ -39,6 +39,7 @@ export default function TopHistory() {
           <option value="codenames">Codenames</option>
           <option value="gin-rummy">Gin-rummy</option>
           <option value="pictionary">Pictionary</option>
+          <option value="crash">Aviator Crash</option>
         </select>
       </div>
       {leaderboard.slice(0, 8).map((entry, index) => (

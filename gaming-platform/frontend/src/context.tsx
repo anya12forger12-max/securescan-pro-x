@@ -7,6 +7,10 @@ import { config } from "./config";
 import type {
   AuditReport,
   AuthData,
+  CrashBet,
+  CrashRound,
+  CrashState,
+  StrategyLabReport,
   ChatMessage,
   ChatRoom,
   CodenamesGame,
@@ -49,6 +53,7 @@ export interface ContextDataType {
   codenames: CodenamesGame | null;
   ginRummy: GinRummyGame | null;
   pictionary: PictionaryRound | null;
+  crash: CrashState;
   audit: AuditReport | null;
   ready: boolean;
   streamReady: boolean;
@@ -85,6 +90,16 @@ export interface ContextType extends ContextDataType {
   loadPromotions(): Promise<void>;
   claimPromotion(code: string): Promise<void>;
   loadAudit(): Promise<void>;
+  loadCrash(): Promise<void>;
+  placeCrashBet(amount: number, autoCashout?: number | null): Promise<boolean>;
+  cashOutCrash(): Promise<boolean>;
+  runStrategyLab(input: {
+    seed: string;
+    rounds: number;
+    stake: number;
+    target: number;
+    strategies: string[];
+  }): Promise<StrategyLabReport | null>;
 }
 
 const initialState: ContextDataType = {
@@ -108,6 +123,7 @@ const initialState: ContextDataType = {
   codenames: null,
   ginRummy: null,
   pictionary: null,
+  crash: { round: null, myBet: null, history: [] },
   audit: null,
   ready: false,
   streamReady: false,
@@ -437,6 +453,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
         codenames: `/codenames/games/${id}`,
         "gin-rummy": `/gin-rummy/games/${id}`,
         pictionary: `/pictionary/rounds/${id}`,
+        crash: `/crash/rounds/${id}`,
       };
       const patch: Partial<ContextDataType> = { gameKind: kind, gameId: id };
       const result = await guard("Load game", () => call<Record<string, unknown>>(paths[kind]));
@@ -445,10 +462,14 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
         if (kind === "codenames") patch.codenames = data.game as CodenamesGame;
         if (kind === "gin-rummy") patch.ginRummy = data.game as GinRummyGame;
         if (kind === "pictionary") patch.pictionary = data.round as PictionaryRound;
+        if (kind === "crash") {
+          const round = data.round as CrashRound;
+          patch.crash = { round, myBet: (data.myBet as CrashBet) ?? null, history: state.crash.history };
+        }
       }
       update(patch);
     },
-    [call, guard, update],
+    [call, guard, state.crash.history, update],
   );
 
   const createCodenames = useCallback(
@@ -653,6 +674,93 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     [call, guard, loadDashboard, loadPromotions],
   );
 
+  // Unified crash game. The gateway forwards these to @gp/crash; the browser
+  // only ever sends its player JWT and never talks to a betting site.
+  const loadCrash = useCallback(async () => {
+    if (!tokenRef.current) return;
+    const [current, history] = await Promise.allSettled([
+      call<{ round: CrashRound | null }>("/crash/rounds/current"),
+      call<{ items: CrashRound[] }>("/crash/rounds/history?limit=12"),
+    ]);
+    const round = current.status === "fulfilled" ? current.value.round : null;
+    let myBet: CrashBet | null = null;
+    if (round) {
+      const detail = await call<{ myBet: CrashBet | null }>(`/crash/rounds/${round.id}`).catch(
+        () => null,
+      );
+      myBet = detail?.myBet ?? null;
+    }
+    update({
+      crash: {
+        round,
+        myBet,
+        history: history.status === "fulfilled" ? history.value.items : [],
+      },
+    });
+  }, [call, update]);
+
+  useEffect(() => {
+    if (!state.token) return;
+    void loadCrash();
+    const timer = setInterval(() => void loadCrash(), 1000);
+    return () => clearInterval(timer);
+  }, [state.token, loadCrash]);
+
+  const placeCrashBet = useCallback(
+    async (amount: number, autoCashout?: number | null) => {
+      const roundId = state.crash.round?.id;
+      if (!roundId) {
+        toast.error("Bet: no active round");
+        return false;
+      }
+      const result = await guard("Bet", () =>
+        call("/crash/rounds/" + roundId + "/bets", {
+          method: "POST",
+          body: {
+            amount,
+            ...(autoCashout ? { autoCashout } : {}),
+            // Anchor the wager to a crash session so a verified cash-out can
+            // award leaderboard points. Other game sessions are ignored.
+            ...(state.session?.game_type === "crash" ? { sessionId: state.session.id } : {}),
+          },
+        }),
+      );
+      if (!result) return false;
+      toast.success("Stake placed");
+      await Promise.all([loadCrash(), loadDashboard()]);
+      return true;
+    },
+    [call, guard, loadCrash, loadDashboard, state.crash.round, state.session],
+  );
+
+  const cashOutCrash = useCallback(async () => {
+    const roundId = state.crash.round?.id;
+    if (!roundId) return false;
+    const result = await guard("Cash out", () =>
+      call("/crash/rounds/" + roundId + "/cashout", { method: "POST", body: {} }),
+    );
+    if (!result) return false;
+    toast.success("Cashed out");
+    await Promise.all([loadCrash(), loadDashboard()]);
+    return true;
+  }, [call, guard, loadCrash, loadDashboard, state.crash.round]);
+
+  const runStrategyLab = useCallback(
+    async (input: {
+      seed: string;
+      rounds: number;
+      stake: number;
+      target: number;
+      strategies: string[];
+    }) => {
+      const result = await guard("Strategy lab", () =>
+        call<StrategyLabReport>("/crash/strategy-lab/run", { method: "POST", body: input }),
+      );
+      return (result as StrategyLabReport | null) ?? null;
+    },
+    [call, guard],
+  );
+
   const loadAudit = useCallback(async () => {
     const result = await guard("Audit", () => call<AuditReport>("/v1/internal/audit/verify"));
     if (result) update({ audit: result as AuditReport });
@@ -690,6 +798,10 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       loadPromotions,
       claimPromotion,
       loadAudit,
+      loadCrash,
+      placeCrashBet,
+      cashOutCrash,
+      runStrategyLab,
     }),
     [
       state,
@@ -722,6 +834,10 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       loadPromotions,
       claimPromotion,
       loadAudit,
+      loadCrash,
+      placeCrashBet,
+      cashOutCrash,
+      runStrategyLab,
     ],
   );
 

@@ -27,6 +27,9 @@ async function request(label, path, options = {}) {
 
 await request("gateway liveness", "/health");
 await request("all downstream services ready", "/ready");
+// The unified crash game must be behind the gateway, not just running in a
+// container: this probes the player-facing route before any account exists.
+await request("crash round feed", "/v1/crash/rounds/current");
 
 const suffix = randomBytes(6).toString("hex");
 const username = `smoke_${suffix}`;
@@ -46,6 +49,13 @@ const token = loggedIn?.data?.token;
 if (token) {
   await request("auth me", "/v1/auth/me", {
     headers: { authorization: `Bearer ${token}` },
+  });
+  // Paper-only strategy lab: proves the vendored bot strategies were unified
+  // into the platform without touching a real wallet or external betting site.
+  await request("crash strategy lab", "/v1/crash/strategy-lab/run", {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: JSON.stringify({ seed: "smoke", rounds: 50, stake: 10, target: 2, strategies: ["flat"] }),
   });
 } else {
   results.push({ label: "auth me", ok: false, status: 0, body: { message: "no token from login" } });

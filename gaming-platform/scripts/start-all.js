@@ -17,6 +17,7 @@ const services = [
   "leaderboard",
   "pictionary",
   "promotions",
+  "crash",
 ];
 
 const ports = {
@@ -34,6 +35,7 @@ const ports = {
   leaderboard: 3020,
   pictionary: 3021,
   promotions: 3022,
+  crash: 3023,
 };
 
 // Recovered services still run from dist/; services added during the rebuild
@@ -46,6 +48,7 @@ const rootEntryServices = new Set([
   "wallet",
   "responsible-gaming",
   "tournaments",
+  "crash",
 ]);
 
 const root = fileURLToPath(new URL("..", import.meta.url));

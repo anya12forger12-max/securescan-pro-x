@@ -36,6 +36,7 @@
     "start:leaderboard": "npm run start -w @gp/leaderboard",
     "start:pictionary": "npm run start -w @gp/pictionary",
     "start:promotions": "npm run start -w @gp/promotions",
+    "start:crash": "npm run start -w @gp/crash",
     "start:all": "node scripts/start-all.js"
   },
   "dependencies": {

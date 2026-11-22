@@ -23,11 +23,12 @@ function headerBearer(value: string | undefined): string | null {
   return typeof value === "string" && value.startsWith("Bearer ") ? value.slice(7) : null;
 }
 
-// Only these three games have authoritative result state that the leaderboard
-// can verify. crash/roulette/slot are Aviator-shell placeholders with no
-// scoring backend, so accepting sessions for them created unscorable games.
+// Roulette and slot remain Aviator-shell placeholders with no scoring backend,
+// so accepting sessions for them creates unscorable games. Crash is now backed
+// by the unified crash service: a cash-out is authoritative state and the
+// leaderboard verifies it against crash_bets for this exact session.
 const CreateSessionSchema = z.object({
-  game_type: z.enum(["pictionary", "codenames", "gin-rummy"]),
+  game_type: z.enum(["pictionary", "codenames", "gin-rummy", "crash"]),
 });
 const JoinSessionSchema = z.object({
   id: z.string().uuid(),

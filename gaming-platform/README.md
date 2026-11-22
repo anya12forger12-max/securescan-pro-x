@@ -7,10 +7,12 @@ back to that layout. This project supplies the missing bootstrap layer and the
 peer services those services assume are running, so the platform can be
 installed, migrated and started as one system.
 
-All fourteen services boot, the seven migrations apply cleanly, and the main
+All fifteen services boot, the eight migrations apply cleanly, and the main
 auth / RBAC / wallet / chat / realtime / promotions / Codenames / Gin-rummy /
-audit flows pass end to end through the gateway (a separate 20-flow integration
-run; `npm run smoke` covers the deploy-critical subset).
+crash / audit flows pass end to end through the gateway (a separate 20-flow
+integration run; `npm run smoke` covers the deploy-critical subset). The four
+formerly separate Aviator repositories are merged into `integrations/aviator/`
+and unified behind the new crash service; see below.
 
 ## Services
 
@@ -30,6 +32,31 @@ run; `npm run smoke` covers the deploy-critical subset).
 | leaderboard | 3020 | recovered | Verified score submission and rankings |
 | pictionary | 3021 | recovered | Rounds, guesses, random word selection |
 | promotions | 3022 | recovered | Catalogue, claims, wallet/RG integration |
+| crash | 3023 | new | Unified Aviator game: provably-fair rounds, staking, cash-out, strategy lab |
+
+## Aviator unification
+
+`integrations/aviator/` archives four repositories that were merged here:
+the betting bot, the React/Unity crash client, the BBC Micro 6502 source and a
+PHP casino game catalogue. They are untrusted reference code and are never
+executed by the platform. Their playable ideas are now implemented natively:
+
+* `services/crash` replaces the missing scoring backend that previously forced
+  `game-engine` to reject `crash` sessions. Rounds commit to a seed hash before
+  betting and reveal the seed and crash point afterwards; `GET
+  /v1/crash/rounds/:id` includes a verification proof.
+* Stakes use the new atomic `POST /internal/wallet/debit` endpoint. Cash-outs
+  use the existing idempotent credit path with a key derived from the bet id,
+  so an ambiguous response can never pay twice.
+* The browser stage renders the multiplier curve locally from the server's
+  `startedAt`, while all outcomes, settlement and auto cash-outs stay
+  authoritative in the service.
+* The bot's strategies live on as `POST /v1/crash/strategy-lab/run`, a
+  deterministic **paper-only** simulator that uses our own provably-fair
+  generator and never contacts an external betting site.
+* Tournaments and the leaderboard now include `crash` (plus `dice`, `flip`,
+  `jackpot` and `wheel` from the Win2x catalogue). Leaderboard points require
+  a verified cash-out at 2x or better in that exact game session.
 
 ## Architecture fixes
 
@@ -67,14 +94,14 @@ These are fixed here (each fix is commented inline at the site):
   return the existing entry.
 - **Chat and Codenames URL authority** — the URL `:room` / `:id` is authoritative
   over conflicting body fields; chat also ignores a body `room` mismatch.
-- **Capability-scoped credentials** — admin, wallet, realtime and promotions
+- **Capability-scoped credentials** — admin, wallet, realtime, promotions and crash
   internal APIs each have a distinct token with no shared default; a
   deployment that forgets any of them fails at startup.
 - **Durable realtime** — events are persisted in `realtime_events` and published
   via `pg_notify`, so SSE polling works across process restarts.
 - **Readiness** — every stateful service, including promotions, exposes
   `/ready` backed by a database query. The gateway adds an aggregate `/ready`
-  that reports healthy only when all thirteen downstream services are ready.
+  that reports healthy only when all fourteen downstream services are ready.
 - **Migration idempotency** — `npm run migrate` records applied files in
   `schema_migrations` and skips them on subsequent runs, and now takes a
   Postgres advisory lock so two simultaneous migrators cannot race.
@@ -83,10 +110,10 @@ These are fixed here (each fix is commented inline at the site):
   `@gp/config/dbPoolOptions` is now the single source of truth: `DB_POOL_MAX`
   (default 5) sizes every pool, with idle/connection timeouts, and Compose
   raises `max_connections` to 200. `npm run validate:compose` proves the budget.
-- **Graceful shutdown** — all fourteen services now handle SIGTERM/SIGINT by
+- **Graceful shutdown** — all fifteen services now handle SIGTERM/SIGINT by
   calling `app.close()`, which drains requests and runs each service's
   `onClose` pool teardown. Compose allows 25s before a hard kill.
-- **Smaller attack surface** — the thirteen internal services are exposed only
+- **Smaller attack surface** — the fourteen internal services are exposed only
   on the Compose network (`expose`, no host port publishing). Only the gateway
   is reachable from the host.
 - **Resource limits** — every application container is capped at 512 MiB and
@@ -97,9 +124,10 @@ These are fixed here (each fix is commented inline at the site):
 `frontend/` is a CRA 5 + React 18 + Sass client shaped like the reference
 Aviator app, not a new UI architecture. The same module-level context,
 header/board/stage/control composition and `BrowserRouter` wildcard route are
-present; Socket.IO and Unity WebGL are deliberately omitted because this
-platform has no crash backend or game bundle. Their roles are filled by
-gateway-authenticated SSE and the three playable services.
+present; Socket.IO and Unity WebGL are omitted from the runtime: the crash backend now
+exists as `services/crash`, the flight curve is rendered natively, and the
+original Unity bundle is preserved in `integrations/aviator/crash-client/`.
+Gateway-authenticated SSE carries the live `crash.*` events.
 
 | Aviator source | Gaming-platform counterpart |
 | --- | --- |
@@ -109,7 +137,7 @@ gateway-authenticated SSE and the three playable services.
 | `src/components/header.tsx` | auth, balance, audit-verification badge |
 | `src/components/bet-users/*` | live events, wallet activity, leaderboard/tournaments |
 | `src/components/Main/*` | history, stage and Aviator-named `Bet` control panel |
-| `src/components/crash/*` | game stage replacing the Unity canvas |
+| `src/components/crash/*` | live crash stage, multiplier curve, cash-out and round proof |
 
 The browser never sees a service token. It signs in through
 `POST /v1/auth/login`, stores only the player JWT, calls `/v1/*`, and opens
@@ -137,8 +165,9 @@ identity and capability headers.
 | `0005_admin_risk.sql` | RBAC roles/assignments, hash-chained admin audit |
 | `0006_realtime.sql` | durable `realtime_events` table |
 | `0007_promotions_idempotency.sql` | stable wallet idempotency key for claims |
+| `0008_crash.sql` | crash rounds/bets, wager support, extended game catalogue |
 
-All seven are applied by the one-shot `migrate` service before any application
+All eight are applied by the one-shot `migrate` service before any application
 starts, on first boot and on every upgrade. Applied files are checksummed, so
 editing an already-applied migration fails the deploy instead of drifting.
 
@@ -154,14 +183,14 @@ docker compose up -d --build
 npm run smoke
 ```
 
-`env:init` generates a fresh Postgres password, JWT signing key, all five
+`env:init` generates a fresh Postgres password, JWT signing key, all six
 internal capability tokens and the one-time admin bootstrap token, writes a
 `0600` `.env`, and refuses to replace an existing one unless `--force` is
 passed. Compose fails before starting anything if any required secret or
 `DATABASE_URL` / `CORS_ORIGIN` is blank.
 
 Only the gateway is published on `0.0.0.0:3000`. Postgres and Redis bind to
-`127.0.0.1` for local administration; the other thirteen services are reachable
+`127.0.0.1` for local administration; the other fourteen services are reachable
 only from inside the Compose network. All application traffic — including the
 browser client — goes through `http://<host>:3000`. The Dockerfile builds the
 frontend into `frontend/build`, and the gateway serves it as a same-origin SPA
@@ -201,11 +230,14 @@ export ADMIN_SERVICE_TOKEN='admin-service-secret-at-least-32-characters'
 export WALLET_SERVICE_TOKEN='wallet-service-secret-at-least-32-characters'
 export REALTIME_SERVICE_TOKEN='realtime-service-secret-at-least-32-characters'
 export PROMOTIONS_SERVICE_TOKEN='promotions-service-secret-at-least-32-characters'
+export CRASH_SERVICE_TOKEN='crash-service-secret-at-least-32-characters'
 export ADMIN_BOOTSTRAP_TOKEN='bootstrap-secret-at-least-32-characters'
 export REALTIME_URL=http://127.0.0.1:3010
 export WALLET_URL=http://127.0.0.1:3011
 export RESPONSIBLE_GAMING_URL=http://127.0.0.1:3012
 export ADMIN_RISK_URL=http://127.0.0.1:3013
+export WALLET_INTERNAL_URL=http://127.0.0.1:3011
+export REALTIME_INTERNAL_URL=http://127.0.0.1:3010
 export UPSTREAM_MODE=local
 npm run migrate
 npm run check
@@ -344,6 +376,33 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/jso
   -d '{"melds":[["5H","5D","5C"]]}' http://localhost:3000/v1/gin-rummy/games/<game-id>/meld
 ```
 
+### Crash (unified Aviator game)
+
+```bash
+# Current round, its published seed hash and (when flying) multiplier.
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/v1/crash/rounds/current
+
+# Optional: create a crash session first so a 2x+ cash-out can score on the
+# leaderboard. Stake while the round is in `betting` (sessionId is optional).
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"game_type":"crash"}' http://localhost:3000/v1/game/sessions
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"amount":10,"autoCashout":2,"sessionId":"<session-id>"}' \
+  http://localhost:3000/v1/crash/rounds/<round-id>/bets
+
+# Withdraw before the crash; the service computes the authoritative multiplier.
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{}' http://localhost:3000/v1/crash/rounds/<round-id>/cashout
+
+# After the round: seed, crash point and verification proof are public.
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/v1/crash/rounds/<round-id>
+
+# Paper-only replay of the vendored bot strategies (no real stakes).
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"seed":"demo","rounds":1000,"stake":10,"target":2}' \
+  http://localhost:3000/v1/crash/strategy-lab/run
+```
+
 ## Validation
 
 - `npm run check` — syntax-checks every JavaScript file outside `node_modules`.
@@ -354,8 +413,9 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/jso
   daemon.
 - `npm audit --omit=dev` — reports 0 vulnerabilities with the pinned
   `@fastify/jwt` 10.x and `zod` 4.x dependency set.
-- `npm run smoke` — gateway liveness, aggregate `/ready`, and register/login/me
-  through the gateway. Run it after `docker compose up -d --build`.
+- `npm run smoke` — gateway liveness, aggregate `/ready`, auth flow, crash round
+  feed and the paper-only strategy lab through the gateway. Run it after
+  `docker compose up -d --build`.
 
 ## Known gaps
 

@@ -10,10 +10,10 @@ import { ERROR_CODES, serviceTokenOk, toMoney } from "@gp/shared-types";
 /**
  * Wallet service (3011).
  *
- * The only mandatory integration is POST /internal/wallet/credit, called by
- * promotions when a claim is accepted. That endpoint is deliberately
- * idempotent: promotions rolls the claim back if the call throws, so a replay
- * of the same idempotencyKey must NOT credit the account a second time.
+ * Mandatory integrations are POST /internal/wallet/credit (promotions claims)
+ * and POST /internal/wallet/debit (crash stakes). Both are deliberately
+ * idempotent: a caller that rolls back after an ambiguous response replays the
+ * same idempotencyKey, which must not move the account a second time.
  */
 const envSchema = baseEnvSchema.extend({
   ...capabilityFields("SERVICE_TOKEN", "WALLET_SERVICE_TOKEN"),
@@ -144,6 +144,93 @@ app.post("/internal/wallet/credit", async (req, reply) => {
     }
     req.log.error({ err }, "wallet credit failed");
     return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "credit failed");
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * Atomic, idempotent stake debit used by the unified crash game.
+ *
+ * The balance UPDATE is conditional on sufficient funds, so two concurrent
+ * bets cannot both spend the same credits. Replaying the same idempotencyKey
+ * returns the original transaction instead of debiting twice — the same
+ * contract /internal/wallet/credit already provides for promotions.
+ */
+const DebitSchema = z.object({
+  userId: z.string().min(1),
+  amount: z.coerce.number().positive().finite(),
+  referenceType: z.string().min(1),
+  referenceId: z.string().nullable().optional(),
+  idempotencyKey: z.string().min(1),
+});
+
+app.post("/internal/wallet/debit", async (req, reply) => {
+  if (!serviceTokenOk(req.headers, env.WALLET_SERVICE_TOKEN))
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
+
+  const parsed = DebitSchema.safeParse(req.body);
+  if (!parsed.success)
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+
+  const input = parsed.data;
+  const amount = toMoney(input.amount);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const existing = await client.query(
+      `SELECT ${TX_COLUMNS} FROM wallet_transactions WHERE idempotency_key = $1`,
+      [input.idempotencyKey],
+    );
+    if (existing.rowCount) {
+      await client.query("COMMIT");
+      return ok(reply, 200, { transaction: existing.rows[0], replay: true }, reqId(req));
+    }
+
+    await client.query(
+      `INSERT INTO wallet_accounts (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`,
+      [input.userId],
+    );
+    const balance = await client.query(
+      `UPDATE wallet_accounts SET balance = balance - $2, updated_at = now()
+       WHERE user_id = $1 AND balance >= $2 RETURNING balance`,
+      [input.userId, amount],
+    );
+    if (!balance.rowCount) {
+      await client.query("ROLLBACK");
+      return deny(reply, 409, ERROR_CODES.CONFLICT, "insufficient balance");
+    }
+
+    const tx = await client.query(
+      `INSERT INTO wallet_transactions
+        (id, idempotency_key, user_id, amount, type, reference_type, reference_id, balance_after)
+       VALUES ($1, $2, $3, $4, 'wager', $5, $6, $7)
+       RETURNING ${TX_COLUMNS}`,
+      [
+        randomUUID(),
+        input.idempotencyKey,
+        input.userId,
+        -amount,
+        input.referenceType,
+        input.referenceId ?? null,
+        balance.rows[0].balance,
+      ],
+    );
+    await client.query("COMMIT");
+    return ok(reply, 201, { transaction: tx.rows[0], replay: false }, reqId(req));
+  } catch (err) {
+    await client.query("ROLLBACK");
+    if (err.code === "23505" && err.constraint === "wallet_transactions_idempotency_key_key") {
+      const replay = await pool.query(
+        `SELECT ${TX_COLUMNS} FROM wallet_transactions WHERE idempotency_key = $1`,
+        [input.idempotencyKey],
+      );
+      if (replay.rowCount)
+        return ok(reply, 200, { transaction: replay.rows[0], replay: true }, reqId(req));
+    }
+    req.log.error({ err }, "wallet debit failed");
+    return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "debit failed");
   } finally {
     client.release();
   }

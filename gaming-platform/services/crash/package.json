@@ -1,0 +1,19 @@
+{
+  "name": "@gp/crash",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.4.3",
+    "@fastify/jwt": "^10.2.8",
+    "@gp/config": "*",
+    "@gp/shared-types": "*",
+    "fastify": "^5.2.1",
+    "pg": "^8.13.1",
+    "zod": "^4.6.7"
+  }
+}

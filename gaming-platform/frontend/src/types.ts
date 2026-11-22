@@ -134,4 +134,53 @@ export interface AuditReport {
   [key: string]: unknown;
 }
 
-export type GameKind = "codenames" | "gin-rummy" | "pictionary";
+/** Unified Aviator/crash game. Money fields stay strings, like the wallet. */
+export interface CrashRound {
+  id: string;
+  status: "betting" | "running" | "finished" | "cancelled";
+  seedHash: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt?: string | null;
+  crashPoint?: number | null;
+  multiplier?: number | null;
+  proof?: { valid: boolean } | null;
+}
+
+export interface CrashBet {
+  id: string;
+  round_id: string;
+  amount: string;
+  auto_cashout: string | null;
+  cashout_at: string | null;
+  payout: string | null;
+  status: "active" | "cashed_out" | "lost" | "cancelled" | "refunded";
+  created_at: string;
+  settled_at?: string | null;
+}
+
+export interface CrashState {
+  round: CrashRound | null;
+  myBet: CrashBet | null;
+  history: CrashRound[];
+}
+
+export interface StrategyLabResult {
+  strategy: string;
+  finalBankroll: number;
+  profit: number;
+  maxDrawdown: number;
+  busted: boolean;
+}
+
+export interface StrategyLabReport {
+  seed: string;
+  rounds: number;
+  stake: number;
+  target: number;
+  paperOnly: boolean;
+  note: string;
+  results: StrategyLabResult[];
+}
+
+export type GameKind = "codenames" | "gin-rummy" | "pictionary" | "crash";
