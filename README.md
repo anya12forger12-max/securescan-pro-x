@@ -26,6 +26,12 @@ Last verified 2026-11-22: 325 backend tests pass with 89.5% coverage (gate 85%),
 and the frontend builds, lints and tests cleanly. Accessibility conformance has
 not yet been audited; WCAG 2.2 AA is a target, not a claim.
 
+The repository also ships an independent distributed backend in
+[`gaming-platform/`](gaming-platform/README.md): 14 Fastify services behind a
+single gateway, six Postgres migrations, strict TypeScript sources and a
+self-contained Compose deployment. It is a separate deployable from the desktop
+assessment app and does not change that app's offline-first guarantees.
+
 ## Key Principles
 
 | Principle | Description |
@@ -66,6 +72,10 @@ SecureScan Pro X follows a strict layered architecture:
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete architecture documentation.
+That layered model describes the desktop assessment product. The gaming platform
+is a separate service-oriented subsystem documented in
+[ARCHITECTURE.md §13](ARCHITECTURE.md#13-gaming-platform-subsystem) and
+[docs/architecture/gaming-platform.md](docs/architecture/gaming-platform.md).
 
 ## Tech Stack
 
@@ -73,7 +83,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the complete architecture documentati
 |---|---|
 | **Frontend** | React, TypeScript, Tauri |
 | **Backend** | Python 3.13+, FastAPI, SQLAlchemy, Alembic, Pydantic |
-| **Database** | SQLite (default), PostgreSQL (future) |
+| **Gaming platform** | Node.js 22, Fastify 5, TypeScript, PostgreSQL, Redis, Docker Compose |
+| **Database** | SQLite (default), PostgreSQL (gaming platform) |
 | **CLI** | Typer |
 | **Documentation** | MkDocs Material, Mermaid |
 | **Testing** | pytest, Playwright, MyPy, Ruff, Coverage |
@@ -116,7 +127,18 @@ cd ..
 docker compose -f docker/compose/docker-compose.dev.yml up
 ```
 
-See [docs/guides/getting-started.md](docs/guides/getting-started.md) for detailed instructions.
+The gaming platform has its own independent Compose stack:
+
+```bash
+cd gaming-platform
+CORS_ORIGIN=https://play.example.com npm run env:init
+docker compose up -d --build
+npm run smoke
+```
+
+See [docs/guides/getting-started.md](docs/guides/getting-started.md) for the
+desktop app and [gaming-platform/README.md](gaming-platform/README.md) for all
+gaming-platform services, security and operations.
 
 ## Project Structure
 
@@ -124,6 +146,7 @@ See [docs/guides/getting-started.md](docs/guides/getting-started.md) for detaile
 securescan-pro-x/
 ├── frontend/           # React + TypeScript + Tauri UI
 ├── backend/            # Python FastAPI services
+├── gaming-platform/    # 14-service Fastify backend, gateway, migrations, Compose
 ├── shared/             # Shared types and constants
 ├── plugins/            # Plugin ecosystem
 ├── sdk/                # Plugin SDK (Python + TypeScript)
