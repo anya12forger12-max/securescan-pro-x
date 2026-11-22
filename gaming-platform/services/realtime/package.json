@@ -8,7 +8,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "@fastify/cors": "^10.0.2",
+    "@fastify/cors": "^11.4.3",
     "@gp/config": "*",
     "@gp/shared-types": "*",
     "fastify": "^5.2.1",
