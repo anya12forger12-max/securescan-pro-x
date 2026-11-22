@@ -157,7 +157,33 @@ export async function buildPromotionsService(deps) {
             return reply;
         const { code } = req.params;
         const promo = await repo.findByCode(code);
-        if (!promo || !promo.active) {
+        if (!promo) {
+            return deny(reply, 404, ERROR_CODES.NOT_FOUND, "promotion not found");
+        }
+        // Reconcile before checking availability or the claim cap: a claim retained
+        // after an ambiguous wallet response must stay retryable even if the
+        // promotion has since ended, and it already occupies a cap slot.
+        const existing = await repo.findClaimByUserAndPromo(userId, promo.id);
+        if (existing) {
+            if (deps.wallet) {
+                try {
+                    await deps.wallet.credit({
+                        userId,
+                        amount: existing.bonusAmount,
+                        type: "bonus",
+                        referenceType: "admin",
+                        referenceId: existing.id,
+                        idempotencyKey: existing.idempotencyKey,
+                    });
+                }
+                catch (err) {
+                    req.log.warn({ err }, "promotion claim reconciliation failed");
+                    return deny(reply, 503, ERROR_CODES.SERVICE_UNAVAILABLE, "wallet credit status is unknown; claim retained for idempotent retry", { claimId: existing.id, idempotencyKey: existing.idempotencyKey });
+                }
+            }
+            return reply.code(200).send(success({ claim: existing, replay: true }, reqId(req)));
+        }
+        if (!promo.active) {
             return deny(reply, 404, ERROR_CODES.NOT_FOUND, "promotion not found or inactive");
         }
         const now = new Date().toISOString();
@@ -166,10 +192,6 @@ export async function buildPromotionsService(deps) {
         }
         if (promo.claimsCount >= promo.maxClaims) {
             return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "promotion fully claimed");
-        }
-        const existing = await repo.findClaimByUserAndPromo(userId, promo.id);
-        if (existing) {
-            return deny(reply, 409, ERROR_CODES.IDEMPOTENCY_CONFLICT, "already claimed");
         }
         // eligibility: check self-exclusion via responsible-gaming
         if (deps.rg) {
@@ -258,7 +280,7 @@ export async function buildPromotionsService(deps) {
             return reply;
         const parsed = validateNewPromotion(req.body);
         if ("error" in parsed) {
-            return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, parsed.error, { details: parsed.error });
+            return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, parsed.error, { validation: parsed.error });
         }
         const existing = await repo.findByCode(parsed.value.code);
         if (existing) {

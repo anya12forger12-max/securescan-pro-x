@@ -374,7 +374,10 @@ async function proxy(req, reply) {
         }
       };
       void pump();
-      req.raw.on("close", () => void reader.cancel().catch(() => undefined));
+      // IncomingMessage "close" fires when the request body is complete, which
+      // for a GET SSE request can be immediate. The response/socket is the
+      // lifetime that matters for a hijacked stream.
+      rawReply.on("close", () => void reader.cancel().catch(() => undefined));
       return;
     }
 

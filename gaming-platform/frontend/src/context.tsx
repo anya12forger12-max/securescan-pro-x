@@ -142,6 +142,9 @@ function persist(token: string | null, refreshToken: string | null) {
 export const Provider = ({ children }: { children: React.ReactNode }) => {
   const [state, setState] = React.useState<ContextDataType>(initialState);
   const tokenRef = useRef<string | null>(null);
+  // Incremented on every identity change so in-flight dashboard loads from a
+  // previous session cannot repopulate state after sign-out or account switch.
+  const authGenerationRef = useRef(0);
   const lastSeqRef = useRef(0);
   const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
 
@@ -166,12 +169,14 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     })
       .then((data) => {
         persist(data.token, data.refresh_token);
+        authGenerationRef.current += 1;
         tokenRef.current = data.token;
         update({ token: data.token, user: data.user });
         return data.token;
       })
       .catch(() => {
         persist(null, null);
+        authGenerationRef.current += 1;
         tokenRef.current = null;
         update({ token: null, user: null });
         return null;
@@ -229,6 +234,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       try {
         const data = await apiRequest<{ user: User }>("/auth/me", { token: stored });
         if (cancelled) return;
+        authGenerationRef.current += 1;
         tokenRef.current = stored;
         update({ token: stored, user: data.user });
       } catch (err) {
@@ -249,6 +255,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
           }
         }
         persist(null, null);
+        authGenerationRef.current += 1;
         tokenRef.current = null;
         update({ token: null, user: null });
       } finally {
@@ -266,7 +273,14 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     if (!state.token) return;
     let cancelled = false;
     let controller: AbortController | null = null;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     let retry: number | undefined;
+
+    const scheduleRetry = () => {
+      if (cancelled) return;
+      update({ streamReady: false });
+      retry = window.setTimeout(connect, 2000);
+    };
 
     const connect = async () => {
       controller = new AbortController();
@@ -277,12 +291,18 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
         });
         if (!response.ok || !response.body) throw new Error(`stream failed (${response.status})`);
         update({ streamReady: true });
-        const reader = response.body.getReader();
+        reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
         while (!cancelled) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            // A clean EOF (proxy timeout, server restart, upstream cancel) is
+            // just as disconnected as a thrown error. Resume from the last
+            // sequence we saw so no events are lost during the gap.
+            scheduleRetry();
+            return;
+          }
           buffer += decoder.decode(value, { stream: true });
           let split = buffer.indexOf("\n\n");
           while (split >= 0) {
@@ -309,11 +329,8 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
             split = buffer.indexOf("\n\n");
           }
         }
-      } catch (err) {
-        if (!cancelled) {
-          update({ streamReady: false });
-          retry = window.setTimeout(connect, 2000);
-        }
+      } catch {
+        scheduleRetry();
       }
     };
 
@@ -321,13 +338,18 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     return () => {
       cancelled = true;
       if (retry) window.clearTimeout(retry);
+      void reader?.cancel().catch(() => undefined);
       controller?.abort();
       update({ streamReady: false });
     };
   }, [state.token, update]);
 
   const loadDashboard = useCallback(async () => {
-    if (!tokenRef.current) return;
+    const token = tokenRef.current;
+    if (!token) return;
+    const generation = authGenerationRef.current;
+    const isCurrent = () =>
+      tokenRef.current === token && authGenerationRef.current === generation;
     const [balance, transactions, rooms, promotions, tournaments] = await Promise.allSettled([
       call<{ account: WalletAccount }>("/wallet/balance"),
       call<{ items: WalletTransaction[] }>("/wallet/transactions?limit=20"),
@@ -335,6 +357,9 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       call<{ items: Promotion[] }>("/promotions"),
       call<{ items: Tournament[] }>("/tournaments"),
     ]);
+    // A sign-out or account switch may have happened while these requests were
+    // in flight. Never write a previous user's data into the current session.
+    if (!isCurrent()) return;
     update({
       balance: balance.status === "fulfilled" ? balance.value.account.balance : "0.00",
       myBets: transactions.status === "fulfilled" ? transactions.value.items : [],
@@ -347,6 +372,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       const messages = await call<{ messages: ChatMessage[] }>(
         `/chat/rooms/${encodeURIComponent(room)}/messages?limit=50`,
       ).catch(() => ({ messages: [] }));
+      if (!isCurrent()) return;
       update({ room, messages: messages.messages });
     }
   }, [call, update]);
@@ -358,6 +384,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
   const applyAuth = useCallback(
     async (data: AuthData) => {
       persist(data.token, data.refresh_token);
+      authGenerationRef.current += 1;
       tokenRef.current = data.token;
       update({ token: data.token, user: data.user });
       await loadDashboard();
@@ -406,6 +433,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       }).catch(() => undefined);
     }
     persist(null, null);
+    authGenerationRef.current += 1;
     tokenRef.current = null;
     setState({ ...initialState, ready: true });
     toast.info("Signed out");
@@ -762,7 +790,8 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
   );
 
   const loadAudit = useCallback(async () => {
-    const result = await guard("Audit", () => call<AuditReport>("/v1/internal/audit/verify"));
+    // call() already prefixes /v1; this route is /v1/internal/audit/verify.
+    const result = await guard("Audit", () => call<AuditReport>("/internal/audit/verify"));
     if (result) update({ audit: result as AuditReport });
   }, [call, guard, update]);
 

@@ -22,8 +22,19 @@ const envSchema = baseEnvSchema.extend({
 const env = loadEnv(envSchema);
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL, 10));
 
+const CORS_ORIGINS = env.CORS_ORIGIN.split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
-await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
+await app.register(cors, { origin: CORS_ORIGINS });
+
+/** Echo only an exact configured origin. A comma-separated list is not a
+ * valid Access-Control-Allow-Origin value and credentials require an exact
+ * match rather than `*`. */
+function streamOrigin(req) {
+  const requested = req.headers.origin;
+  return typeof requested === "string" && CORS_ORIGINS.includes(requested) ? requested : null;
+}
 
 app.addHook("onRequest", async (req, reply) => {
   const requestId = req.headers["x-request-id"] ?? randomUUID();
@@ -245,11 +256,12 @@ app.get("/v1/events/stream", async (req, reply) => {
 
   reply.hijack();
   const res = reply.raw;
+  const allowedOrigin = streamOrigin(req);
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache, no-transform",
     connection: "keep-alive",
-    "access-control-allow-origin": env.CORS_ORIGIN,
+    ...(allowedOrigin ? { "access-control-allow-origin": allowedOrigin } : {}),
   });
   res.write(": connected\n\n");
 
@@ -268,7 +280,10 @@ app.get("/v1/events/stream", async (req, reply) => {
     }
   }, 15000);
   heartbeat.unref?.();
-  req.raw.on("close", () => {
+  // Use the response lifetime, not IncomingMessage: on a GET request "close"
+  // can fire as soon as the request is complete while the SSE response stays
+  // open, which would silently stop delivering live events to this client.
+  res.on("close", () => {
     clearInterval(heartbeat);
     clients.delete(client);
   });

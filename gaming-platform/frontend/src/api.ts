@@ -5,6 +5,7 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly code?: string,
+    readonly details?: unknown,
   ) {
     super(message);
     this.name = "ApiError";
@@ -54,8 +55,9 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   if (!response.ok) {
     const error = payload as {
-      error?: { code?: string; message?: string } | string;
+      error?: { code?: string; message?: string; details?: unknown } | string;
       message?: string | Record<string, unknown>;
+      details?: unknown;
     } | null;
     const structured = typeof error?.error === "object" ? error.error : undefined;
     const message = typeof error?.error === "string"
@@ -64,7 +66,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
         (typeof error?.message === "string" ? error.message : undefined) ??
         `Request failed (${response.status})`;
     const code = structured?.code;
-    throw new ApiError(message, response.status, code);
+    // Preserve machine-readable details (for example a retained promotion
+    // claim's idempotencyKey) so callers can retry or reconcile it.
+    const details = structured?.details ?? error?.details;
+    throw new ApiError(message, response.status, code, details);
   }
 
   return unwrap<T>(payload);
