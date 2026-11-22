@@ -9,6 +9,9 @@ COPY services ./services
 # The CRA client has its own lockfile and peer-dependency policy, exactly as it
 # does in the reference app; keep it independent of the workspace install.
 COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./frontend/
+# The frontend lockfile pins a vendored elliptic patch, so the tarball must be
+# in the build context before npm ci runs.
+COPY frontend/security-patches ./frontend/security-patches
 RUN npm ci && npm cache clean --force
 RUN npm --prefix frontend ci && npm --prefix frontend cache clean --force
 
