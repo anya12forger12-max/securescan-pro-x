@@ -75,8 +75,9 @@ export async function buildPromotionsService(deps) {
         reply.header("x-request-id", requestId);
     });
     const reqId = (req) => String(req.headers["x-request-id"] ?? "");
-    // x-user-id is only trusted when asserted by the gateway with a valid
-    // service token. Direct callers must present a signed player JWT.
+    // Only a signed player JWT establishes identity. The gateway strips and
+    // re-derives x-user-id from the verified token; accepting a service token
+    // plus a caller-controlled header would allow cross-user impersonation.
     const requestUserId = async (req) => {
         const raw = headerString(req.headers, "authorization");
         if (raw?.startsWith("Bearer ")) {
@@ -88,8 +89,6 @@ export async function buildPromotionsService(deps) {
                 return null;
             }
         }
-        if (serviceTokenOk(req.headers, env.SERVICE_TOKEN))
-            return headerString(req.headers, "x-user-id");
         return null;
     };
     const requireUser = async (req, reply) => {

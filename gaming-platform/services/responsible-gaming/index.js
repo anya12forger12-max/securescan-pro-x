@@ -50,6 +50,9 @@ const deny = (reply, status, code, message) =>
   });
 
 async function requestUserId(req) {
+  // Only a signed player JWT establishes identity. The gateway strips and
+  // re-derives x-user-id from the verified token; trusting a bearer service
+  // token plus a header here would let any internal caller impersonate a user.
   const raw = headerString(req.headers, "authorization");
   if (raw?.startsWith("Bearer ")) {
     try {
@@ -59,8 +62,6 @@ async function requestUserId(req) {
       return null;
     }
   }
-  if (serviceTokenOk(req.headers, env.SERVICE_TOKEN))
-    return headerString(req.headers, "x-user-id");
   return null;
 }
 

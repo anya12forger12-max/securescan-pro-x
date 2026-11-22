@@ -120,8 +120,9 @@ export async function buildPromotionsService(deps: PromotionsDeps): Promise<Fast
     reply.header("x-request-id", requestId);
   });
   const reqId = (req: FastifyRequest): string => String(req.headers["x-request-id"] ?? "");
-  // x-user-id is only trusted when asserted by the gateway with a valid
-  // service token. Direct callers must present a signed player JWT.
+  // Only a signed player JWT establishes identity. The gateway strips and
+  // re-derives x-user-id from the verified token; accepting a service token
+  // plus a caller-controlled header would allow cross-user impersonation.
   const requestUserId = async (req: FastifyRequest): Promise<string | null> => {
     const raw = headerString(req.headers, "authorization");
     if (raw?.startsWith("Bearer ")) {
@@ -133,8 +134,6 @@ export async function buildPromotionsService(deps: PromotionsDeps): Promise<Fast
         return null;
       }
     }
-    if (serviceTokenOk(req.headers, env.SERVICE_TOKEN))
-      return headerString(req.headers, "x-user-id");
     return null;
   };
   const requireUser = async (req: FastifyRequest, reply: FastifyReply): Promise<string | null> => {

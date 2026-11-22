@@ -16,16 +16,16 @@ export async function closePool() {
 }
 /**
  * Derive the score from authoritative game state instead of trusting the
- * client. Winners get 100, other participants in a completed session get 10.
- * SQL updates are what decide winners; the score submit endpoint only records
- * the result.
+ * client. Only a recorded win counts: previously every ended session paid 10
+ * points, so a player could create and immediately end empty sessions to farm
+ * the leaderboard without ever playing a game.
  */
 export async function verifyGameResult(pool, input) {
     const result = await pool.query(`WITH seats AS (
        SELECT user_id,
               row_number() OVER (ORDER BY joined_at, user_id) AS seat
          FROM game_players WHERE session_id = $1
-     )
+     ), scored AS (
      SELECT CASE
        WHEN s.game_type = 'gin-rummy' AND EXISTS (
          SELECT 1 FROM gin_rummy_games g
@@ -39,12 +39,14 @@ export async function verifyGameResult(pool, input) {
           WHERE c.session_id = s.id AND c.winner IS NOT NULL
             AND ((c.winner = 'red' AND me.seat % 2 = 1) OR
                  (c.winner = 'blue' AND me.seat % 2 = 0))) THEN 100
-       ELSE 10
+       ELSE NULL
      END AS score
      FROM game_sessions s
      JOIN seats ON seats.user_id = $2
     WHERE s.id = $1 AND s.status = 'ended' AND s.game_type = $3
-    LIMIT 1`, [input.sessionId, input.userId, input.gameType]);
+    LIMIT 1
+     )
+     SELECT score FROM scored WHERE score IS NOT NULL`, [input.sessionId, input.userId, input.gameType]);
     if (!result.rowCount)
         return null;
     return Number(result.rows[0].score);

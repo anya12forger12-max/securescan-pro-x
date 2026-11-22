@@ -5,7 +5,7 @@ import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { randomUUID } from "node:crypto";
 import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv } from "@gp/config";
-import { ERROR_CODES, serviceTokenOk, toMoney } from "@gp/shared-types";
+import { ERROR_CODES, toMoney } from "@gp/shared-types";
 
 /**
  * Tournaments service (3014). The promotions env comment reserves this port,
@@ -48,6 +48,9 @@ const deny = (reply, status, code, message) =>
   });
 
 async function requestUserId(req) {
+  // Only a signed player JWT establishes identity. The gateway strips and
+  // re-derives x-user-id from the verified token; trusting a bearer service
+  // token plus a header here would let any internal caller impersonate a user.
   const raw = headerString(req.headers, "authorization");
   if (raw?.startsWith("Bearer ")) {
     try {
@@ -57,8 +60,6 @@ async function requestUserId(req) {
       return null;
     }
   }
-  if (serviceTokenOk(req.headers, env.SERVICE_TOKEN))
-    return headerString(req.headers, "x-user-id");
   return null;
 }
 
@@ -82,6 +83,17 @@ app.post("/v1/tournaments", async (req, reply) => {
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
 
   const b = parsed.data;
+  // There is no wallet debit/settlement path yet. Accepting a paid tournament
+  // would advertise a prize nobody funded and let players enter for free, so
+  // fail closed until entry fees can be charged and escrowed idempotently.
+  if (b.entryFee !== 0 || b.prizePool !== 0) {
+    return deny(
+      reply,
+      400,
+      ERROR_CODES.VALIDATION_ERROR,
+      "paid tournaments are disabled until entry fees are debited and prize pools escrowed",
+    );
+  }
   const result = await pool.query(
     `INSERT INTO tournaments
       (id, game_type, title, max_players, entry_fee, prize_pool, starts_at, created_by)
