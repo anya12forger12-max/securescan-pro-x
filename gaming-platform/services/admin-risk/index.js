@@ -302,11 +302,11 @@ app.post("/v1/admin-risk/bootstrap", async (req, reply) => {
   try {
     const result = await withTransaction(async (client) => {
       // Serialise concurrent bootstrap attempts so exactly one caller wins.
+      // The claim is strictly one-time, even for the admin who already won it;
+      // further grants go through roles/grant with `roles.manage`.
       await client.query("SELECT pg_advisory_xact_lock(3013002)");
-      const admins = await client.query("SELECT user_id FROM admin_user_roles WHERE role = 'admin' LIMIT 2");
-      if (admins.rowCount && !(admins.rowCount === 1 && admins.rows[0].user_id === actor)) {
-        return { conflict: true };
-      }
+      const admins = await client.query("SELECT 1 FROM admin_user_roles WHERE role = 'admin' LIMIT 1");
+      if (admins.rowCount) return { conflict: true };
       const assignment = await client.query(
         `INSERT INTO admin_user_roles (user_id, role, granted_by, granted_at)
          VALUES ($1, 'admin', $2, now())
