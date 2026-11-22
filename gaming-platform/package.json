@@ -40,7 +40,7 @@
     "@fastify/jwt": "^10.2.8",
     "decimal.js": "^10.5.0",
     "fastify": "^5.2.1",
-    "ioredis": "^5.4.2",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.13.1",
     "zod": "^4.6.7"
