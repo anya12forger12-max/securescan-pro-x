@@ -1,6 +1,9 @@
 import Fastify from "fastify";
 import jwt from "jsonwebtoken";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { readFile, stat } from "node:fs/promises";
+import { extname, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
@@ -328,6 +331,60 @@ async function proxy(req, reply) {
 
 app.all("/v1/*", proxy);
 app.all("/internal/*", proxy);
+
+/** Static browser client. The Aviator app is a CRA SPA, so every unknown
+ * non-API path resolves to index.html. The gateway remains the only service
+ * exposed by Compose and serves the same origin as /v1, avoiding browser CORS
+ * and credential coupling. */
+const WEB_ROOT = resolve(
+  fileURLToPath(new URL(".", import.meta.url)),
+  process.env.WEB_ROOT ?? "../../frontend/build",
+);
+const WEB_INDEX = join(WEB_ROOT, "index.html");
+const MIME_TYPES = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".ico": "image/x-icon",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".txt": "text/plain; charset=utf-8",
+  ".webp": "image/webp",
+};
+
+async function webFile(urlPath) {
+  const pathname = decodeURIComponent(urlPath.split("?")[0]);
+  const candidate = resolve(WEB_ROOT, `.${pathname}`);
+  if (candidate !== WEB_ROOT && !candidate.startsWith(WEB_ROOT + sep)) return null;
+  try {
+    const info = await stat(candidate);
+    if (info.isFile()) return candidate;
+  } catch {
+    // Missing asset -> SPA fallback below.
+  }
+  try {
+    await stat(WEB_INDEX);
+    return WEB_INDEX;
+  } catch {
+    return null;
+  }
+}
+
+app.get("/*", async (req, reply) => {
+  const file = await webFile(req.url);
+  if (!file) {
+    return reply.code(404).send({
+      error: "NOT_FOUND",
+      message: "frontend build not found; run npm --prefix frontend run build",
+    });
+  }
+  const body = await readFile(file);
+  reply.header("cache-control", file.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable");
+  reply.type(MIME_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream");
+  return reply.send(body);
+});
 
 try {
   await app.listen({ port: PORT, host: process.env.HOST ?? "0.0.0.0" });

@@ -10,6 +10,7 @@ import { join } from "node:path";
  */
 const root = fileURLToPath(new URL("..", import.meta.url));
 const compose = await readFile(join(root, "docker-compose.yml"), "utf8");
+const dockerfile = await readFile(join(root, "Dockerfile"), "utf8");
 
 const errors = [];
 const exists = async (rel) => {
@@ -107,6 +108,26 @@ for (const [name, text] of appServices) {
   if (!entry || !(await exists(entry))) continue;
   const source = await readFile(join(root, entry), "utf8");
   if (!/SIGTERM/.test(source)) errors.push(`${name} has no SIGTERM shutdown handler`);
+}
+
+// --- browser client: the gateway builds and serves it from one image ---
+if (!/COPY frontend\/package\.json frontend\/package-lock\.json/.test(dockerfile)) {
+  errors.push("Dockerfile must install the frontend from its own lockfile");
+}
+if (!/npm --prefix frontend ci/.test(dockerfile)) {
+  errors.push("Dockerfile must run the frontend dependency install");
+}
+if (!/npm --prefix frontend run build/.test(dockerfile)) {
+  errors.push("Dockerfile must build the frontend");
+}
+if (!/COPY --from=build \/app\/frontend\/build/.test(dockerfile)) {
+  errors.push("runtime image must contain the compiled frontend");
+}
+if (!(await exists("frontend/src/index.tsx"))) {
+  errors.push("frontend/src/index.tsx is missing");
+}
+if (!(await exists("frontend/src/app.tsx"))) {
+  errors.push("frontend/src/app.tsx is missing");
 }
 
 if (errors.length) {

@@ -1,0 +1,15 @@
+{
+  "short_name": "GP",
+  "name": "Gaming Platform",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#0e0e12",
+  "background_color": "#0e0e12"
+}

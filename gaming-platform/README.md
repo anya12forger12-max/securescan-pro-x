@@ -92,6 +92,31 @@ These are fixed here (each fix is commented inline at the site):
 - **Resource limits** — every application container is capped at 512 MiB and
   1 CPU so a single leaking process cannot starve the rest of the stack.
 
+## Browser client
+
+`frontend/` is a CRA 5 + React 18 + Sass client shaped like the reference
+Aviator app, not a new UI architecture. The same module-level context,
+header/board/stage/control composition and `BrowserRouter` wildcard route are
+present; Socket.IO and Unity WebGL are deliberately omitted because this
+platform has no crash backend or game bundle. Their roles are filled by
+gateway-authenticated SSE and the three playable services.
+
+| Aviator source | Gaming-platform counterpart |
+| --- | --- |
+| `src/index.tsx` / `src/app.tsx` | unchanged route and provider entry shape |
+| `src/context.tsx` | one `Provider` for auth, wallet, live events and actions |
+| `src/config.ts` | one gateway origin, defaulting to same-origin `/v1` |
+| `src/components/header.tsx` | auth, balance, audit-verification badge |
+| `src/components/bet-users/*` | live events, wallet activity, leaderboard/tournaments |
+| `src/components/Main/*` | history, stage and Aviator-named `Bet` control panel |
+| `src/components/crash/*` | game stage replacing the Unity canvas |
+
+The browser never sees a service token. It signs in through
+`POST /v1/auth/login`, stores only the player JWT, calls `/v1/*`, and opens
+`GET /v1/events/stream?since=0` with `fetch` streaming because `EventSource`
+cannot send the required `Authorization` header. The gateway injects all
+identity and capability headers.
+
 ## Shared packages
 
 - `packages/config` — `baseEnvSchema`, `loadEnv`, `registerErrorHandler`,
@@ -137,8 +162,11 @@ passed. Compose fails before starting anything if any required secret or
 
 Only the gateway is published on `0.0.0.0:3000`. Postgres and Redis bind to
 `127.0.0.1` for local administration; the other thirteen services are reachable
-only from inside the Compose network. All application traffic goes through
-`http://<host>:3000`. The image is self-contained — source, migrations and
+only from inside the Compose network. All application traffic — including the
+browser client — goes through `http://<host>:3000`. The Dockerfile builds the
+frontend into `frontend/build`, and the gateway serves it as a same-origin SPA
+with an `index.html` fallback for client-side routes. Set `CORS_ORIGIN` to that
+same public origin. The image is self-contained — source, migrations and
 operational scripts are baked in, with no host bind mount.
 
 ### Operations
@@ -198,6 +226,25 @@ npm run validate:compose         # static Compose path/port validation
 
 Add `npm run build` to your workflow after editing a recovered service's
 `src/`.
+
+### Frontend development
+
+The client is a separate npm project so CRA's peer-dependency policy does not
+leak into the backend workspaces. Its `.npmrc` mirrors the reference app's
+legacy-peer resolution, and `package.json` proxies `/v1` to the gateway during
+development.
+
+```bash
+npm run frontend:install
+npm run frontend:typecheck
+npm run frontend:build
+npm start --prefix frontend       # http://localhost:4000, proxying to :3000
+```
+
+`REACT_APP_API_URL` may be set at build time to an absolute gateway origin;
+leave it blank for the published Docker image. Copy `frontend/.env.example` if
+you need local overrides. Frontend dependencies and `frontend/build` are not
+committed; the Dockerfile reproduces both from `frontend/package-lock.json`.
 
 ## Calling the API
 

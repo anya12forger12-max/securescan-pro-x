@@ -1,0 +1,143 @@
+.info-board {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #171823;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.info-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+
+  button {
+    padding: 12px 6px;
+    border: none;
+    background: transparent;
+    color: #9aa0b5;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+
+    &.active {
+      color: #fff;
+      background: rgba(124, 92, 255, 0.16);
+      border-bottom: 2px solid #7c5cff;
+    }
+  }
+}
+
+.info-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.data-list {
+  display: grid;
+  gap: 4px;
+}
+
+.list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 2px 8px;
+  color: #f2f3f7;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+
+  &.spaced {
+    margin-top: 14px;
+  }
+
+  select {
+    background: #10111a;
+    color: #f2f3f7;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 7px;
+    padding: 4px;
+    font-size: 11px;
+  }
+}
+
+.data-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 12px;
+
+  .seq {
+    color: #9aa0b5;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .topic {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  time,
+  small {
+    color: #777d92;
+    font-size: 10px;
+  }
+
+  code {
+    color: #b7a8ff;
+  }
+
+  button {
+    background: #7c5cff;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  .positive {
+    color: #38e8b0;
+  }
+
+  .negative {
+    color: #ff8b8b;
+  }
+}
+
+.empty {
+  padding: 18px 8px;
+  margin: 0;
+  text-align: center;
+  color: #777d92;
+  font-size: 12px;
+}
+
+.promo-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: #777d92;
+  font-size: 11px;
+
+  button {
+    padding: 5px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(56, 232, 176, 0.3);
+    background: rgba(56, 232, 176, 0.08);
+    color: #38e8b0;
+    font-size: 11px;
+  }
+}
