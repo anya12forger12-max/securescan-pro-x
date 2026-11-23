@@ -28,6 +28,20 @@ function corsOrigin(req) {
     ? requested
     : null;
 }
+
+/** Baseline response hardening. The CRA client loads only same-origin
+ * scripts/styles, so a self-only policy (with inline styles for React and data
+ * URIs for images/fonts) does not break it. Auth responses additionally get a
+ * no-store cache policy in the request hook; static build assets keep theirs. */
+const BASE_SECURITY_HEADERS = Object.freeze({
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+  "content-security-policy":
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; " +
+    "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+});
+
 const UPSTREAM_MODE = process.env.UPSTREAM_MODE === "docker" ? "docker" : "local";
 const ADMIN_RISK_URL =
   process.env.ADMIN_RISK_URL ??
@@ -62,10 +76,18 @@ const rateLimitConfig = {
   authMax: Number(process.env.RATE_LIMIT_AUTH_MAX) || 10,
   userMax: Number(process.env.RATE_LIMIT_USER_MAX) || 120,
   mutateMax: Number(process.env.RATE_LIMIT_MUTATE_MAX) || 30,
-  failClosed: process.env.RATE_LIMIT_FAIL_CLOSED === "true",
+  streamMax: Number(process.env.RATE_LIMIT_STREAM_MAX) || 20,
+  // Fail closed by default once a shared limiter is configured; an explicit
+  // "false" keeps the deliberate local-only development mode working.
+  failClosed:
+    process.env.RATE_LIMIT_FAIL_CLOSED !== "false" && Boolean(process.env.REDIS_URL),
   redisUrl: process.env.REDIS_URL,
 };
 const rateLimiter = RATE_LIMIT_ENABLED ? createRateLimiter(rateLimitConfig) : null;
+
+/** Only genuinely unauthenticated auth endpoints are keyed by IP. `/v1/auth/me`
+ * carries a player JWT and must not share a NAT's quota with login attempts. */
+const IP_LIMITED_AUTH_PATH = /^\/v1\/auth\/(register|login|refresh|logout)\/?$/;
 
 /** In Compose every peer is reachable by its service name on the shared
  * network; with `npm run start:all` everything listens on loopback. */
@@ -269,13 +291,13 @@ app.addHook("onRequest", async (req, reply) => {
   if (!rateLimiter) return;
   const path = req.url.split(/[?#]/, 1)[0];
   if (!path.startsWith("/v1/") && !path.startsWith("/internal/")) return;
-  if (req.method === "OPTIONS" || path === "/v1/events/stream") return;
+  if (req.method === "OPTIONS") return;
   // Capability-authenticated peer routes are not player traffic.
   if (path.startsWith("/internal/")) return;
 
   let limit = rateLimitConfig.userMax;
   let key;
-  if (path.startsWith("/v1/auth/")) {
+  if (IP_LIMITED_AUTH_PATH.test(path)) {
     limit = rateLimitConfig.authMax;
     key = `ip:${req.ip ?? req.socket?.remoteAddress ?? "unknown"}`;
   } else {
@@ -304,7 +326,11 @@ app.addHook("onRequest", async (req, reply) => {
   if (!result.allowed) {
     const retryAfter = Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1000));
     reply.header("retry-after", String(retryAfter));
-    return reply.code(429).send({ error: "RATE_LIMITED", message: "too many requests", retryAfter });
+    return reply.code(429).send({
+      error: result.unavailable ? "RATE_LIMIT_UNAVAILABLE" : "RATE_LIMITED",
+      message: result.unavailable ? "rate limiter unavailable" : "too many requests",
+      retryAfter,
+    });
   }
 });
 
@@ -484,7 +510,13 @@ const MIME_TYPES = {
 };
 
 async function webFile(urlPath) {
-  const pathname = decodeURIComponent(urlPath.split("?")[0]);
+  let pathname;
+  try {
+    pathname = decodeURIComponent(urlPath.split("?")[0]);
+  } catch {
+    // A malformed escape is a bad request, not an internal server error.
+    return null;
+  }
   const candidate = resolve(WEB_ROOT, `.${pathname}`);
   if (candidate !== WEB_ROOT && !candidate.startsWith(WEB_ROOT + sep)) return null;
   try {

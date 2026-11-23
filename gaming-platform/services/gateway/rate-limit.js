@@ -97,6 +97,12 @@ export function createRateLimiter(options = {}) {
 
   async function check(key, limit) {
     const now = Date.now();
+    // Fail closed means *no* shared counter - including a Redis that never
+    // connected - rejects the request. Falling through to local counters here
+    // would silently weaken the limit on every replica during an outage.
+    if (failClosed && (!redis || !redisReady)) {
+      return { allowed: false, remaining: 0, limit, resetAt: now + windowMs, unavailable: true };
+    }
     if (redis && redisReady) {
       try {
         const [allowed, used, appliedLimit, reset] = await redis.eval(
