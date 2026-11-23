@@ -187,6 +187,20 @@ export async function submitGuess(pool, input) {
             await client.query("ROLLBACK");
             return null;
         }
+        // A clue grants a fixed number of guesses. The count and the insert share
+        // this transaction (and the row lock above), so two concurrent requests
+        // cannot both spend the last allowance. Wrong/neutral guesses already flip
+        // current_team; this closes the unlimited-guesses-per-clue loophole.
+        const clue = await client.query(`SELECT number, created_at FROM codenames_clues
+        WHERE game_id = $1 ORDER BY created_at DESC LIMIT 1`, [input.game_id]);
+        if (clue.rowCount) {
+            const used = await client.query(`SELECT COUNT(*)::int AS count FROM codenames_guesses
+          WHERE game_id = $1 AND team = $2 AND created_at >= $3`, [input.game_id, input.team, clue.rows[0].created_at]);
+            if (Number(used.rows[0].count) >= Number(clue.rows[0].number)) {
+                await client.query("ROLLBACK");
+                return null;
+            }
+        }
         const result = await client.query(`INSERT INTO codenames_guesses (id, game_id, user_id, username, word, team, outcome)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id, game_id, user_id, username, word, team, outcome, created_at`, [input.id, input.game_id, input.user_id, input.username, input.word, input.team, input.outcome]);

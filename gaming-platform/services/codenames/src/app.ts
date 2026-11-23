@@ -179,7 +179,10 @@ export async function buildCodenamesService(env: CodenamesEnv) {
       next_team: opposingTeam,
     });
     if (!guess) {
-      return reply.code(409).send({ error: "GAME_NOT_ACTIVE", message: "game was closed by another guess" });
+      return reply.code(409).send({
+        error: "GAME_NOT_ACTIVE",
+        message: "game is closed or this clue's guess allowance is exhausted",
+      });
     }
     return reply.send({ guess, outcome, ...(winner ? { winner } : {}) });
   });

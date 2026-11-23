@@ -105,7 +105,9 @@ These are fixed here (each fix is commented inline at the site):
   further split so promotions can only credit bonuses and crash can only debit
   stakes or credit wins/crash refunds.
 - **Durable realtime** — events are persisted in `realtime_events` and published
-  via `pg_notify`, so SSE polling works across process restarts.
+  via `pg_notify`, so SSE polling works across process restarts. Every payload
+  is recursively redacted on write and replay, so no topic can broadcast user
+  ids, balances or promotion amounts to the whole lobby.
 - **Readiness** — every stateful service, including promotions, exposes
   `/ready` backed by a database query. The gateway adds an aggregate `/ready`
   that reports healthy only when all fourteen downstream services are ready.
@@ -177,8 +179,10 @@ identity and capability headers.
 | `0006_realtime.sql` | durable `realtime_events` table |
 | `0007_promotions_idempotency.sql` | stable wallet idempotency key for claims |
 | `0008_crash.sql` | crash rounds/bets, wager support, extended game catalogue |
+| `0009_crash_recovery.sql` | `pending`/`cashing_out` bet states and persisted round deadlines |
+| `0010_crash_state_guards.sql` | idempotent state guards and Gin Rummy win attribution |
 
-All eight are applied by the one-shot `migrate` service before any application
+All ten are applied by the one-shot `migrate` service before any application
 starts, on first boot and on every upgrade. Applied files are checksummed, so
 editing an already-applied migration fails the deploy instead of drifting.
 

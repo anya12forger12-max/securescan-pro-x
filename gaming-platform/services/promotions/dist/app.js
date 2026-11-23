@@ -253,7 +253,9 @@ export async function buildPromotionsService(deps) {
             }
         }
         if (deps.publish) {
-            await deps.publish("config.updated", { userId, promotionId: promo.id, amount: claim.bonusAmount });
+            // SSE is a lobby-wide broadcast, so publish only public fields. User ids
+            // and bonus amounts must never be put on that channel in the first place.
+            await deps.publish("config.updated", { promotionId: promo.id });
         }
         return reply.code(201).send(success({ claim }, reqId(req)));
     });

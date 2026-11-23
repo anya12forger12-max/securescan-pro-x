@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import jwt from "jsonwebtoken";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { once } from "node:events";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -315,7 +316,9 @@ app.addHook("onRequest", async (req, reply) => {
   let key;
   if (IP_LIMITED_AUTH_PATH.test(path)) {
     limit = rateLimitConfig.authMax;
-    key = `ip:${ip}`;
+    // Auth and generic anonymous traffic must not share a bucket: on a NAT,
+    // ordinary public reads would otherwise exhaust everyone's login quota.
+    key = `ip:auth:${ip}`;
   } else {
     const raw = req.headers.authorization;
     let userId = null;
@@ -333,11 +336,11 @@ app.addHook("onRequest", async (req, reply) => {
       // own bucket rather than skipping them or charging the read quota. The
       // key style matches the user/IP buckets above.
       limit = rateLimitConfig.streamMax;
-      key = userId ? `user:${userId}:stream` : `ip:${ip}:stream`;
+      key = userId ? `user:${userId}:stream` : `ip:anon:${ip}:stream`;
     } else {
       const mutating = ["POST", "PATCH", "PUT", "DELETE"].includes(req.method);
       limit = mutating ? rateLimitConfig.mutateMax : rateLimitConfig.userMax;
-      key = userId ? `user:${userId}:${mutating ? "write" : "read"}` : `ip:${ip}`;
+      key = userId ? `user:${userId}:${mutating ? "write" : "read"}` : `ip:anon:${ip}`;
     }
   }
 
@@ -480,7 +483,18 @@ async function proxy(req, reply) {
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
-            rawReply.write(value);
+            // Honour socket backpressure. Without this the gateway drains the
+            // realtime hub as fast as it can and buffers Slowloris-style clients
+            // in gateway memory instead of throttling the bounded upstream queue.
+            if (!rawReply.write(value)) {
+              // A closed socket may never emit "drain" (e.g. MAX_STREAMS eviction),
+              // so race it with "close". Swallow loser rejections to avoid an
+              // unhandled rejection after one side wins.
+              const drained = once(rawReply, "drain").catch(() => undefined);
+              const closed = once(rawReply, "close").catch(() => undefined);
+              await Promise.race([drained, closed]);
+            }
+            if (rawReply.destroyed || rawReply.writableEnded) break;
           }
         } catch (err) {
           req.log.warn({ err }, "event stream closed");

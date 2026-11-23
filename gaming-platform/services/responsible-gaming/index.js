@@ -119,14 +119,29 @@ app.post("/v1/responsible-gaming/self-exclude", async (req, reply) => {
     ? new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString()
     : null;
 
-  await pool.query(
+  // An exclusion that is still in effect is immutable by the player. The
+  // conditional upsert is the atomic guard: a second concurrent request cannot
+  // slip past a read-then-write check and turn a lifetime (NULL) exclusion into
+  // a short, auto-expiring one. There is deliberately no self-service lift.
+  const result = await pool.query(
     `INSERT INTO rg_self_exclusions (user_id, active, reason, expires_at, created_at)
      VALUES ($1, true, $2, $3, now())
      ON CONFLICT (user_id) DO UPDATE
        SET active = true, reason = EXCLUDED.reason,
-           expires_at = EXCLUDED.expires_at, created_at = now()`,
+           expires_at = EXCLUDED.expires_at, created_at = now()
+     WHERE NOT (rg_self_exclusions.active
+                AND (rg_self_exclusions.expires_at IS NULL
+                     OR rg_self_exclusions.expires_at > now()))`,
     [userId, reason ?? "self-requested exclusion", expiresAt],
   );
+  if (!result.rowCount) {
+    return deny(
+      reply,
+      409,
+      ERROR_CODES.CONFLICT,
+      "an active self-exclusion is already in effect and cannot be changed by the player",
+    );
+  }
   return ok(reply, 200, { selfExcluded: true, expiresAt }, reqId(req));
 });
 

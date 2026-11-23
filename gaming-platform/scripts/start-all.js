@@ -58,6 +58,12 @@ const localPeerUrls = {
   crash: {
     WALLET_INTERNAL_URL: `http://127.0.0.1:${ports.wallet}`,
     REALTIME_INTERNAL_URL: `http://127.0.0.1:${ports.realtime}`,
+    RESPONSIBLE_GAMING_URL: `http://127.0.0.1:${ports["responsible-gaming"]}`,
+  },
+  promotions: {
+    WALLET_URL: `http://127.0.0.1:${ports.wallet}`,
+    RESPONSIBLE_GAMING_URL: `http://127.0.0.1:${ports["responsible-gaming"]}`,
+    REALTIME_URL: `http://127.0.0.1:${ports.realtime}`,
   },
 };
 

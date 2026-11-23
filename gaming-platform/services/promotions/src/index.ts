@@ -1,9 +1,7 @@
-import { z } from "zod";
 import { dbPoolOptions, fetchWithTimeout, loadEnv } from "@gp/config";
 import pg from "pg";
-import { EventBus } from "@gp/event-bus";
-import { promotionsEnvSchema } from "./env.js";
 import { PgPromotionsRepository } from "./repo.js";
+import { promotionsEnvSchema } from "./env.js";
 import { buildPromotionsService, WalletCreditError } from "./app.js";
 import type {
   ResponsibleGamingCheck,
@@ -11,42 +9,22 @@ import type {
   WalletCreditInput,
   WalletClient,
 } from "./app.js";
-/**
- * The recovered env schema predates scoped wallet credentials and still marks
- * WALLET_SERVICE_TOKEN as mandatory. Compose now supplies the full token only
- * for mixed-version compatibility alongside the bonus-scoped token, so extend
- * the schema here: either credential can satisfy local runs, at least one is
- * required, and the scoped token always wins.
- */
-const walletTokenEnvSchema = promotionsEnvSchema
-  .extend({
-    WALLET_SERVICE_TOKEN: z.string().min(32).optional(),
-    WALLET_BONUS_SERVICE_TOKEN: z.string().min(32).optional(),
-  })
-  .refine((values) => Boolean(values.WALLET_BONUS_SERVICE_TOKEN ?? values.WALLET_SERVICE_TOKEN), {
-    message: "WALLET_BONUS_SERVICE_TOKEN is required (WALLET_SERVICE_TOKEN is a local-only fallback)",
-    path: ["WALLET_BONUS_SERVICE_TOKEN"],
-  });
 
 /** Entry point. Env is validated before anything binds a port or opens a socket. */
-const env = loadEnv(walletTokenEnvSchema);
+const env = loadEnv(promotionsEnvSchema);
 const walletServiceToken = env.WALLET_BONUS_SERVICE_TOKEN ?? env.WALLET_SERVICE_TOKEN;
 if (!walletServiceToken) {
-  // Unreachable after the refine above; keeps the header value a definite string.
+  // Unreachable after the schema refine; keeps the header value a definite string.
   console.error("[promotions] missing wallet capability token");
   process.exit(1);
 }
-// Legacy wallet versions only understand the full x-service-token. An upgraded
-// wallet prefers x-wallet-scope, so the narrow capability still wins there.
+// Only the narrow bonus capability is sent. The full wallet token is never
+// shipped to this container, so there is no legacy header to fall back to.
 const walletHeaders: Record<string, string> = {
   "content-type": "application/json",
-  "x-service-token": env.WALLET_SERVICE_TOKEN ?? walletServiceToken,
-  ...(env.WALLET_SERVICE_TOKEN && env.WALLET_SERVICE_TOKEN !== walletServiceToken
-    ? { "x-wallet-scope": walletServiceToken }
-    : {}),
+  "x-service-token": walletServiceToken,
 };
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
-const bus = new EventBus(env.REDIS_URL);
 const repo = new PgPromotionsRepository(pool);
 const wallet: WalletClient | null = env.WALLET_URL
   ? {
@@ -97,14 +75,33 @@ const rg: ResponsibleGamingClient | null = env.RESPONSIBLE_GAMING_URL
       },
     }
   : null;
+
+/** Publish through realtime's capability-authenticated internal endpoint. The
+ * old EventBus wrote to Redis, which realtime never subscribes to, so events
+ * silently vanished. Publishing is best-effort: the claim is already durable.
+ * Payloads are redacted at the source as well as by realtime on write. */
+const publish = async (topic: string, payload: unknown): Promise<void> => {
+  try {
+    await fetchWithTimeout(`${env.REALTIME_URL}/internal/events`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-service-token": env.REALTIME_SERVICE_TOKEN,
+      },
+      body: JSON.stringify({ topic, payload }),
+    }, 2000);
+  }
+  catch (err) {
+    console.warn(`[promotions] realtime publish of ${topic} failed:`, (err as Error).message);
+  }
+};
+
 const app = await buildPromotionsService({
-  // The wallet capability may be supplied under the scoped bonus name in
-  // Compose. Normalise it back to the field the service type expects.
   env: { ...env, WALLET_SERVICE_TOKEN: walletServiceToken },
   repo,
   wallet,
   rg,
-  publish: (t, p) => bus.publish(t, p),
+  publish,
   ready: () => pool.query("SELECT 1"),
 });
 const stop = async (): Promise<void> => {
@@ -112,7 +109,6 @@ const stop = async (): Promise<void> => {
   try {
     await app.close();
     await pool.end();
-    await bus.close();
   }
   finally {
     process.exit(0);
@@ -126,7 +122,6 @@ try {
 catch (err) {
   app.log.error({ err }, "promotions service failed to start");
   await pool.end().catch(() => undefined);
-  await bus.close().catch(() => undefined);
   process.exit(1);
 }
 export { promotionsEnvSchema } from "./env.js";

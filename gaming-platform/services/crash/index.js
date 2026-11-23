@@ -31,10 +31,13 @@ const envSchema = baseEnvSchema.extend({
   ...capabilityFields(
     "CRASH_SERVICE_TOKEN",
     "REALTIME_SERVICE_TOKEN",
+    // Used only to call responsible-gaming's internal check. The wallet's full
+    // capability is deliberately absent: this service receives scoped tokens.
+    "SERVICE_TOKEN",
   ),
-  // Production injects capability-scoped wallet tokens only. The legacy
-  // full-access wallet token stays strictly optional as a local-run fallback;
-  // requiring it would make the service fail to boot in the new Compose setup.
+  // Production injects capability-scoped wallet tokens only. The full-access
+  // token stays optional purely as a mixed-version local-run fallback and is
+  // never sent on the wire when a scoped credential is available.
   WALLET_SERVICE_TOKEN: z.string().min(32).optional(),
   WALLET_DEBIT_SERVICE_TOKEN: z.string().min(32).optional(),
   WALLET_WIN_SERVICE_TOKEN: z.string().min(32).optional(),
@@ -45,6 +48,7 @@ const envSchema = baseEnvSchema.extend({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   WALLET_INTERNAL_URL: z.string().url().default("http://wallet:3011"),
   REALTIME_INTERNAL_URL: z.string().url().default("http://realtime:3010"),
+  RESPONSIBLE_GAMING_URL: z.string().url().default("http://responsible-gaming:3012"),
   BETTING_WINDOW_MS: z.coerce.number().int().min(1000).max(120000).default(8000),
   ROUND_GAP_MS: z.coerce.number().int().min(250).max(60000).default(2500),
   DOUBLING_SECONDS: z.coerce.number().positive().min(0.5).max(30).default(3),
@@ -204,11 +208,25 @@ function publicRound(row) {
   return out;
 }
 
+/** Internal settlement value: capped at the actual crash point. Never expose
+ * this on a public route — see publicMultiplier below. */
 function liveMultiplier(row) {
   if (row.status !== "running" || !row.started_at) return null;
   const { doublingSeconds } = roundConfig(row);
   const elapsed = Date.now() - new Date(row.started_at).getTime();
   return Math.round(Math.min(multiplierAt(elapsed, doublingSeconds), Number(row.crash_point)) * 100) / 100;
+}
+
+/** Public rendering of the live curve. It deliberately never reads the hidden
+ * crash point: clamping the displayed value there makes it plateau at the
+ * secret outcome during the gap between the true crash and the lifecycle tick,
+ * leaking the result before it is published. Only the configured ceiling is
+ * used here; settlement keeps its own crash-point-capped calculation. */
+function publicMultiplier(row) {
+  if (row.status !== "running" || !row.started_at) return null;
+  const { doublingSeconds, maxMultiplier } = roundConfig(row);
+  const elapsed = Date.now() - new Date(row.started_at).getTime();
+  return Math.round(Math.min(multiplierAt(elapsed, doublingSeconds), maxMultiplier) * 100) / 100;
 }
 
 // ---------------------------------------------------------------------------
@@ -218,27 +236,73 @@ function liveMultiplier(row) {
 /** A wallet response whose outcome cannot be proven either way. The debit or
  * credit may have committed, so callers must reconcile by replaying the same
  * idempotency key rather than assuming the operation did not happen. */
-export class WalletAmbiguousError extends Error {
+/** Wallet failures must carry their HTTP status. A plain `Error` ignores the
+ * extra constructor arguments, which used to make a definite 409 look like an
+ * ambiguous transport failure: the bet stayed pending and every retry logged
+ * another false alarm. */
+export class WalletRequestError extends Error {
   constructor(message, status, code) {
     super(message);
-    this.name = "WalletAmbiguousError";
+    this.name = "WalletRequestError";
     this.status = status;
     this.code = code;
   }
 }
 
+export class WalletAmbiguousError extends WalletRequestError {
+  constructor(message, status, code) {
+    super(message, status, code);
+    this.name = "WalletAmbiguousError";
+  }
+}
+
+/** True only when the wallet proved the operation did NOT happen. Malformed
+ * bodies and 5xx responses are WalletAmbiguousError — the money may have moved —
+ * so callers must keep their idempotent claim and replay it instead of
+ * rolling back to a state that can later be settled as a loss. */
+const definitiveWalletRejection = (err) =>
+  err instanceof WalletRequestError &&
+  !(err instanceof WalletAmbiguousError) &&
+  err.status >= 400 &&
+  err.status < 500;
+
+/** Responsible gaming is the single source of truth for self-exclusion. Every
+ * wager is gated on it and an unreachable/stale service fails closed, so an
+ * excluded player cannot stake during an RG or network outage. */
+async function wageringAllowed(userId, amount) {
+  try {
+    const response = await fetchWithTimeout(
+      `${env.RESPONSIBLE_GAMING_URL}/v1/internal/check`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-service-token": env.SERVICE_TOKEN,
+        },
+        body: JSON.stringify({ userId, action: "crash.bet", amount }),
+      },
+      2000,
+    );
+    if (!response.ok) return false;
+    const payload = await response.json();
+    return payload?.data?.decision?.allowed === true;
+  } catch (err) {
+    app.log.warn({ err, userId }, "responsible-gaming check failed; blocking wager");
+    return false;
+  }
+}
+
 async function walletRequest(path, body, scopedTokenValue, attempt = 0) {
-  // Mixed-version compatibility: the legacy full token keeps an older wallet
-  // working, while an upgraded wallet enforces the narrow x-wallet-scope.
-  const legacyToken = env.WALLET_SERVICE_TOKEN ?? scopedTokenValue;
+  // Send only the narrow capability for this call. Peer containers no longer
+  // receive the full wallet token, so there is nothing to fall back to; a
+  // compromised crash process cannot escalate to arbitrary credit/debit types.
   const response = await fetchWithTimeout(
     `${env.WALLET_INTERNAL_URL}${path}`,
     {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-service-token": legacyToken,
-        ...(legacyToken !== scopedTokenValue ? { "x-wallet-scope": scopedTokenValue } : {}),
+        "x-service-token": scopedTokenValue,
       },
       body: JSON.stringify(body),
     },
@@ -256,7 +320,7 @@ async function walletRequest(path, body, scopedTokenValue, attempt = 0) {
   }
   if (!response.ok || parseFailed) {
     const ambiguous = parseFailed || response.status >= 500;
-    const ErrorClass = ambiguous ? WalletAmbiguousError : Error;
+    const ErrorClass = ambiguous ? WalletAmbiguousError : WalletRequestError;
     const err = new ErrorClass(
       payload?.error?.message ?? `wallet returned ${response.status}`,
       response.status,
@@ -522,7 +586,7 @@ async function reconcileUnsettled() {
       const activation = await activateReservedBet(bet);
       if (activation.error) await refundBet(bet);
     } catch (err) {
-      if (err.status === 409) {
+      if (definitiveWalletRejection(err) && err.status === 409) {
         // Definitive "insufficient balance": no debit was recorded.
         await pool.query(
           `UPDATE crash_bets SET status = 'cancelled', settled_at = now()
@@ -659,8 +723,9 @@ async function cashoutBet(bet, requestedMultiplier, { userId } = {}) {
     await finalizeCashout(claim);
   } catch (err) {
     // Only a definitive wallet rejection proves no money moved. Ambiguous
-    // failures keep `cashing_out` so boot/periodic replay uses the same key.
-    if (err.status >= 400 && err.status < 500) {
+    // failures (4xx with an unparseable body, 5xx, transport errors) keep
+    // `cashing_out` so boot/periodic replay uses the same key.
+    if (definitiveWalletRejection(err)) {
       await pool.query(
         `UPDATE crash_bets SET status = 'active', cashout_at = NULL, payout = NULL,
            settled_at = NULL WHERE id = $1 AND status = 'cashing_out'`, [claim.id]);
@@ -857,7 +922,7 @@ app.get("/v1/crash/rounds/current", async (_req, reply) => {
   );
   const row = result.rows[0];
   return ok(reply, 200, {
-    round: row ? { ...publicRound(row), multiplier: liveMultiplier(row) } : null,
+    round: row ? { ...publicRound(row), multiplier: publicMultiplier(row) } : null,
   });
 });
 
@@ -876,7 +941,7 @@ app.get("/v1/crash/rounds/:id", async (req, reply) => {
   const result = await pool.query(`SELECT * FROM crash_rounds WHERE id = $1`, [id]);
   if (!result.rowCount) return deny(reply, 404, ERROR_CODES.NOT_FOUND, "round not found");
   const row = result.rows[0];
-  const round = { ...publicRound(row), multiplier: liveMultiplier(row) };
+  const round = { ...publicRound(row), multiplier: publicMultiplier(row) };
   const userId = await requestUserId(req);
   let myBet = null;
   if (userId) {
@@ -909,6 +974,11 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
   if (amount < env.MIN_BET || amount > env.MAX_BET)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "bet amount out of range");
 
+  // Fail-closed self-exclusion gate: no stake may be reserved for a player the
+  // RG service has excluded (or cannot confirm is eligible).
+  if (!(await wageringAllowed(userId, amount)))
+    return deny(reply, 403, ERROR_CODES.FORBIDDEN, "wagering is not allowed for this player");
+
   const roundResult = await pool.query(`SELECT * FROM crash_rounds WHERE id = $1`, [req.params.id]);
   const round = roundResult.rows[0];
   if (!round) return deny(reply, 404, ERROR_CODES.NOT_FOUND, "round not found");
@@ -926,7 +996,7 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
     // stake it is reconciling.
     await walletDebit(userId, Number(bet.amount), round.id, bet.id);
   } catch (err) {
-    if (err.status === 409 || (err.status >= 400 && err.status < 500)) {
+    if (definitiveWalletRejection(err)) {
       // Definitive rejection: no debit happened, so no refund is needed.
       await pool.query(
         `UPDATE crash_bets SET status = 'cancelled', settled_at = now()

@@ -88,15 +88,10 @@ const pruneTimer = setInterval(async () => {
 }, Math.min((env.EVENT_RETENTION_HOURS * 3_600_000) / 2, 3_600_000));
 pruneTimer.unref?.();
 
-/** These topics are broadcast verbatim to every authenticated player, so only
- * their payloads need redaction. Redacting all topics would silently strip
- * legitimate fields such as `chat.message.username` and `config.updated`. */
-const SENSITIVE_TOPIC_PREFIXES = ["crash."];
-const isSensitiveTopic = (topic) =>
-  typeof topic === "string" && SENSITIVE_TOPIC_PREFIXES.some((prefix) => topic.startsWith(prefix));
-
-/** Crash-stage payloads must never carry another user's identity, money or
- * game secrets. Unknown fields (e.g. a `marker` used by tests) are preserved. */
+/** Every stored event is replayed to every authenticated player, so every
+ * payload is redacted on write and read. Topic-specific exceptions used to let
+ * `config.updated` publish user ids and bonus amounts to the whole lobby.
+ * Unknown fields (e.g. a `marker` used by tests) are preserved. */
 const SENSITIVE_KEYS = new Set([
   "userId",
   "user_id",
@@ -131,13 +126,12 @@ function sanitizeEventData(value) {
   return clean;
 }
 
-/** Applied on write and on every read so older crash rows cannot leak either. */
-const sanitizePayload = (topic, payload) =>
-  isSensitiveTopic(topic) ? sanitizeEventData(payload ?? {}) : payload ?? {};
+/** Applied on write and on every read so older rows cannot leak either. */
+const sanitizePayload = (payload) => sanitizeEventData(payload ?? {});
 
 function publicEvent(event) {
   if (event === null || typeof event !== "object" || Array.isArray(event)) return event;
-  return { ...event, payload: sanitizePayload(event.topic, event.payload) };
+  return { ...event, payload: sanitizePayload(event.payload) };
 }
 
 /** pg returns bigserial as a string; send the full normalized event so SSE
@@ -332,7 +326,7 @@ app.post("/internal/events", async (req, reply) => {
   if (!parsed.success)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
 
-  const payload = sanitizePayload(parsed.data.topic, parsed.data.payload ?? {});
+  const payload = sanitizePayload(parsed.data.payload ?? {});
   const client = await pool.connect();
   try {
     const result = await client.query(
