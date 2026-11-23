@@ -7,7 +7,7 @@ back to that layout. This project supplies the missing bootstrap layer and the
 peer services those services assume are running, so the platform can be
 installed, migrated and started as one system.
 
-All fifteen services boot, the eight migrations apply cleanly, and the main
+All fifteen application services boot, the ten migrations apply cleanly, and the main
 auth / RBAC / wallet / chat / realtime / promotions / Codenames / Gin-rummy /
 crash / audit flows pass end to end through the gateway (a separate 20-flow
 integration run; `npm run smoke` covers the deploy-critical subset). The four
@@ -281,9 +281,9 @@ export REDIS_URL=redis://127.0.0.1:6379
 export JWT_ACCESS_SECRET='a-long-random-secret-at-least-32-chars'
 export SERVICE_TOKEN='another-long-random-secret-at-least-32-chars'
 export ADMIN_SERVICE_TOKEN='admin-service-secret-at-least-32-characters'
-# Full wallet capability: gateway/test/admin (also the local fallback for peers).
+# Full wallet capability: gateway/test/admin only (a local-only fallback for peers).
 export WALLET_SERVICE_TOKEN='wallet-service-secret-at-least-32-characters'
-# Scoped peer tokens; Compose also passes the full token for legacy rollout compatibility.
+# Scoped peer tokens; Compose injects only these into crash and promotions.
 export WALLET_DEBIT_SERVICE_TOKEN='wallet-debit-secret-at-least-32-characters'
 export WALLET_BONUS_SERVICE_TOKEN='wallet-bonus-secret-at-least-32-characters'
 export WALLET_WIN_SERVICE_TOKEN='wallet-win-secret-at-least-32-characters'
@@ -516,9 +516,9 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/jso
 
 ## Known gaps
 
-- The Docker daemon was unavailable in the build environment, so Compose was
-  validated structurally and the same runtime was exercised directly with
-  local Node, Postgres and Redis. Run `npm run smoke` on the target host.
+- `npm ci` cannot create npm-workspace symlinks on FAT/exFAT USB mounts. Use
+  Docker Compose as the primary runnable path, or copy the tree to a native
+  filesystem before installing dependencies locally.
 - Realtime uses Postgres `LISTEN`/`NOTIFY` rather than Redis for fan-out; Redis
   remains available to shared packages and as a persisted Compose service.
 - The recovered services ship both readable `src/*.ts` and committed
