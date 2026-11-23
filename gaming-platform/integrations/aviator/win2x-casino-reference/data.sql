@@ -500,8 +500,8 @@ CREATE TABLE `users` (
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-INSERT INTO `users` (`id`, `unique_id`, `username`, `avatar`, `user_id`, `password`, `email`, `balance`, `bonus`, `requery`, `ip`, `is_admin`, `is_moder`, `is_youtuber`, `fake`, `time`, `banchat`, `banchat_reason`, `ban`, `ban_reason`, `link_trans`, `link_reg`, `ref_id`, `ref_money`, `ref_money_all`, `remember_token`, `created_at`, `updated_at`) VALUES
-(1,	'2233a528c4f2',	'Administrator',	'/img/no_avatar.jpg',	'admin',	'$2y$10$E/pHAmSKaKw1YCvX.LRfQeECdgO4NllWOrCTJt4mJPQtf9KQj3UTS',	'deletetion2k@gmail.com',	0.00,	0.47,	0.000,	'123.27.33.138',	1,	0,	0,	0,	0,	NULL,	NULL,	0,	NULL,	0,	0,	NULL,	0.00,	0.00,	NULL,	'2020-03-21 15:44:28',	'2020-03-21 15:58:44');
+-- No default admin is seeded: the upstream dump shipped a known bcrypt hash.
+-- Register the first user, then promote it with is_admin=1 in the database.
 
 DROP TABLE IF EXISTS `wheel`;
 CREATE TABLE `wheel` (

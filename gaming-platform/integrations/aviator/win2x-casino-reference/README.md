@@ -237,3 +237,7 @@ sudo npm install pm2@latest -g
 
 pm2 start app.js
 \
+
+SECURITY: The bundled data.sql no longer seeds an administrator account. The
+upstream dump contained a known bcrypt admin hash. Register the first account,
+then promote it by setting is_admin = 1 on its users row in the database.
