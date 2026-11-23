@@ -4,6 +4,7 @@
   "private": true,
   "description": "SecureScan Pro X — Frontend UI",
   "type": "module",
+  "packageManager": "pnpm@10.32.1",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
