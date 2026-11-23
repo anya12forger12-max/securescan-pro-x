@@ -378,6 +378,8 @@ export async function buildGinRummyService(env: GinRummyEnv) {
       }
       if (!(await setGameStatus(client, id, "ended", decoded.userId, "active")))
         return await rejectMove(client, reply, 409, "GAME_NOT_ACTIVE", "game is not active");
+      // Only a hand-validated /meld win may count toward the leaderboard.
+      await client.query(`UPDATE gin_rummy_games SET win_type = 'validated' WHERE id = $1`, [id]);
       const updated = await getGame(client, id);
       await client.query("COMMIT");
       return reply.send({ game: publicGame(updated, decoded.userId) });
@@ -424,6 +426,9 @@ export async function buildGinRummyService(env: GinRummyEnv) {
         return await rejectMove(client, reply, 409, "INVALID_WINNER", "winner_id may only name the opponent");
       if (!(await setGameStatus(client, id, "ended", winnerId, "active")))
         return await rejectMove(client, reply, 409, "GAME_NOT_ACTIVE", "game is not active");
+      // Ending is a concession: the opponent wins the game but earns no
+      // validated leaderboard score.
+      await client.query(`UPDATE gin_rummy_games SET win_type = 'concession' WHERE id = $1`, [id]);
       await client.query("COMMIT");
       return reply.send({ ok: true });
     } catch (err) {

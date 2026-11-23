@@ -15,8 +15,17 @@ import { ERROR_CODES, serviceTokenOk, toMoney } from "@gp/shared-types";
  * idempotent: a caller that rolls back after an ambiguous response replays the
  * same idempotencyKey, which must not move the account a second time.
  */
+// Scoped peer credentials are optional for local runs: deployments inject all
+// three through Compose, but the full gateway token alone still works for
+// development and for the gateway's internal-wallet security tests.
+const scopedToken = (name) =>
+  z.string().min(32, `${name} must be at least 32 characters`).optional();
+
 const envSchema = baseEnvSchema.extend({
   ...capabilityFields("SERVICE_TOKEN", "WALLET_SERVICE_TOKEN"),
+  WALLET_DEBIT_SERVICE_TOKEN: scopedToken("WALLET_DEBIT_SERVICE_TOKEN"),
+  WALLET_BONUS_SERVICE_TOKEN: scopedToken("WALLET_BONUS_SERVICE_TOKEN"),
+  WALLET_WIN_SERVICE_TOKEN: scopedToken("WALLET_WIN_SERVICE_TOKEN"),
   PORT: z.coerce.number().int().positive().default(3011),
   DATABASE_URL: z.string().min(1).url(),
   JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 characters"),
@@ -50,6 +59,46 @@ const deny = (reply, status, code, message) =>
     error: { code, message },
   });
 
+/**
+ * Capability scoping. WALLET_SERVICE_TOKEN remains the full
+ * gateway/test/admin capability. Peer tokens are narrower:
+ *   WALLET_DEBIT_SERVICE_TOKEN  -> debit only
+ *   WALLET_BONUS_SERVICE_TOKEN  -> credit with type=bonus only
+ *   WALLET_WIN_SERVICE_TOKEN    -> credit with type=win only, plus the narrow
+ *                                  crash refund shape below
+ * A token that is valid but lacks the operation/type gets 403, not 401, so a
+ * misconfigured peer is distinguishable from an unauthenticated caller.
+ */
+const hasToken = (req, expected) =>
+  typeof expected === "string" && expected.length > 0 && serviceTokenOk(req.headers, expected);
+
+const walletCredentialPresent = (req) =>
+  [
+    env.WALLET_SERVICE_TOKEN,
+    env.WALLET_DEBIT_SERVICE_TOKEN,
+    env.WALLET_BONUS_SERVICE_TOKEN,
+    env.WALLET_WIN_SERVICE_TOKEN,
+  ].some((token) => hasToken(req, token));
+
+const creditAllowed = (req, input) => {
+  if (hasToken(req, env.WALLET_SERVICE_TOKEN)) return true;
+  if (input.type === "bonus") return hasToken(req, env.WALLET_BONUS_SERVICE_TOKEN);
+  if (input.type === "win") return hasToken(req, env.WALLET_WIN_SERVICE_TOKEN);
+  // Narrow exception agreed with the crash workstream: a failed bet is refunded
+  // with the win-scoped token, but only for the exact crash-refund shape. All
+  // other adjustment credits still require the full wallet capability.
+  if (
+    input.type === "adjustment" &&
+    input.referenceType === "crash_refund" &&
+    input.idempotencyKey.startsWith("crash-refund-")
+  )
+    return hasToken(req, env.WALLET_WIN_SERVICE_TOKEN);
+  return false;
+};
+
+const debitAllowed = (req) =>
+  hasToken(req, env.WALLET_SERVICE_TOKEN) || hasToken(req, env.WALLET_DEBIT_SERVICE_TOKEN);
+
 async function requestUserId(req) {
   // Only a signed player JWT establishes identity. The gateway strips and
   // re-derives x-user-id from the verified token; trusting a bearer service
@@ -66,9 +115,17 @@ async function requestUserId(req) {
   return null;
 }
 
+// toMoney() rounds to two decimals, so a positive sub-cent amount would still
+// create a zero-value transaction. Validate the minimum before conversion.
+const moneyAmount = z.coerce
+  .number()
+  .positive()
+  .finite()
+  .refine((value) => value >= 0.01, { message: "amount must be at least 0.01" });
+
 const CreditSchema = z.object({
   userId: z.string().min(1),
-  amount: z.coerce.number().positive().finite(),
+  amount: moneyAmount,
   type: z.enum(["bonus", "deposit", "win", "adjustment"]).default("bonus"),
   referenceType: z.string().min(1),
   referenceId: z.string().nullable().optional(),
@@ -79,9 +136,9 @@ const TX_COLUMNS = `id, idempotency_key, user_id, amount, type, reference_type,
   reference_id, balance_after, created_at`;
 
 app.post("/internal/wallet/credit", async (req, reply) => {
-  // Credit is the highest-risk internal capability; it accepts only the
-  // wallet-scoped token, never the general service token.
-  if (!serviceTokenOk(req.headers, env.WALLET_SERVICE_TOKEN))
+  // Reject unknown credentials before parsing the body; then require the
+  // credential to be allowed for the *requested* credit type.
+  if (!walletCredentialPresent(req))
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
 
   const parsed = CreditSchema.safeParse(req.body);
@@ -89,6 +146,9 @@ app.post("/internal/wallet/credit", async (req, reply) => {
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
 
   const input = parsed.data;
+  if (!creditAllowed(req, input))
+    return deny(reply, 403, ERROR_CODES.FORBIDDEN, "token not authorized for this credit type");
+
   const amount = toMoney(input.amount);
   const client = await pool.connect();
   try {
@@ -159,15 +219,19 @@ app.post("/internal/wallet/credit", async (req, reply) => {
  */
 const DebitSchema = z.object({
   userId: z.string().min(1),
-  amount: z.coerce.number().positive().finite(),
+  amount: moneyAmount,
   referenceType: z.string().min(1),
   referenceId: z.string().nullable().optional(),
   idempotencyKey: z.string().min(1),
 });
 
 app.post("/internal/wallet/debit", async (req, reply) => {
-  if (!serviceTokenOk(req.headers, env.WALLET_SERVICE_TOKEN))
+  // The full wallet capability and the debit-only peer capability may stake;
+  // bonus/win credit tokens must never be able to move funds out.
+  if (!walletCredentialPresent(req))
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
+  if (!debitAllowed(req))
+    return deny(reply, 403, ERROR_CODES.FORBIDDEN, "token not authorized for debit");
 
   const parsed = DebitSchema.safeParse(req.body);
   if (!parsed.success)

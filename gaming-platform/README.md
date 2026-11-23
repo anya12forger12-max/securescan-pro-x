@@ -101,7 +101,9 @@ These are fixed here (each fix is commented inline at the site):
   over conflicting body fields; chat also ignores a body `room` mismatch.
 - **Capability-scoped credentials** — admin, wallet, realtime, promotions and crash
   internal APIs each have a distinct token with no shared default; a
-  deployment that forgets any of them fails at startup.
+  deployment that forgets any of them fails at startup. Wallet capabilities are
+  further split so promotions can only credit bonuses and crash can only debit
+  stakes or credit wins/crash refunds.
 - **Durable realtime** — events are persisted in `realtime_events` and published
   via `pg_notify`, so SSE polling works across process restarts.
 - **Readiness** — every stateful service, including promotions, exposes
@@ -118,11 +120,15 @@ These are fixed here (each fix is commented inline at the site):
 - **Graceful shutdown** — all fifteen services now handle SIGTERM/SIGINT by
   calling `app.close()`, which drains requests and runs each service's
   `onClose` pool teardown. Compose allows 25s before a hard kill.
-- **Smaller attack surface** — the fourteen internal services are exposed only
-  on the Compose network (`expose`, no host port publishing). Only the gateway
-  is reachable from the host.
-- **Resource limits** — every application container is capped at 512 MiB and
-  1 CPU so a single leaking process cannot starve the rest of the stack.
+- **Smaller attack surface** — the fourteen internal services, Postgres and
+  Redis are on a dedicated internal Compose network with no host ports; only
+  the gateway is published (and must sit behind TLS in production). Redis
+  requires a password, and the migrator receives only `DATABASE_URL`.
+- **Container hardening** — app containers use a non-root user,
+  `no-new-privileges`, `cap_drop: ALL`, a read-only root filesystem with
+  `tmpfs /tmp`, and PID limits. Redis runs as its unprivileged image user;
+  Postgres has bounded PID/memory/CPU usage. All containers have memory/CPU
+  caps so a leaking process cannot starve the stack.
 
 ## Browser client
 
@@ -181,6 +187,14 @@ editing an already-applied migration fails the deploy instead of drifting.
 Requirements: Docker with Compose v2, a public browser origin, and port 3000
 free on the host.
 
+**TLS is mandatory in production.** The gateway itself speaks plain HTTP on
+port 3000. Never expose that port directly to browsers: put a TLS-terminating
+reverse proxy / load balancer in front of it, redirect HTTP to HTTPS, set HSTS
+at the terminator, and firewall 3000 so only that proxy can reach it. Use an
+`https://` origin in `CORS_ORIGIN`. The example values in `.env.example` and in
+the local-run section below are **non-production placeholders**; generate real
+secrets with `npm run env:init`.
+
 ```bash
 cd coffee/gaming-platform
 CORS_ORIGIN=https://play.example.com npm run env:init
@@ -188,25 +202,51 @@ docker compose up -d --build
 npm run smoke
 ```
 
-`env:init` generates a fresh Postgres password, JWT signing key, all six
-internal capability tokens and the one-time admin bootstrap token, writes a
-`0600` `.env`, and refuses to replace an existing one unless `--force` is
-passed. Compose fails before starting anything if any required secret or
-`DATABASE_URL` / `CORS_ORIGIN` is blank.
+`env:init` generates a fresh Postgres password, a Redis password, a JWT signing
+key, nine internal capability tokens (including the three wallet-scoped ones)
+and the one-time admin bootstrap token, writes a `0600` `.env`, and refuses to
+replace an existing one unless `--force` is passed. Compose fails before
+starting anything if any required secret, `DATABASE_URL`, `REDIS_URL` or
+`CORS_ORIGIN` is blank. After adding the Redis password or the new scoped
+tokens to an older deployment, regenerate `.env` with
+`npm run env:init -- --force` before starting; the old values will fail the new
+fail-closed checks.
 
-Only the gateway is published on `0.0.0.0:3000`. Postgres and Redis bind to
-`127.0.0.1` for local administration; the other fourteen services are reachable
-only from inside the Compose network. All application traffic — including the
-browser client — goes through `http://<host>:3000`. The Dockerfile builds the
-frontend into `frontend/build`, and the gateway serves it as a same-origin SPA
-with an `index.html` fallback for client-side routes. Set `CORS_ORIGIN` to that
-same public origin. The image is self-contained — source, migrations and
-operational scripts are baked in, with no host bind mount.
+Only the gateway is published on `0.0.0.0:3000` (intended to be reachable only
+from the TLS proxy). Postgres, Redis and all fourteen peer services sit on a
+dedicated internal Compose network with no host ports and no route to the
+internet. Redis requires `REDIS_PASSWORD`; `REDIS_URL` embeds the same password
+and is the only way clients (including the gateway rate limiter) connect.
+`RATE_LIMIT_FAIL_CLOSED=true` makes the gateway reject traffic if Redis is
+unavailable instead of weakening limits. For administration use
+`docker compose exec redis redis-cli` (the container sets `REDISCLI_AUTH`) or
+`docker compose exec postgres psql -U "$POSTGRES_USER" "$POSTGRES_DB"`.
+
+CORS is **exact-origin**: the gateway compares the browser's whole `Origin`
+value (scheme, host and port) with the entries in `CORS_ORIGIN`; it never
+returns `*` for a credentialed request, emits `Vary: Origin`, applies the same
+check to SSE event streams, and does not do suffix or prefix matching. Keep one
+exact `https://` origin in production; a comma-separated list is an allow-list
+of complete origins, not a pattern.
+
+All application traffic — including the browser client — goes through the
+gateway. The Dockerfile builds the frontend into `frontend/build`, and the
+gateway serves it as a same-origin SPA with an `index.html` fallback for
+client-side routes. The image is self-contained — source, migrations and
+operational scripts are baked in, with no host bind mount. App containers run
+as the non-root `node` user with `no-new-privileges`, all capabilities dropped,
+a read-only root filesystem with `tmpfs /tmp`, and PID/memory/CPU limits. Redis
+runs as the non-root `redis` user and writes only to the `redisdata` volume;
+Postgres has bounded PID/memory/CPU usage and keeps its capabilities only for
+the entrypoint's volume ownership hand-off. Base images are pinned to exact
+patch tags and published multi-arch digests, so rebuilds cannot silently pick
+up a newer base.
 
 ### Operations
 
 - `docker compose ps` — container state and health.
 - `docker compose logs -f gateway` — edge logs.
+- `docker compose exec redis redis-cli ping` — authenticated Redis health.
 - `docker compose run --rm migrate` — apply migrations manually.
 - `npm run smoke` — gateway liveness, aggregate readiness and auth flow.
 - `docker compose down` — stop, keeping `pgdata` and `redisdata`; add `-v` to
@@ -215,7 +255,7 @@ operational scripts are baked in, with no host bind mount.
 For an upgrade, refresh the tree, keep the same `.env`, and run
 `docker compose up -d --build`. The one-shot `migrate` service runs before the
 applications on every recreate, so an existing database volume is upgraded in
-place.
+place. It receives only `DATABASE_URL`, not the fleet's capability tokens.
 
 ## Run locally from Node
 
@@ -227,12 +267,20 @@ runs. `scripts/start-all.js` pins each service's `PORT` itself.
 ```bash
 npm ci --omit=dev
 export DATABASE_URL=postgresql://gp:<password>@127.0.0.1:5432/gaming_platform
+# Local Redis may be unauthenticated on loopback; a generated .env instead
+# uses redis://:<REDIS_PASSWORD>@redis:6379 with --requirepass on the server.
 export REDIS_URL=redis://127.0.0.1:6379
+# EXAMPLE-ONLY, NON-PRODUCTION SECRETS BELOW. Never reuse these values; copy
+# the distinct generated values from .env or mint fresh ones for a test run.
 export JWT_ACCESS_SECRET='a-long-random-secret-at-least-32-chars'
-# Use the distinct values from .env (or generate fresh ones for a test run).
 export SERVICE_TOKEN='another-long-random-secret-at-least-32-chars'
 export ADMIN_SERVICE_TOKEN='admin-service-secret-at-least-32-characters'
+# Full wallet capability: gateway/test/admin (also the local fallback for peers).
 export WALLET_SERVICE_TOKEN='wallet-service-secret-at-least-32-characters'
+# Scoped peer tokens; these are the only wallet credentials Compose gives peers.
+export WALLET_DEBIT_SERVICE_TOKEN='wallet-debit-secret-at-least-32-characters'
+export WALLET_BONUS_SERVICE_TOKEN='wallet-bonus-secret-at-least-32-characters'
+export WALLET_WIN_SERVICE_TOKEN='wallet-win-secret-at-least-32-characters'
 export REALTIME_SERVICE_TOKEN='realtime-service-secret-at-least-32-characters'
 export PROMOTIONS_SERVICE_TOKEN='promotions-service-secret-at-least-32-characters'
 export CRASH_SERVICE_TOKEN='crash-service-secret-at-least-32-characters'
@@ -293,12 +341,15 @@ Player traffic is counted before proxying. Unauthenticated auth endpoints
 stream establishment - is limited per verified JWT subject (120 reads and 30
 writes per 60s). Responses include `X-RateLimit-Limit`,
 `X-RateLimit-Remaining` and `X-RateLimit-Reset`; exceeding a limit returns `429`
-with `Retry-After`. Tune with `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_AUTH_MAX`,
-`RATE_LIMIT_USER_MAX` and `RATE_LIMIT_MUTATE_MAX`, or set
-`RATE_LIMIT_ENABLED=false` for local debugging. Counters are shared through
-`REDIS_URL`; if Redis is unavailable the gateway keeps local counters and
-continues serving unless `RATE_LIMIT_FAIL_CLOSED=true`, in which case it returns
-`429 RATE_LIMIT_UNAVAILABLE` instead of silently weakening the limit.
+with `Retry-After`; event streams additionally default to 20 per user
+(`RATE_LIMIT_STREAM_MAX`) within a 500-stream / 168-hour retention budget
+(`MAX_STREAMS`, `EVENT_RETENTION_HOURS`). Tune with `RATE_LIMIT_WINDOW_MS`,
+`RATE_LIMIT_AUTH_MAX`, `RATE_LIMIT_USER_MAX`, `RATE_LIMIT_MUTATE_MAX` and
+`RATE_LIMIT_STREAM_MAX`, or set `RATE_LIMIT_ENABLED=false` for local debugging.
+Counters are shared through the password-protected `REDIS_URL`; Compose defaults
+`RATE_LIMIT_FAIL_CLOSED=true`, so an unavailable Redis returns
+`429 RATE_LIMIT_UNAVAILABLE` instead of silently weakening the limit. Only an
+explicit `RATE_LIMIT_FAIL_CLOSED=false` keeps local fallback counters.
 
 ### Auth
 
@@ -320,6 +371,23 @@ Privileged routes need a player token **and** a permission granted through
 admin-risk. `/internal/events` and `/internal/wallet` are exceptions: they are
 capability-token-only. Each internal API has its own token, so a compromised
 service cannot reuse its own credential to mint credits or admin roles.
+
+Wallet credentials are scoped further:
+
+| Token | Holder | Authorizes |
+| --- | --- | --- |
+| `WALLET_SERVICE_TOKEN` | gateway, tests/admin | any wallet credit type or debit; this is the internal-route capability the gateway injects for `/internal/wallet/*` |
+| `WALLET_DEBIT_SERVICE_TOKEN` | crash | `/internal/wallet/debit` only |
+| `WALLET_BONUS_SERVICE_TOKEN` | promotions | `/internal/wallet/credit` with `type=bonus` only |
+| `WALLET_WIN_SERVICE_TOKEN` | crash | `/internal/wallet/credit` with `type=win` only, plus the exact crash refund shape (`type=adjustment`, `referenceType=crash_refund`, `idempotencyKey` beginning `crash-refund-`) |
+
+A scoped token used outside its operation/type gets `403 FORBIDDEN`; an unknown
+token still gets `401 UNAUTHORIZED`. Peer services never receive
+`WALLET_SERVICE_TOKEN` in Compose, and the gateway keeps injecting the full
+token for existing `/internal/wallet/credit` and `/debit` security tests. The
+promotions service locally accepts the bonus token under its legacy env name
+only after validating that at least one wallet credential is present; in
+Compose it receives only the scoped value.
 
 Claim the first admin exactly once, through the gateway, with the player token
 of the account that should become admin:

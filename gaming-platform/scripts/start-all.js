@@ -51,6 +51,16 @@ const rootEntryServices = new Set([
   "crash",
 ]);
 
+// Services whose defaults are Compose DNS names need loopback peers when the
+// whole fleet runs on one machine. Without this, every crash bet fails with
+// ENOTFOUND wallet on a developer laptop or in local smoke tests.
+const localPeerUrls = {
+  crash: {
+    WALLET_INTERNAL_URL: `http://127.0.0.1:${ports.wallet}`,
+    REALTIME_INTERNAL_URL: `http://127.0.0.1:${ports.realtime}`,
+  },
+};
+
 const root = fileURLToPath(new URL("..", import.meta.url));
 const children = [];
 
@@ -63,7 +73,7 @@ for (const name of services) {
     stdio: "inherit",
     // Local development binds every peer to loopback. The Compose network
     // leaves HOST unset, so containers still listen on all interfaces.
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(ports[name]) },
+    env: { ...process.env, ...localPeerUrls[name], HOST: "127.0.0.1", PORT: String(ports[name]) },
   });
   children.push({ name, child });
 }

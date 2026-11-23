@@ -119,6 +119,12 @@ const ROUTES = [
   // not silently dropped by the generic /v1/admin-risk route below.
   { prefix: "/v1/admin-risk/roles/grant", service: "admin-risk", port: 3013, privileged: true, permission: "roles.manage" },
   { prefix: "/v1/admin-risk", service: "admin-risk", port: 3013 },
+  // Reading the audit log and inspecting RBAC need audit.read. Appending to
+  // the hash-chained log is a separate admin-only capability: support/risk
+  // must not be able to write entries they are allowed to read.
+  { prefix: "/v1/internal/audit", service: "admin-risk", port: 3013, methods: ["GET"], privileged: true, permission: "audit.read" },
+  { prefix: "/v1/internal/audit", service: "admin-risk", port: 3013, methods: ["POST"], privileged: true, permission: "audit.append" },
+  // Preserve the previous fallback for any other method on these prefixes.
   { prefix: "/v1/internal/audit", service: "admin-risk", port: 3013, privileged: true, permission: "audit.read" },
   { prefix: "/v1/internal/rbac", service: "admin-risk", port: 3013, privileged: true, permission: "audit.read" },
   { prefix: "/v1/events", service: "realtime", port: 3010, requirePlayer: true },
@@ -208,8 +214,9 @@ function matchesRoute(path, route) {
   return path === route.prefix || path === route.prefix + "/";
 }
 
-function requiredPermission(route, path) {
+function requiredPermission(route, path, method) {
   if (route.permission) return route.permission;
+  if (method === "POST" && matchesPrefix(path, "/v1/internal/audit")) return "audit.append";
   if (matchesPrefix(path, "/v1/internal/audit") || matchesPrefix(path, "/v1/internal/rbac"))
     return "audit.read";
   return "promotions.manage";
@@ -243,6 +250,14 @@ app.addContentTypeParser(["application/json", "application/*+json"], { parseAs: 
 });
 
 app.addHook("onRequest", async (req, reply) => {
+  for (const [name, value] of Object.entries(BASE_SECURITY_HEADERS)) {
+    reply.header(name, value);
+  }
+  // Auth responses carry tokens and account data: never let a proxy or the
+  // browser cache them. Static build assets keep their own cache policy.
+  if (matchesPrefix(req.url.split(/[?#]/, 1)[0], "/v1/auth")) {
+    reply.header("cache-control", "no-store");
+  }
   if (req.url === "/health" || req.url === "/ready") return;
   reply.header("Vary", "Origin");
   const origin = corsOrigin(req);
@@ -295,11 +310,12 @@ app.addHook("onRequest", async (req, reply) => {
   // Capability-authenticated peer routes are not player traffic.
   if (path.startsWith("/internal/")) return;
 
-  let limit = rateLimitConfig.userMax;
+  const ip = req.ip ?? req.socket?.remoteAddress ?? "unknown";
+  let limit;
   let key;
   if (IP_LIMITED_AUTH_PATH.test(path)) {
     limit = rateLimitConfig.authMax;
-    key = `ip:${req.ip ?? req.socket?.remoteAddress ?? "unknown"}`;
+    key = `ip:${ip}`;
   } else {
     const raw = req.headers.authorization;
     let userId = null;
@@ -312,11 +328,17 @@ app.addHook("onRequest", async (req, reply) => {
         // performs the authoritative rejection.
       }
     }
-    const mutating = ["POST", "PATCH", "PUT", "DELETE"].includes(req.method);
-    if (mutating) limit = rateLimitConfig.mutateMax;
-    key = userId
-      ? `user:${userId}:${mutating ? "write" : "read"}`
-      : `ip:${req.ip ?? req.socket?.remoteAddress ?? "unknown"}`;
+    if (matchesPrefix(path, "/v1/events/stream")) {
+      // SSE connections are long-lived: count new connection attempts in their
+      // own bucket rather than skipping them or charging the read quota. The
+      // key style matches the user/IP buckets above.
+      limit = rateLimitConfig.streamMax;
+      key = userId ? `user:${userId}:stream` : `ip:${ip}:stream`;
+    } else {
+      const mutating = ["POST", "PATCH", "PUT", "DELETE"].includes(req.method);
+      limit = mutating ? rateLimitConfig.mutateMax : rateLimitConfig.userMax;
+      key = userId ? `user:${userId}:${mutating ? "write" : "read"}` : `ip:${ip}`;
+    }
   }
 
   const result = await rateLimiter.check(key, limit);
@@ -402,7 +424,7 @@ async function proxy(req, reply) {
         return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid service token" });
       }
     } else {
-      const permission = requiredPermission(target, path);
+      const permission = requiredPermission(target, path, req.method);
       if (!(await hasPermission(decoded.userId, permission, req.log))) {
         return reply.code(403).send({
           error: "FORBIDDEN",
@@ -440,6 +462,7 @@ async function proxy(req, reply) {
       const rawReply = reply.raw;
       const streamOrigin = corsOrigin(req);
       rawReply.writeHead(res.status, {
+        ...BASE_SECURITY_HEADERS,
         "content-type": contentType,
         "cache-control": "no-cache, no-transform",
         connection: "keep-alive",

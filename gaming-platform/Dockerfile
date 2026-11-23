@@ -1,5 +1,7 @@
 # ---- build stage: compile the typed services and the browser client ----
-FROM node:22-slim AS build
+# Pinned to node 22.23.5 (multi-arch index digest verified from Docker Hub).
+# Update tag and digest together when upgrading.
+FROM node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS build
 
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
@@ -21,7 +23,7 @@ COPY frontend/src ./frontend/src
 RUN npm run build && npm --prefix frontend run build
 
 # ---- runtime stage: production dependencies and compiled output only ----
-FROM node:22-slim
+FROM node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
 
 ENV NODE_ENV=production \
     PORT=3000

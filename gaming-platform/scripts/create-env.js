@@ -13,10 +13,14 @@ if (!origin || !/^https?:\/\/[^\s]+$/.test(origin)) {
 const envPath = new URL("../.env", import.meta.url);
 const secret = (bytes = 32) => randomBytes(bytes).toString("base64url");
 const postgresPassword = secret(24);
+const redisPassword = secret(24);
 const jwtSecret = secret(48);
 const serviceToken = secret(48);
 const adminServiceToken = secret(48);
 const walletServiceToken = secret(48);
+const walletDebitToken = secret(48);
+const walletBonusToken = secret(48);
+const walletWinToken = secret(48);
 const realtimeServiceToken = secret(48);
 const promotionsServiceToken = secret(48);
 const crashServiceToken = secret(48);
@@ -31,12 +35,19 @@ POSTGRES_DB=gaming_platform
 DATABASE_URL=postgresql://gp:${encodeURIComponent(postgresPassword)}@postgres:5432/gaming_platform
 # Per-service Postgres pool size; keep 15 * DB_POOL_MAX below max_connections.
 DB_POOL_MAX=5
-REDIS_URL=redis://redis:6379
+# Redis is password-protected and reachable only on the Compose internal network.
+REDIS_PASSWORD=${redisPassword}
+REDIS_URL=redis://:${encodeURIComponent(redisPassword)}@redis:6379
 JWT_ACCESS_SECRET=${jwtSecret}
 SERVICE_TOKEN=${serviceToken}
 # Capability-scoped internal credentials. Never reuse SERVICE_TOKEN for these.
 ADMIN_SERVICE_TOKEN=${adminServiceToken}
+# WALLET_SERVICE_TOKEN is the full gateway/test/admin capability. The three
+# scoped tokens are the only ones handed to peer services in production.
 WALLET_SERVICE_TOKEN=${walletServiceToken}
+WALLET_DEBIT_SERVICE_TOKEN=${walletDebitToken}
+WALLET_BONUS_SERVICE_TOKEN=${walletBonusToken}
+WALLET_WIN_SERVICE_TOKEN=${walletWinToken}
 REALTIME_SERVICE_TOKEN=${realtimeServiceToken}
 PROMOTIONS_SERVICE_TOKEN=${promotionsServiceToken}
 CRASH_SERVICE_TOKEN=${crashServiceToken}
@@ -44,6 +55,16 @@ CRASH_SERVICE_TOKEN=${crashServiceToken}
 ADMIN_BOOTSTRAP_TOKEN=${bootstrapToken}
 CORS_ORIGIN=${origin}
 LOG_LEVEL=info
+# Edge abuse controls. Fail closed if the shared limiter is unavailable.
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_WINDOW_MS=60000
+RATE_LIMIT_AUTH_MAX=10
+RATE_LIMIT_USER_MAX=120
+RATE_LIMIT_MUTATE_MAX=30
+RATE_LIMIT_FAIL_CLOSED=true
+RATE_LIMIT_STREAM_MAX=20
+MAX_STREAMS=500
+EVENT_RETENTION_HOURS=168
 `;
 
 try {

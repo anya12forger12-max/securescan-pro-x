@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { dbPoolOptions, fetchWithTimeout, loadEnv } from "@gp/config";
 import pg from "pg";
 import { EventBus } from "@gp/event-bus";
@@ -10,8 +11,30 @@ import type {
   WalletCreditInput,
   WalletClient,
 } from "./app.js";
+/**
+ * The recovered env schema predates scoped wallet credentials and still marks
+ * WALLET_SERVICE_TOKEN as mandatory. Compose now gives this service only the
+ * bonus-scoped token, so extend the schema here: either credential can satisfy
+ * local runs, at least one is required, and the scoped token always wins.
+ */
+const walletTokenEnvSchema = promotionsEnvSchema
+  .extend({
+    WALLET_SERVICE_TOKEN: z.string().min(32).optional(),
+    WALLET_BONUS_SERVICE_TOKEN: z.string().min(32).optional(),
+  })
+  .refine((values) => Boolean(values.WALLET_BONUS_SERVICE_TOKEN ?? values.WALLET_SERVICE_TOKEN), {
+    message: "WALLET_BONUS_SERVICE_TOKEN is required (WALLET_SERVICE_TOKEN is a local-only fallback)",
+    path: ["WALLET_BONUS_SERVICE_TOKEN"],
+  });
+
 /** Entry point. Env is validated before anything binds a port or opens a socket. */
-const env = loadEnv(promotionsEnvSchema);
+const env = loadEnv(walletTokenEnvSchema);
+const walletServiceToken = env.WALLET_BONUS_SERVICE_TOKEN ?? env.WALLET_SERVICE_TOKEN;
+if (!walletServiceToken) {
+  // Unreachable after the refine above; keeps the header value a definite string.
+  console.error("[promotions] missing wallet capability token");
+  process.exit(1);
+}
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 const bus = new EventBus(env.REDIS_URL);
 const repo = new PgPromotionsRepository(pool);
@@ -22,7 +45,7 @@ const wallet: WalletClient | null = env.WALLET_URL
         try {
           res = await fetchWithTimeout(`${env.WALLET_URL}/internal/wallet/credit`, {
             method: "POST",
-            headers: { "content-type": "application/json", "x-service-token": env.WALLET_SERVICE_TOKEN },
+            headers: { "content-type": "application/json", "x-service-token": walletServiceToken },
             body: JSON.stringify(input),
           });
         }
@@ -65,7 +88,9 @@ const rg: ResponsibleGamingClient | null = env.RESPONSIBLE_GAMING_URL
     }
   : null;
 const app = await buildPromotionsService({
-  env,
+  // The wallet capability may be supplied under the scoped bonus name in
+  // Compose. Normalise it back to the field the service type expects.
+  env: { ...env, WALLET_SERVICE_TOKEN: walletServiceToken },
   repo,
   wallet,
   rg,

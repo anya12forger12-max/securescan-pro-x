@@ -27,9 +27,12 @@ export async function verifyGameResult(pool, input) {
          FROM game_players WHERE session_id = $1
      ), scored AS (
      SELECT CASE
+       -- A concession (/end) is not a win: only /meld sets win_type to
+       -- 'validated' after checking the winner's complete hand.
        WHEN s.game_type = 'gin-rummy' AND EXISTS (
          SELECT 1 FROM gin_rummy_games g
-          WHERE g.session_id = s.id AND g.winner_id = $2) THEN 100
+          WHERE g.session_id = s.id AND g.winner_id = $2
+            AND g.win_type = 'validated') THEN 100
        WHEN s.game_type = 'pictionary' AND EXISTS (
          SELECT 1 FROM pictionary_rounds r
           WHERE r.session_id = s.id AND r.winner_id = $2) THEN 100

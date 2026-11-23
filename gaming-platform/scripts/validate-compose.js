@@ -80,6 +80,38 @@ for (const { name, spec, loopback } of published) {
     errors.push(`${name} publishes ${spec} on all interfaces; only gateway may be public`);
   }
 }
+// Postgres and Redis used to publish loopback ports for local administration;
+// the data tier is now internal-only, leaving one deliberate public surface.
+if (published.length !== 1 || published[0].name !== "gateway" || published[0].spec !== "3000:3000") {
+  errors.push(
+    `expected only gateway 3000:3000 to be published, got ` +
+      (published.map(({ name, spec }) => `${name}:${spec}`).join(", ") || "none"),
+  );
+}
+for (const name of ["postgres", "redis"]) {
+  if (/\bports:/.test(body(name))) errors.push(`${name} must not publish a host port`);
+}
+
+// --- data isolation, Redis auth and container hardening ---
+if (!/^\s{2}internal:\s*\n\s{4}internal:\s*true/m.test(compose)) {
+  errors.push("internal data network must be non-routable (internal: true)");
+}
+if (!/--requirepass/.test(compose) || !/REDISCLI_AUTH:/.test(compose)) {
+  errors.push("Redis must require a password and authenticate its healthcheck");
+}
+const appAnchor = compose.match(/x-app: &app[\s\S]*?(?=\nservices:)/)?.[0] ?? "";
+for (const [label, pattern] of [
+  ["no-new-privileges", /no-new-privileges:true/],
+  ["cap_drop ALL", /cap_drop:\s*\n\s+- ALL/],
+  ["pids_limit", /pids_limit:/],
+  ["read_only root filesystem", /read_only:\s*true/],
+  ["tmpfs scratch space", /tmpfs:/],
+]) {
+  if (!pattern.test(appAnchor)) errors.push(`app services must set ${label}`);
+}
+if (!/^\s{4}user:\s*"999:1000"/m.test(body("redis"))) {
+  errors.push("Redis must run as the non-root redis user");
+}
 
 // --- database connection budget ---
 const poolMax = Number(compose.match(/DB_POOL_MAX:\s*\$\{DB_POOL_MAX:-(\d+)\}/)?.[1] ?? 0);

@@ -29,11 +29,15 @@ import { ERROR_CODES, moneyMul, serviceTokenOk, toMoney } from "@gp/shared-types
  */
 const envSchema = baseEnvSchema.extend({
   ...capabilityFields(
-    "SERVICE_TOKEN",
     "CRASH_SERVICE_TOKEN",
-    "WALLET_SERVICE_TOKEN",
     "REALTIME_SERVICE_TOKEN",
   ),
+  // Production injects capability-scoped wallet tokens only. The legacy
+  // full-access wallet token stays strictly optional as a local-run fallback;
+  // requiring it would make the service fail to boot in the new Compose setup.
+  WALLET_SERVICE_TOKEN: z.string().min(32).optional(),
+  WALLET_DEBIT_SERVICE_TOKEN: z.string().min(32).optional(),
+  WALLET_WIN_SERVICE_TOKEN: z.string().min(32).optional(),
   PORT: z.coerce.number().int().positive().default(3023),
   DATABASE_URL: z.string().min(1).url(),
   JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 characters"),
@@ -51,6 +55,12 @@ const envSchema = baseEnvSchema.extend({
 });
 const env = loadEnv(envSchema);
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
+
+// Deadlines are derived from persisted timestamps, never from process timers
+// alone. A restart must not turn a stale round into a max-multiplier cash-out.
+const CASHOUT_TOLERANCE_MS = 250;
+const BETTING_TOLERANCE_MS = 1000;
+const UNSETTLED_RECONCILE_MS = 2000;
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
 await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
@@ -70,10 +80,10 @@ const headerString = (headers, name) =>
 const reqId = (req) => String(req.headers["x-request-id"] ?? "");
 const ok = (reply, status, data) =>
   reply.code(status).send({ request_id: String(reply.getHeader("x-request-id") ?? ""), success: true, data });
-const deny = (reply, status, code, message) =>
+const deny = (reply, status, code, message, details) =>
   reply.code(status).send({
     request_id: String(reply.getHeader("x-request-id") ?? ""),
-    error: { code, message },
+    error: details === undefined ? { code, message } : { code, message, details },
   });
 
 async function requestUserId(req) {
@@ -98,9 +108,9 @@ function hmacUnit(serverSeed, roundId) {
   return digest.readUInt32BE(0) / 0x100000000;
 }
 
-/** Deterministic, verifiable crash point derived from (serverSeed, roundId). */
-export function crashPointFor(serverSeed, roundId, houseEdge, maxMultiplier) {
-  const u = hmacUnit(serverSeed, roundId);
+/** Turn a uniform unit value into a crash point. Shared by live rounds and
+ * the strategy lab so both use exactly the same distribution. */
+export function pointFromUnit(u, houseEdge, maxMultiplier) {
   if (u < houseEdge) return 1;
   const normalised = (u - houseEdge) / (1 - houseEdge);
   // 1/(1-p) gives the familiar heavy tail: most rounds end near 1-2x, with
@@ -109,21 +119,67 @@ export function crashPointFor(serverSeed, roundId, houseEdge, maxMultiplier) {
   return Math.max(1, Math.floor(raw * 100) / 100);
 }
 
-function multiplierAt(elapsedMs) {
-  return Math.pow(2, Math.max(0, elapsedMs) / (env.DOUBLING_SECONDS * 1000));
+/** Deterministic, verifiable crash point derived from (serverSeed, roundId). */
+export function crashPointFor(serverSeed, roundId, houseEdge, maxMultiplier) {
+  return pointFromUnit(hmacUnit(serverSeed, roundId), houseEdge, maxMultiplier);
 }
 
-function crashDurationMs(crashPoint) {
-  return Math.max(0, env.DOUBLING_SECONDS * 1000 * Math.log2(crashPoint));
+function multiplierAt(elapsedMs, doublingSeconds = env.DOUBLING_SECONDS) {
+  return Math.pow(2, Math.max(0, elapsedMs) / (doublingSeconds * 1000));
+}
+
+function crashDurationMs(crashPoint, doublingSeconds = env.DOUBLING_SECONDS) {
+  return Math.max(0, doublingSeconds * 1000 * Math.log2(crashPoint));
+}
+
+function roundConfig(round) {
+  return {
+    houseEdge: round.house_edge === undefined || round.house_edge === null
+      ? env.HOUSE_EDGE : Number(round.house_edge),
+    maxMultiplier: round.max_multiplier === undefined || round.max_multiplier === null
+      ? env.MAX_MULTIPLIER : Number(round.max_multiplier),
+    doublingSeconds: round.doubling_seconds === undefined || round.doubling_seconds === null
+      ? env.DOUBLING_SECONDS : Number(round.doubling_seconds),
+  };
+}
+
+/** Absolute, DB-derived deadline for a round. Timers are only an optimisation;
+ * this timestamp is the authoritative answer after a restart. */
+function roundDeadline(round) {
+  if (round.status === "running" && round.started_at) {
+    const { doublingSeconds } = roundConfig(round);
+    return new Date(round.started_at).getTime()
+      + crashDurationMs(Number(round.crash_point), doublingSeconds);
+  }
+  if (round.status === "betting" && round.created_at) {
+    return new Date(round.created_at).getTime() + env.BETTING_WINDOW_MS;
+  }
+  return null;
+}
+
+function roundPastDeadline(round, toleranceMs = 0) {
+  const deadline = roundDeadline(round);
+  return deadline !== null && Date.now() > deadline + toleranceMs;
+}
+
+function bettingDeadlinePassed(round) {
+  return round?.status === "betting" && roundPastDeadline(round, BETTING_TOLERANCE_MS);
+}
+
+function roundHasCrashed(round) {
+  return round?.status === "running" && roundPastDeadline(round, 0);
 }
 
 function verifyRound(round) {
   if (!round.server_seed || !round.crash_point) return null;
-  const expected = crashPointFor(round.server_seed, round.id, env.HOUSE_EDGE, env.MAX_MULTIPLIER);
+  const { houseEdge, maxMultiplier } = roundConfig(round);
+  const expected = crashPointFor(round.server_seed, round.id, houseEdge, maxMultiplier);
   return {
     serverSeed: round.server_seed,
     seedHash: createHash("sha256").update(round.server_seed).digest("hex"),
     crashPoint: Number(round.crash_point),
+    houseEdge,
+    maxMultiplier,
     valid: Math.abs(expected - Number(round.crash_point)) < 0.001,
   };
 }
@@ -135,6 +191,8 @@ function publicRound(row) {
     seedHash: row.seed_hash,
     createdAt: row.created_at,
     startedAt: row.started_at ?? null,
+    // The client renders the same exponential curve the server pays.
+    doublingSeconds: roundConfig(row).doublingSeconds,
   };
   if (row.status === "finished" || row.status === "cancelled") {
     Object.assign(out, {
@@ -148,38 +206,68 @@ function publicRound(row) {
 
 function liveMultiplier(row) {
   if (row.status !== "running" || !row.started_at) return null;
+  const { doublingSeconds } = roundConfig(row);
   const elapsed = Date.now() - new Date(row.started_at).getTime();
-  return Math.round(Math.min(multiplierAt(elapsed), Number(row.crash_point)) * 100) / 100;
+  return Math.round(Math.min(multiplierAt(elapsed, doublingSeconds), Number(row.crash_point)) * 100) / 100;
 }
 
 // ---------------------------------------------------------------------------
 // Scoped inter-service clients
 // ---------------------------------------------------------------------------
 
-async function walletRequest(path, body, attempt = 0) {
+/** A wallet response whose outcome cannot be proven either way. The debit or
+ * credit may have committed, so callers must reconcile by replaying the same
+ * idempotency key rather than assuming the operation did not happen. */
+export class WalletAmbiguousError extends Error {
+  constructor(message, status, code) {
+    super(message);
+    this.name = "WalletAmbiguousError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+async function walletRequest(path, body, token, attempt = 0) {
   const response = await fetchWithTimeout(
     `${env.WALLET_INTERNAL_URL}${path}`,
     {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-service-token": env.WALLET_SERVICE_TOKEN,
+        "x-service-token": token,
       },
       body: JSON.stringify(body),
     },
     5000,
   );
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
-  if (!response.ok) {
-    const err = new Error(payload?.error?.message ?? `wallet returned ${response.status}`);
-    err.status = response.status;
-    err.code = payload?.error?.code;
-    if (response.status >= 500 && attempt < 2) return walletRequest(path, body, attempt + 1);
+  let payload = null;
+  let parseFailed = false;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      parseFailed = true;
+    }
+  }
+  if (!response.ok || parseFailed) {
+    const ambiguous = parseFailed || response.status >= 500;
+    const ErrorClass = ambiguous ? WalletAmbiguousError : Error;
+    const err = new ErrorClass(
+      payload?.error?.message ?? `wallet returned ${response.status}`,
+      response.status,
+      payload?.error?.code,
+    );
+    if (response.status >= 500 && attempt < 2) return walletRequest(path, body, token, attempt + 1);
     throw err;
   }
   return payload?.data ?? payload;
 }
+
+// Each direction gets its own capability token; the shared token remains the
+// fallback until the wallet/gateway deployment switches to the scoped ones.
+const debitToken = () => env.WALLET_DEBIT_SERVICE_TOKEN ?? env.WALLET_SERVICE_TOKEN;
+const winToken = () => env.WALLET_WIN_SERVICE_TOKEN ?? env.WALLET_SERVICE_TOKEN;
 
 const walletDebit = (userId, amount, roundId, betId) =>
   walletRequest("/internal/wallet/debit", {
@@ -188,7 +276,7 @@ const walletDebit = (userId, amount, roundId, betId) =>
     referenceType: "crash_bet",
     referenceId: roundId,
     idempotencyKey: `crash-debit-${betId}`,
-  });
+  }, debitToken());
 
 const walletCredit = (userId, amount, betId) =>
   walletRequest("/internal/wallet/credit", {
@@ -198,7 +286,22 @@ const walletCredit = (userId, amount, betId) =>
     referenceType: "crash_bet",
     referenceId: betId,
     idempotencyKey: `crash-credit-${betId}`,
-  });
+  }, winToken());
+
+/** Duplicate/refunded stakes must not be booked as wins. Refunds are credits,
+ * so they use the win capability with a distinct, idempotent key. The wallet
+ * authorises the win token for type=adjustment only when referenceType is
+ * 'crash_refund' and the key starts with 'crash-refund-' — all three are fixed
+ * below, so the scoped token is safe to send here. */
+const walletRefund = (userId, amount, betId) =>
+  walletRequest("/internal/wallet/credit", {
+    userId,
+    amount,
+    type: "adjustment",
+    referenceType: "crash_refund",
+    referenceId: betId,
+    idempotencyKey: `crash-refund-${betId}`,
+  }, winToken());
 
 async function publish(topic, payload) {
   try {
@@ -237,7 +340,8 @@ const timers = new Set();
 function later(fn, ms) {
   const timer = setTimeout(() => {
     timers.delete(timer);
-    if (!stopping) void serialized(fn);
+    if (!stopping)
+      void serialized(fn).catch((err) => app.log.warn({ err }, "deferred crash task failed"));
   }, ms);
   timers.add(timer);
   return timer;
@@ -248,16 +352,34 @@ async function createRound() {
   const seedHash = createHash("sha256").update(serverSeed).digest("hex");
   const id = randomUUID();
   const crashPoint = crashPointFor(serverSeed, id, env.HOUSE_EDGE, env.MAX_MULTIPLIER);
-  const result = await pool.query(
-    `INSERT INTO crash_rounds (id, seed_hash, server_seed, crash_point, status)
-     VALUES ($1, $2, $3, $4, 'betting') RETURNING *`,
-    [id, seedHash, serverSeed, crashPoint.toFixed(2)],
-  );
+  let result;
+  try {
+    result = await pool.query(
+      `INSERT INTO crash_rounds
+        (id, seed_hash, server_seed, crash_point, status, house_edge, max_multiplier, doubling_seconds)
+       VALUES ($1, $2, $3, $4, 'betting', $5, $6, $7) RETURNING *`,
+      [
+        id, seedHash, serverSeed, crashPoint.toFixed(2),
+        env.HOUSE_EDGE, env.MAX_MULTIPLIER, env.DOUBLING_SECONDS,
+      ],
+    );
+  } catch (err) {
+    // Only one betting/running round may exist. An operator-created round can
+    // race a scheduled one; reuse the winner instead of failing the tick.
+    if (err.code !== "23505") throw err;
+    const existing = await pool.query(
+      `SELECT * FROM crash_rounds WHERE status IN ('betting','running')
+        ORDER BY created_at DESC LIMIT 1`,
+    );
+    if (!existing.rowCount) throw err;
+    result = existing;
+  }
   const round = result.rows[0];
   await publish("crash.round_created", {
     id: round.id,
     seedHash: round.seed_hash,
     bettingMs: env.BETTING_WINDOW_MS,
+    doublingSeconds: roundConfig(round).doublingSeconds,
   });
   later(() => startRound(round.id), env.BETTING_WINDOW_MS);
   return round;
@@ -271,32 +393,275 @@ async function startRound(id) {
   );
   if (!result.rowCount) return;
   const round = result.rows[0];
-  await publish("crash.round_started", { id, seedHash: round.seed_hash });
-  const duration = crashDurationMs(Number(round.crash_point));
+  await publish("crash.round_started", {
+    id,
+    seedHash: round.seed_hash,
+    doublingSeconds: roundConfig(round).doublingSeconds,
+  });
+  const duration = crashDurationMs(Number(round.crash_point), roundConfig(round).doublingSeconds);
   later(() => finishRound(id), Math.ceil(duration) + 40);
 }
 
-async function cashoutBet(bet, multiplier) {
-  const payout = Number(toMoney(moneyMul(bet.amount, multiplier.toFixed(2))));
-  // Credit FIRST with a deterministic key. If the response is lost, the retry
-  // replays the same wallet transaction instead of paying twice.
-  await walletCredit(bet.user_id, payout, bet.id);
-  await pool.query(
-    `UPDATE crash_bets SET status = 'cashed_out', cashout_at = $2, payout = $3,
-       settled_at = now() WHERE id = $1 AND status = 'active'`,
-    [bet.id, multiplier.toFixed(2), toMoney(payout)],
+// ---------------------------------------------------------------------------
+// Reservation-first bet placement and recovery.
+//
+// Invariants:
+//   * a bet row exists before any wallet call, so every debit has a bet to
+//     reconcile against;
+//   * the round row is locked while reserving, so betting cannot close mid-insert;
+//   * all wallet keys are deterministic per bet, so retries never double-pay.
+// ---------------------------------------------------------------------------
+
+async function reserveBet(roundId, userId, amount, autoCashout, sessionId) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const round = await client.query(
+      `SELECT * FROM crash_rounds
+        WHERE id = $1 AND status = 'betting'
+          AND created_at > now() - ($2 * INTERVAL '1 millisecond')
+        FOR UPDATE`,
+      [roundId, env.BETTING_WINDOW_MS],
+    );
+    if (!round.rowCount) {
+      await client.query("ROLLBACK");
+      return { error: [409, ERROR_CODES.CONFLICT, "betting is closed for this round"] };
+    }
+    // A previous attempt rejected for insufficient balance (or refunded) left
+    // a terminal row; removing it under the round lock lets the player retry.
+    await client.query(
+      `DELETE FROM crash_bets WHERE round_id = $1 AND user_id = $2
+        AND status IN ('cancelled','refunded')`, [roundId, userId]);
+    const betId = randomUUID();
+    const inserted = await client.query(
+      `INSERT INTO crash_bets
+        (id, round_id, session_id, user_id, amount, auto_cashout, idempotency_key, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+       ON CONFLICT (round_id, user_id) DO NOTHING RETURNING *`,
+      [betId, roundId, sessionId ?? null, userId, toMoney(amount),
+        autoCashout === undefined ? null : autoCashout.toFixed(2), `crash-bet-${betId}`],
+    );
+    if (!inserted.rowCount) {
+      // A retry after an ambiguous debit may reuse its still-pending row.
+      const existing = await client.query(
+        `SELECT * FROM crash_bets WHERE round_id = $1 AND user_id = $2`, [roundId, userId]);
+      await client.query("COMMIT");
+      const prior = existing.rows[0];
+      if (prior?.status === "pending") return { bet: prior, retry: true };
+      return { error: [409, ERROR_CODES.CONFLICT, "already bet on this round"] };
+    }
+    await client.query("COMMIT");
+    return { bet: inserted.rows[0] };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function activateReservedBet(bet) {
+  // The activation carries the same betting-window guard as the reservation:
+  // a bet must never become live after the round has started.
+  const activated = await pool.query(
+    `UPDATE crash_bets b SET status = 'active', settled_at = NULL
+      WHERE b.id = $1 AND b.status = 'pending'
+        AND EXISTS (SELECT 1 FROM crash_rounds r
+                     WHERE r.id = b.round_id AND r.status = 'betting'
+                       AND r.created_at > now() - ($2 * INTERVAL '1 millisecond'))
+      RETURNING b.*`,
+    [bet.id, env.BETTING_WINDOW_MS],
   );
+  if (activated.rowCount) return { bet: activated.rows[0] };
+  const fresh = await pool.query(`SELECT * FROM crash_bets WHERE id = $1`, [bet.id]);
+  if (fresh.rows[0] && fresh.rows[0].status !== "pending") return { bet: fresh.rows[0] };
+  return { error: [409, ERROR_CODES.CONFLICT, "betting is closed for this round"] };
+}
+
+async function refundBet(bet, { ensureDebit = true } = {}) {
+  try {
+    if (ensureDebit) {
+      // A pending bet may have been abandoned before the wallet call. Replay
+      // the idempotent debit first so a refund can never mint new credits.
+      await walletDebit(bet.user_id, Number(bet.amount), bet.round_id, bet.id);
+    }
+    await walletRefund(bet.user_id, Number(bet.amount), bet.id);
+    await pool.query(
+      `UPDATE crash_bets SET status = 'refunded', settled_at = now()
+        WHERE id = $1 AND status IN ('pending','active','cancelled')`,
+      [bet.id],
+    );
+  } catch (err) {
+    app.log.error({ err, betId: bet.id }, "crash stake refund failed; bet stays reconcilable");
+    throw err;
+  }
+}
+
+/** Retry interrupted stake moves and replay in-flight win credits. Everything
+ * here is idempotent, so it is safe on boot and on a periodic timer. */
+async function reconcileUnsettled() {
+  const pending = await pool.query(
+    `SELECT b.*, r.status AS round_status, r.created_at AS round_created_at
+       FROM crash_bets b JOIN crash_rounds r ON r.id = b.round_id
+      WHERE b.status = 'pending'`,
+  );
+  for (const bet of pending.rows) {
+    try {
+      if (bettingDeadlinePassed({ status: bet.round_status, created_at: bet.round_created_at })) {
+        await refundBet(bet);
+        continue;
+      }
+      await walletDebit(bet.user_id, Number(bet.amount), bet.round_id, bet.id);
+      const activation = await activateReservedBet(bet);
+      if (activation.error) await refundBet(bet);
+    } catch (err) {
+      if (err.status === 409) {
+        // Definitive "insufficient balance": no debit was recorded.
+        await pool.query(
+          `UPDATE crash_bets SET status = 'cancelled', settled_at = now()
+            WHERE id = $1 AND status = 'pending'`, [bet.id]);
+      } else {
+        app.log.warn({ err, betId: bet.id }, "pending crash bet kept for reconciliation");
+      }
+    }
+  }
+  const cashing = await pool.query(`SELECT * FROM crash_bets WHERE status = 'cashing_out'`);
+  for (const bet of cashing.rows) {
+    try {
+      // Stored payout, not a recomputed multiplier: the credited amount is
+      // exactly the amount that was committed before the process died.
+      await finalizeCashout(bet);
+    } catch (err) {
+      app.log.warn({ err, betId: bet.id }, "cash-out replay kept in flight");
+    }
+  }
+}
+
+/** Replay a credited-but-not-finalised cash-out. The wallet key makes this
+ * safe to repeat, and boot recovery uses it to finish interrupted payouts. */
+async function finalizeCashout(bet) {
+  const payout = Number(bet.payout);
+  const multiplier = Number(bet.cashout_at);
+  if (!Number.isFinite(payout) || payout <= 0 || !Number.isFinite(multiplier))
+    throw new Error(`incomplete cash-out claim for bet ${bet.id}`);
+  await walletCredit(bet.user_id, payout, bet.id);
+  const settled = await pool.query(
+    `UPDATE crash_bets SET status = 'cashed_out', settled_at = now()
+      WHERE id = $1 AND status = 'cashing_out' RETURNING id`,
+    [bet.id],
+  );
+  if (!settled.rowCount) {
+    // A concurrent reconciler may already have finalised the same wallet key.
+    const fresh = await pool.query(`SELECT status FROM crash_bets WHERE id = $1`, [bet.id]);
+    if (fresh.rows[0]?.status !== "cashed_out")
+      throw new Error(`cash-out finalisation failed for bet ${bet.id}`);
+    return payout;
+  }
   await publish("crash.cashout", {
     id: bet.id,
     roundId: bet.round_id,
     userId: bet.user_id,
-    multiplier: Number(multiplier.toFixed(2)),
+    multiplier,
     payout,
   });
   return payout;
 }
 
-async function finishRound(id) {
+/**
+ * Claim an active bet for cash-out under row locks, then credit it with a
+ * deterministic key. `cashing_out` is an explicit in-flight state so a failed
+ * wallet call never leaves a paid bet looking active (and later marked lost).
+ * Returns { error } for rejected calls, null when another path won the race.
+ */
+async function cashoutBet(bet, requestedMultiplier, { userId } = {}) {
+  const client = await pool.connect();
+  let claim;
+  let multiplier;
+  let payout;
+  try {
+    await client.query("BEGIN");
+    // Lock the round so finishRound cannot settle the bet while we are
+    // deciding whether the deadline is still open.
+    const roundResult = await client.query(
+      `SELECT * FROM crash_rounds WHERE id = $1 FOR UPDATE`, [bet.round_id]);
+    const round = roundResult.rows[0];
+    if (!round) {
+      await client.query("ROLLBACK");
+      return { error: [404, ERROR_CODES.NOT_FOUND, "round not found"] };
+    }
+    if (round.status !== "running" || roundPastDeadline(round, CASHOUT_TOLERANCE_MS)) {
+      await client.query("ROLLBACK");
+      return { error: [409, ERROR_CODES.CONFLICT, "round is not running"] };
+    }
+    const locked = await client.query(
+      `SELECT * FROM crash_bets WHERE id = $1 FOR UPDATE`, [bet.id]);
+    const current = locked.rows[0];
+    if (!current || (userId && current.user_id !== userId)) {
+      await client.query("ROLLBACK");
+      return { error: [404, ERROR_CODES.NOT_FOUND, "no bet on this round"] };
+    }
+    if (current.status === "cashed_out") {
+      await client.query("ROLLBACK");
+      return { error: [409, ERROR_CODES.CONFLICT, "already cashed out"] };
+    }
+    if (current.status === "cashing_out") {
+      // Reconciliation owns this bet; replaying the same key is safe.
+      await client.query("ROLLBACK");
+      return { pending: true };
+    }
+    if (current.status !== "active") {
+      await client.query("ROLLBACK");
+      return { error: [409, ERROR_CODES.CONFLICT, "bet is no longer active"] };
+    }
+    const live = liveMultiplier(round);
+    if (live === null || live < 1) {
+      await client.query("ROLLBACK");
+      return { error: [409, ERROR_CODES.CONFLICT, "cash-out is not available"] };
+    }
+    // A manual cash-out uses the live multiplier; auto cash-outs pass their
+    // configured trigger. Never pay more than the live value or crash point.
+    const requested = requestedMultiplier === undefined ? live : Number(requestedMultiplier);
+    multiplier = Math.round(Math.min(requested, live, Number(round.crash_point)) * 100) / 100;
+    if (multiplier < 1) {
+      await client.query("ROLLBACK");
+      return { error: [409, ERROR_CODES.CONFLICT, "cash-out is not available"] };
+    }
+    payout = Number(toMoney(moneyMul(current.amount, multiplier.toFixed(2))));
+    const claimed = await client.query(
+      `UPDATE crash_bets SET status = 'cashing_out', cashout_at = $2, payout = $3,
+         settled_at = NULL
+        WHERE id = $1 AND status = 'active' RETURNING *`,
+      [current.id, multiplier.toFixed(2), toMoney(payout)],
+    );
+    if (!claimed.rowCount) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    claim = claimed.rows[0];
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  try {
+    await finalizeCashout(claim);
+  } catch (err) {
+    // Only a definitive wallet rejection proves no money moved. Ambiguous
+    // failures keep `cashing_out` so boot/periodic replay uses the same key.
+    if (err.status >= 400 && err.status < 500) {
+      await pool.query(
+        `UPDATE crash_bets SET status = 'active', cashout_at = NULL, payout = NULL,
+           settled_at = NULL WHERE id = $1 AND status = 'cashing_out'`, [claim.id]);
+    }
+    throw err;
+  }
+  return { payout, multiplier };
+}
+
+async function finishRound(id, scheduleNext = true) {
   const client = await pool.connect();
   let round;
   let losers = [];
@@ -311,6 +676,8 @@ async function finishRound(id) {
       return;
     }
     round = locked.rows[0];
+    // Only truly active bets become losers. `cashing_out` bets have a payout
+    // already committed in the ledger and are owned by boot reconciliation.
     const active = await client.query(
       `SELECT id, user_id, round_id, amount FROM crash_bets
         WHERE round_id = $1 AND status = 'active' FOR UPDATE`,
@@ -344,30 +711,128 @@ async function finishRound(id) {
     valid: proof?.valid ?? false,
     losers: losers.map((bet) => ({ id: bet.id, userId: bet.user_id })),
   });
-  later(() => createRound(), env.ROUND_GAP_MS);
+  if (scheduleNext) later(() => createRound(), env.ROUND_GAP_MS);
 }
 
-/** Auto cash-outs for the running round, driven by a short polling tick. */
-async function tick() {
+/** Cancel a betting round that outlived its window (e.g. across a restart). */
+async function cancelRound(id) {
   const result = await pool.query(
-    `SELECT * FROM crash_rounds WHERE status = 'running' ORDER BY started_at DESC LIMIT 1`,
-  );
+    `UPDATE crash_rounds SET status = 'cancelled', finished_at = now()
+      WHERE id = $1 AND status = 'betting' RETURNING *`, [id]);
+  if (!result.rowCount) return null;
   const round = result.rows[0];
-  if (!round) return;
-  const multiplier = liveMultiplier(round);
-  if (multiplier === null) return;
-  const due = await pool.query(
-    `SELECT * FROM crash_bets
-      WHERE round_id = $1 AND status = 'active' AND auto_cashout IS NOT NULL
-        AND auto_cashout <= $2
-      ORDER BY auto_cashout ASC LIMIT 50`,
-    [round.id, multiplier.toFixed(2)],
-  );
-  for (const bet of due.rows) {
+  const open = await pool.query(
+    `SELECT * FROM crash_bets WHERE round_id = $1 AND status IN ('pending','active')`, [id]);
+  for (const bet of open.rows) {
     try {
-      await serialized(() => cashoutBet(bet, multiplier));
+      await refundBet(bet);
     } catch (err) {
-      app.log.warn({ err, betId: bet.id }, "auto cash-out will be retried");
+      app.log.error({ err, betId: bet.id }, "cancelled round bet could not be refunded");
+    }
+  }
+  await publish("crash.round_cancelled", {
+    id: round.id,
+    seedHash: round.seed_hash,
+    crashPoint: round.crash_point === null ? null : Number(round.crash_point),
+    valid: verifyRound(round)?.valid ?? false,
+  });
+  return round;
+}
+
+/** DB-derived reconciliation: timers may be gone after a restart, but the
+ * persisted started_at/created_at still prove a round's deadline. */
+async function reconcileStaleRounds() {
+  const live = await pool.query(
+    `SELECT * FROM crash_rounds WHERE status IN ('betting','running')
+      ORDER BY created_at DESC`);
+  let kept = null;
+  for (const round of live.rows) {
+    const stale = round.status === "running" ? roundHasCrashed(round) : bettingDeadlinePassed(round);
+    if (stale) {
+      if (round.status === "running") await finishRound(round.id, false);
+      else await cancelRound(round.id);
+    } else if (!kept) {
+      kept = round; // at most one live round is allowed by the DB partial index
+    } else {
+      await cancelRound(round.id);
+    }
+  }
+  return kept;
+}
+
+function scheduleRoundDeadlines(round) {
+  const deadline = roundDeadline(round);
+  if (deadline === null) return;
+  const delay = Math.max(50, deadline - Date.now());
+  if (round.status === "betting") later(() => startRound(round.id), delay);
+  else if (round.status === "running") later(() => finishRound(round.id), delay);
+}
+
+/** Finish/cancel stale rows first, then make sure exactly one live round exists. */
+async function ensureCurrentRound() {
+  const current = await reconcileStaleRounds();
+  if (current) {
+    scheduleRoundDeadlines(current);
+    return current;
+  }
+  try {
+    return await createRound();
+  } catch (err) {
+    if (err.code === "23505") {
+      // A concurrent process won the single-live-round index race.
+      const existing = await pool.query(
+        `SELECT * FROM crash_rounds WHERE status IN ('betting','running')
+          ORDER BY created_at DESC LIMIT 1`);
+      if (existing.rowCount) {
+        scheduleRoundDeadlines(existing.rows[0]);
+        return existing.rows[0];
+      }
+    }
+    throw err;
+  }
+}
+
+/** Auto cash-outs for all running rounds, driven by a short polling tick.
+ * Each bet is paid at its own configured target — never the poll's current
+ * multiplier — and only while the round is still below its crash point. */
+async function tick() {
+  const rounds = await pool.query(
+    `SELECT * FROM crash_rounds WHERE status = 'running' ORDER BY started_at DESC`,
+  );
+  for (const round of rounds.rows) {
+    if (roundHasCrashed(round)) continue;
+    const multiplier = liveMultiplier(round);
+    if (multiplier === null) continue;
+    const crashPoint = Number(round.crash_point);
+    // Keyset pagination: a batch can never be silently truncated at 50, and
+    // rows already settled by this tick cannot be skipped by an OFFSET.
+    let cursor = null;
+    for (;;) {
+      const params = [round.id, multiplier.toFixed(2), crashPoint];
+      let where =
+        `round_id = $1 AND status = 'active' AND auto_cashout IS NOT NULL
+          AND auto_cashout <= $2 AND auto_cashout < $3`;
+      if (cursor) {
+        params.push(cursor.autoCashout, cursor.id);
+        where += ` AND (auto_cashout, id) > ($4, $5)`;
+      }
+      const due = await pool.query(
+        `SELECT * FROM crash_bets WHERE ${where} ORDER BY auto_cashout, id LIMIT 100`,
+        params,
+      );
+      if (!due.rowCount) break;
+      for (const bet of due.rows) {
+        try {
+          // tick() already runs inside the serialized lifecycle chain. Calling
+          // serialized() here would deadlock against the running tick itself.
+          await cashoutBet(bet, Number(bet.auto_cashout));
+        } catch (err) {
+          app.log.warn({ err, betId: bet.id }, "auto cash-out will be retried");
+        }
+      }
+      const last = due.rows[due.rowCount - 1];
+      cursor = { autoCashout: last.auto_cashout, id: last.id };
+      if (due.rowCount < 100) break;
     }
   }
 }
@@ -441,47 +906,46 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
   if (round.status !== "betting")
     return deny(reply, 409, ERROR_CODES.CONFLICT, "betting is closed for this round");
 
-  const betId = randomUUID();
+  // Reservation and status guard are one DB transaction; the wallet debit
+  // follows only once the bet row is durably committed as `pending`.
+  const reserved = await reserveBet(round.id, userId, amount, autoCashout, sessionId);
+  if (reserved.error) return deny(reply, ...reserved.error);
+  let bet = reserved.bet;
+
   try {
-    await walletDebit(userId, amount, round.id, betId);
+    // Use the STORED amount, not the request body: a retry cannot change the
+    // stake it is reconciling.
+    await walletDebit(userId, Number(bet.amount), round.id, bet.id);
   } catch (err) {
-    if (err.status === 409) return deny(reply, 409, ERROR_CODES.CONFLICT, "insufficient balance");
-    req.log.error({ err }, "crash bet debit failed");
-    return deny(reply, 503, ERROR_CODES.SERVICE_UNAVAILABLE, "wallet is unavailable; no bet was placed");
+    if (err.status === 409 || (err.status >= 400 && err.status < 500)) {
+      // Definitive rejection: no debit happened, so no refund is needed.
+      await pool.query(
+        `UPDATE crash_bets SET status = 'cancelled', settled_at = now()
+          WHERE id = $1 AND status = 'pending'`, [bet.id]);
+      return deny(reply, 409, ERROR_CODES.CONFLICT, "insufficient balance");
+    }
+    req.log.error({ err, betId: bet.id }, "crash bet debit is ambiguous");
+    return deny(
+      reply,
+      503,
+      ERROR_CODES.SERVICE_UNAVAILABLE,
+      "bet is pending; retry this request to reconcile",
+      { idempotencyKey: `crash-debit-${bet.id}`, betId: bet.id, ambiguous: true },
+    );
   }
 
-  let inserted;
-  try {
-    inserted = await pool.query(
-      `INSERT INTO crash_bets
-        (id, round_id, session_id, user_id, amount, auto_cashout, idempotency_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (round_id, user_id) DO NOTHING RETURNING *`,
-      [
-        betId,
-        round.id,
-        sessionId ?? null,
-        userId,
-        toMoney(amount),
-        autoCashout === undefined ? null : autoCashout.toFixed(2),
-        `crash-bet-${betId}`,
-      ],
-    );
-  } catch (err) {
-    req.log.error({ err }, "crash bet insert failed");
-    return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "bet could not be recorded");
-  }
-  if (!inserted.rowCount) {
-    // Concurrent duplicate: refund using a key tied to this request's bet id.
-    // The original bet keeps the wallet debit under its own key.
+  const activation = await activateReservedBet(bet);
+  if (activation.error) {
+    // Betting closed after the debit (timer or restart). Compensate with an
+    // idempotent refund; the row is marked refunded only after credit lands.
     try {
-      await walletCredit(userId, amount, betId);
-    } catch (err) {
-      req.log.error({ err }, "crash duplicate-bet refund failed");
+      await refundBet(bet);
+    } catch {
+      // The error is logged in refundBet; reconciliation will retry.
     }
-    return deny(reply, 409, ERROR_CODES.CONFLICT, "already bet on this round");
+    return deny(reply, ...activation.error);
   }
-  const bet = inserted.rows[0];
+  bet = activation.bet;
   await publish("crash.bet", {
     id: bet.id,
     roundId: round.id,
@@ -504,32 +968,52 @@ app.post("/v1/crash/rounds/:id/cashout", async (req, reply) => {
   if (!userId)
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
   let payout;
+  let pendingBetId = null;
   try {
     payout = await serialized(async () => {
       const roundResult = await pool.query(`SELECT * FROM crash_rounds WHERE id = $1`, [req.params.id]);
       const round = roundResult.rows[0];
       if (!round) return { error: [404, ERROR_CODES.NOT_FOUND, "round not found"] };
-      if (round.status !== "running")
-        return { error: [409, ERROR_CODES.CONFLICT, "round is not running"] };
       const betResult = await pool.query(
         `SELECT * FROM crash_bets WHERE round_id = $1 AND user_id = $2`,
         [round.id, userId],
       );
       const bet = betResult.rows[0];
       if (!bet) return { error: [404, ERROR_CODES.NOT_FOUND, "no bet on this round"] };
+      pendingBetId = bet.id;
+      // An interrupted credit can be finalized even after the round ends.
+      if (bet.status === "cashing_out") {
+        const value = await finalizeCashout(bet);
+        return { value, multiplier: Number(bet.cashout_at) };
+      }
       if (bet.status === "cashed_out")
         return { error: [409, ERROR_CODES.CONFLICT, "already cashed out"] };
-      if (bet.status !== "active")
-        return { error: [409, ERROR_CODES.CONFLICT, "bet is no longer active"] };
+      // Status, deadline and bet state are re-checked under Postgres row locks
+      // inside cashoutBet; these reads only shape the user-facing error.
+      if (round.status !== "running")
+        return { error: [409, ERROR_CODES.CONFLICT, "round is not running"] };
       const multiplier = liveMultiplier(round);
-      if (multiplier === null || multiplier < 1)
+      if (multiplier === null || multiplier < 1.01)
         return { error: [409, ERROR_CODES.CONFLICT, "cash-out is not available"] };
-      const value = await cashoutBet(bet, multiplier);
-      return { value, multiplier };
+      const outcome = await cashoutBet(bet, undefined, { userId });
+      if (outcome?.error) return { error: outcome.error };
+      if (!outcome || outcome.pending)
+        return { error: [409, ERROR_CODES.CONFLICT, "bet is no longer active"] };
+      return { value: outcome.payout, multiplier: outcome.multiplier };
     });
   } catch (err) {
-    req.log.error({ err }, "crash cash-out failed");
-    return deny(reply, 503, ERROR_CODES.SERVICE_UNAVAILABLE, "wallet is unavailable; bet remains active");
+    req.log.error({ err }, "crash cash-out is ambiguous");
+    return deny(
+      reply,
+      503,
+      ERROR_CODES.SERVICE_UNAVAILABLE,
+      "cash-out could not be confirmed; retry this request to reconcile",
+      {
+        idempotencyKey: pendingBetId ? `crash-credit-${pendingBetId}` : null,
+        betId: pendingBetId,
+        ambiguous: err instanceof WalletAmbiguousError,
+      },
+    );
   }
   if (payout.error) return deny(reply, payout.error[0], payout.error[1], payout.error[2]);
   return ok(reply, 200, { payout: payout.value, multiplier: payout.multiplier });
@@ -573,17 +1057,16 @@ function simulate(strategy, rounds, stake, target, rng) {
   let consecutiveWins = 0;
   let fib = [1, 1];
   for (let i = 0; i < rounds; i += 1) {
-    const wager = Math.min(bankroll, Math.max(stake, Math.round(
-      strategy === "flat" ? stake
-        : strategy === "martingale" ? stake * 2 ** step
-          : strategy === "fibonacci" ? stake * fib[Math.min(step, fib.length - 1)]
-            : stake * 2 ** consecutiveWins,
-    )));
+    const rawWager = strategy === "flat" ? stake
+      : strategy === "martingale" ? stake * 2 ** step
+        : strategy === "fibonacci" ? stake * fib[Math.min(step, fib.length - 1)]
+          : stake * 2 ** consecutiveWins;
+    const wager = Math.min(bankroll, Math.max(stake, Number(toMoney(rawWager))));
     if (wager > bankroll || wager <= 0) break;
     bankroll -= wager;
-    const u = rng();
-    const crash = u < env.HOUSE_EDGE ? 1 : Math.max(1, Math.min(env.MAX_MULTIPLIER,
-      Math.floor((1 / (1 - ((u - env.HOUSE_EDGE) / (1 - env.HOUSE_EDGE)) * 0.99)) * 100) / 100));
+    // Use the live generator's exact distribution so the lab is a faithful
+    // replay rather than an approximation with a different rounding rule.
+    const crash = pointFromUnit(rng(), env.HOUSE_EDGE, env.MAX_MULTIPLIER);
     const cashed = Math.min(target, crash);
     if (target <= crash) {
       bankroll += Number(toMoney(moneyMul(wager, cashed.toFixed(2))));
@@ -637,13 +1120,28 @@ app.post("/v1/crash/strategy-lab/run", async (req, reply) => {
 });
 
 // ---------------------------------------------------------------------------
+// Restart recovery. A process stop must never strand an in-flight debit,
+// credit, or running round. Every step is idempotent, so recovery can be
+// replayed safely after another crash. The detailed helpers live next to the
+// lifecycle code above so the deadline rules stay in one place.
+// ---------------------------------------------------------------------------
+
+async function recover() {
+  // Money first: replay/reverse in-flight bets using their stored amounts and
+  // keys. Then derive round state from timestamps, then open a fresh round.
+  await reconcileUnsettled();
+  await ensureCurrentRound();
+}
+
+// ---------------------------------------------------------------------------
 // Capability-scoped lifecycle API (used by operators / smoke tests)
 // ---------------------------------------------------------------------------
 
 app.post("/internal/crash/rounds", async (req, reply) => {
   if (!serviceTokenOk(req.headers, env.CRASH_SERVICE_TOKEN))
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
-  return ok(reply, 201, { round: publicRound(await createRound()) });
+  const round = await serialized(() => ensureCurrentRound());
+  return ok(reply, 201, { round: publicRound(round) });
 });
 
 app.post("/internal/crash/rounds/:id/start", async (req, reply) => {
@@ -686,9 +1184,21 @@ app.get("/ready", async (_req, reply) => {
 
 try {
   await app.listen({ port: env.PORT, host: process.env.HOST ?? "0.0.0.0" });
-  await serialized(() => createRound());
+  await serialized(recover);
+  const active = await pool.query(
+    `SELECT 1 FROM crash_rounds WHERE status IN ('betting','running') LIMIT 1`,
+  );
+  if (!active.rowCount) await serialized(() => createRound());
   const ticker = setInterval(() => void serialized(tick), 100);
   ticker.unref?.();
+  // Keep retrying any bet left in flight by an ambiguous wallet response;
+  // all keys are deterministic, so repeated replays are harmless.
+  const reconciler = setInterval(
+    () => void serialized(reconcileUnsettled).catch((err) =>
+      app.log.warn({ err }, "crash reconciliation tick failed")),
+    UNSETTLED_RECONCILE_MS,
+  );
+  reconciler.unref?.();
 } catch (err) {
   app.log.error({ err }, "crash failed to start");
   await pool.end().catch(() => undefined);

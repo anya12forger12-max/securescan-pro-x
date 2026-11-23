@@ -32,6 +32,9 @@ const ROLE_PERMISSIONS = Object.freeze({
     "promotions.manage",
     "tournaments.manage",
     "audit.read",
+    // Appending to the hash-chained log is deliberately admin-only: support
+    // and risk can read audit entries but must not be able to forge them.
+    "audit.append",
     "risk.review",
     "roles.manage",
   ]),

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import './crash.scss';
 import { useGamingContext } from '../../context';
+import type { CrashRound } from '../../types';
 
 function CardList({ label, cards }: { label: string; cards: string[] }) {
   return (
@@ -39,17 +40,27 @@ function CrashStage() {
     );
   }
 
-  const elapsed = round.startedAt ? Math.max(0, now - new Date(round.startedAt).getTime()) : 0;
-  // Curve ported from the vendored crash client: 1 + 0.06t + (0.06t)^2 ...
-  // t is seconds. Server-side crash points remain authoritative.
+  const startedMs = round.startedAt ? new Date(round.startedAt).getTime() : NaN;
+  const elapsed = Number.isFinite(startedMs) ? Math.max(0, now - startedMs) : 0;
+  // The round payload may not carry doublingSeconds yet; default to the crash
+  // service's 3s doubling time rather than showing a mismatched multiplier.
+  const doublingRaw = Number(
+    (round as CrashRound & { doublingSeconds?: number | string | null }).doublingSeconds,
+  );
+  const doublingSeconds = Number.isFinite(doublingRaw) && doublingRaw > 0 ? doublingRaw : 3;
+  // Mirror the server payout curve: 2^(elapsed / doublingSeconds), t in seconds,
+  // capped at the authoritative crash point.
   const t = elapsed / 1000;
-  const curve = 1 + 0.06 * t + Math.pow(0.06 * t, 2) - Math.pow(0.04 * t, 3) + Math.pow(0.04 * t, 4);
+  const crashCap = Number(round.crashPoint);
+  const cap = Number.isFinite(crashCap) && crashCap > 0 ? Math.min(crashCap, 100) : 100;
+  const multiplierAt = (seconds: number) =>
+    Math.max(1, Math.min(Math.pow(2, seconds / doublingSeconds), cap));
   const live = round.status === 'running'
-    ? Math.max(1, Math.round(Math.min(curve, round.crashPoint ?? 100, 100) * 100) / 100)
+    ? Math.round(multiplierAt(t) * 100) / 100
     : round.status === 'finished' ? Number(round.crashPoint ?? 1) : 1;
   const points = Array.from({ length: 28 }, (_, i) => {
     const x = (i / 27) * Math.min(Math.max(t, 4), 24);
-    const y = 1 + 0.06 * x + Math.pow(0.06 * x, 2) - Math.pow(0.04 * x, 3) + Math.pow(0.04 * x, 4);
+    const y = multiplierAt(x);
     return `${(i / 27) * 100},${100 - Math.min(96, (y - 1) * 26)}`;
   }).join(' ');
 

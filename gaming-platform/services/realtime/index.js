@@ -17,6 +17,8 @@ const envSchema = baseEnvSchema.extend({
   PORT: z.coerce.number().int().positive().default(3010),
   DATABASE_URL: z.string().min(1).url(),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
+  MAX_STREAMS: z.coerce.number().int().positive().default(500),
+  EVENT_RETENTION_HOURS: z.coerce.number().int().positive().default(168),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
 const env = loadEnv(envSchema);
@@ -66,30 +68,132 @@ const pendingNotifications = new Set();
 // cannot advance lastSeq past a still-in-flight seq N and hide it forever.
 let deliveryChain = Promise.resolve();
 
+// A client that stops reading must not let its queue grow without bound.
+const MAX_CLIENT_QUEUE = 256;
+
+/** Bound durable history as well: prune rows past the retention window in the
+ * background. The timer is unref'd so it never keeps the process alive, and
+ * replay still works for every row that has not been pruned. */
+const pruneTimer = setInterval(async () => {
+  if (shuttingDown) return;
+  try {
+    await pool.query(
+      `DELETE FROM realtime_events
+       WHERE published_at < now() - ($1::int * interval '1 hour')`,
+      [env.EVENT_RETENTION_HOURS],
+    );
+  } catch (err) {
+    app.log.warn({ err }, "realtime event retention prune failed");
+  }
+}, Math.min((env.EVENT_RETENTION_HOURS * 3_600_000) / 2, 3_600_000));
+pruneTimer.unref?.();
+
+/** Every authenticated player sees these events, so payloads must never carry
+ * another user's identity, money or game secrets. Unknown fields (e.g. a
+ * `marker` used by tests) and the `topic`/`seq` the UI needs are preserved. */
+const SENSITIVE_KEYS = new Set([
+  "userId",
+  "user_id",
+  "amount",
+  "payout",
+  "cashoutAt",
+  "cashout_at",
+  "autoCashout",
+  "auto_cashout",
+  "losers",
+  "balanceAfter",
+  "balance_after",
+  "sessionId",
+  "session_id",
+  "referenceId",
+  "reference_id",
+  "email",
+  "username",
+]);
+
+/** Recursive, idempotent redaction. Dates must be returned untouched: pg
+ * returns published_at as a Date and turning it into {} would lose metadata.
+ * Applied on write and on every read so older rows cannot leak either. */
+function sanitizeEventData(value) {
+  if (value instanceof Date) return value;
+  if (Array.isArray(value)) return value.map(sanitizeEventData);
+  if (value === null || typeof value !== "object") return value;
+  const clean = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (SENSITIVE_KEYS.has(key) || key === "__proto__") continue;
+    clean[key] = sanitizeEventData(item);
+  }
+  return clean;
+}
+
 /** pg returns bigserial as a string; send the full normalized event so SSE
  * clients can use `seq` directly instead of guessing from the frame id. */
-function writeEvent(res, event) {
+function formatEvent(event) {
+  const safe = sanitizeEventData(event);
   const normalized = {
-    ...event,
-    seq: Number(event.seq),
-    published_at: event.published_at instanceof Date ? event.published_at.toISOString() : event.published_at,
+    ...safe,
+    seq: Number(safe.seq),
+    published_at:
+      safe.published_at instanceof Date ? safe.published_at.toISOString() : safe.published_at,
   };
-  res.write(`id: ${normalized.seq}\nevent: ${normalized.topic}\ndata: ${JSON.stringify(normalized)}\n\n`);
+  return `id: ${normalized.seq}\nevent: ${normalized.topic}\ndata: ${JSON.stringify(normalized)}\n\n`;
+}
+
+/** Flush one client's queue in seq order. write() returning false means the
+ * socket buffer is full; wait for `drain` before writing more. */
+function flushClient(client) {
+  if (client.closed || client.writing || !client.writable || !clients.has(client)) return;
+  client.writing = true;
+  try {
+    while (client.queue.length) {
+      let accepted;
+      try {
+        accepted = client.res.write(client.queue[0]);
+      } catch {
+        clients.delete(client);
+        client.closed = true;
+        client.queue.length = 0;
+        return;
+      }
+      client.queue.shift();
+      if (!accepted) {
+        client.writable = false;
+        client.writing = false;
+        client.res.once("drain", () => {
+          client.writable = true;
+          flushClient(client);
+        });
+        return;
+      }
+    }
+  } finally {
+    client.writing = false;
+  }
 }
 
 /** Deliver an event once per client. lastSeq deduplicates the case where a
  * client replays from the table at the same moment the LISTEN notification
- * for that row arrives. */
+ * for that row arrives. Frames are queued in broadcast order; a consumer that
+ * never drains is dropped so the durable log can be replayed on reconnect. */
 function broadcast(event) {
   for (const client of clients) {
     const seq = Number(event.seq);
     if (seq <= client.lastSeq) continue;
-    try {
-      writeEvent(client.res, event);
-      client.lastSeq = seq;
-    } catch {
+    client.lastSeq = seq;
+    client.queue.push(formatEvent(event));
+    if (client.queue.length > MAX_CLIENT_QUEUE) {
       clients.delete(client);
+      client.closed = true;
+      client.queue.length = 0;
+      app.log.warn({ seq }, "dropping backpressured realtime client");
+      try {
+        client.res.end();
+      } catch {
+        /* already closed */
+      }
+      continue;
     }
+    flushClient(client);
   }
 }
 
@@ -153,6 +257,8 @@ async function replayEventsAfter(floor) {
     );
     if (!result.rowCount) return;
     for (const event of result.rows) {
+      // broadcast -> formatEvent is the single sanitizer choke point for all
+      // SSE frames, including rows replayed after a LISTEN reconnect.
       broadcast(event);
       cursor = Number(event.seq);
     }
@@ -212,18 +318,19 @@ app.post("/internal/events", async (req, reply) => {
   if (!parsed.success)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
 
+  const payload = sanitizeEventData(parsed.data.payload ?? {});
   const client = await pool.connect();
   try {
     const result = await client.query(
       `INSERT INTO realtime_events (topic, payload)
        VALUES ($1, $2::jsonb)
        RETURNING seq, topic, payload, published_at`,
-      [parsed.data.topic, JSON.stringify(parsed.data.payload ?? {})],
+      [parsed.data.topic, JSON.stringify(payload)],
     );
     // Notify from the same connection after the INSERT commits (implicit
     // transaction), so listeners never see a seq that is not yet visible.
     await client.query("SELECT pg_notify('realtime_events', $1)", [String(result.rows[0].seq)]);
-    return ok(reply, 201, { event: result.rows[0] }, reqId(req));
+    return ok(reply, 201, { event: sanitizeEventData(result.rows[0]) }, reqId(req));
   } catch (err) {
     req.log.error({ err }, "event publish failed");
     return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "publish failed");
@@ -241,7 +348,12 @@ app.get("/v1/events", async (req, reply) => {
     [since, limit],
   );
   const latest = await pool.query(`SELECT COALESCE(max(seq), 0)::bigint AS n FROM realtime_events`);
-  return ok(reply, 200, { items: result.rows, latest: Number(latest.rows[0].n) }, reqId(req));
+  return ok(
+    reply,
+    200,
+    { items: result.rows.map((event) => sanitizeEventData(event)), latest: Number(latest.rows[0].n) },
+    reqId(req),
+  );
 });
 
 app.get("/v1/events/stream", async (req, reply) => {
@@ -252,6 +364,13 @@ app.get("/v1/events/stream", async (req, reply) => {
     since = Number(latest.rows[0].n);
   } else {
     since = Math.max(0, Number(sinceParam) || 0);
+  }
+
+  // Bound concurrent fan-out. The check sits immediately before hijack/add
+  // with no await in between, so two simultaneous requests cannot both take
+  // the last slot.
+  if (clients.size >= env.MAX_STREAMS) {
+    return deny(reply, 429, "TOO_MANY_STREAMS", "event stream limit reached");
   }
 
   reply.hijack();
@@ -268,15 +387,25 @@ app.get("/v1/events/stream", async (req, reply) => {
   // Register before taking the snapshot: a publish between the snapshot query
   // and clients.add() would otherwise notify existing streams only and leave
   // this one permanently behind. Live notifications are buffered meanwhile.
-  const client = { res, lastSeq: since };
+  const client = {
+    res,
+    lastSeq: since,
+    queue: [],
+    writable: true,
+    writing: false,
+    closed: false,
+  };
   clients.add(client);
 
   const heartbeat = setInterval(() => {
+    if (client.closed || !client.writable) return;
     try {
       res.write(": ping\n\n");
     } catch {
       clearInterval(heartbeat);
       clients.delete(client);
+      client.closed = true;
+      client.queue.length = 0;
     }
   }, 15000);
   heartbeat.unref?.();
@@ -286,6 +415,8 @@ app.get("/v1/events/stream", async (req, reply) => {
   res.on("close", () => {
     clearInterval(heartbeat);
     clients.delete(client);
+    client.closed = true;
+    client.queue.length = 0;
   });
 
   replayDepth++;
@@ -295,6 +426,8 @@ app.get("/v1/events/stream", async (req, reply) => {
     req.log.error({ err }, "event snapshot replay failed");
     clearInterval(heartbeat);
     clients.delete(client);
+    client.closed = true;
+    client.queue.length = 0;
     res.end();
   } finally {
     replayDepth--;
@@ -320,6 +453,7 @@ app.get("/ready", async (_req, reply) => {
 app.addHook("onClose", async () => {
   shuttingDown = true;
   if (reconnectTimer) clearTimeout(reconnectTimer);
+  clearInterval(pruneTimer);
   if (listener) {
     try {
       await listener.query("UNLISTEN realtime_events");

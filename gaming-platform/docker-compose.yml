@@ -8,7 +8,8 @@ x-common-env: &common-env
   DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
   # One knob for the whole fleet; keep services * max below postgres max_connections.
   DB_POOL_MAX: ${DB_POOL_MAX:-5}
-  REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+  # Must embed REDIS_PASSWORD; a missing URL fails the deploy (no anonymous Redis).
+  REDIS_URL: ${REDIS_URL:?REDIS_URL must include the Redis password}
   JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET must be at least 32 random characters}
   # Capability credentials are intentionally NOT shared here. Each service
   # below receives only the token(s) its own code verifies; the gateway holds
@@ -24,6 +25,19 @@ x-app: &app
   build: .
   working_dir: /app
   restart: unless-stopped
+  # Peers and data services live on a non-routable internal network; only the
+  # gateway joins the public network (overridden in its own service block).
+  networks:
+    - internal
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  pids_limit: 256
+  # Services keep no runtime state on disk; /tmp is a scratch tmpfs only.
+  read_only: true
+  tmpfs:
+    - /tmp
   # Give SIGTERM handlers time to drain requests and close their DB pools.
   stop_grace_period: 25s
   # Bound each process so one leaking service cannot OOM the host.
@@ -49,17 +63,25 @@ x-app: &app
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # Exact patch tag + published multi-arch index digest.
+    image: postgres:16.16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d
     # 15 app services x DB_POOL_MAX(5) + the LISTEN connection + migrations
     # stays well under this ceiling; the default 100 would be exhausted.
     command: ["postgres", "-c", "max_connections=200"]
+    # No host port: the database is reachable only from the internal network.
+    networks:
+      - internal
+    # The stock entrypoint needs CHOWN/SETUID to hand the volume to postgres,
+    # so capabilities stay intact here while process/CPU/memory are bounded.
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1536m
+    cpus: 1.0
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: ${POSTGRES_DB:-gaming_platform}
-    # Loopback only: the gateway is the sole public entry point.
-    ports:
-      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -71,10 +93,31 @@ services:
       retries: 10
 
   redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "127.0.0.1:6379:6379"
+    # Exact patch tag + published multi-arch index digest.
+    image: redis:7.4.12-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+    # Password enforced by the server; clients receive it only through
+    # REDIS_URL on the internal network. REDISCLI_AUTH authenticates probes.
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    # $$ keeps interpolation in the container shell, not in Compose.
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    # 999:1000 is the redis user/group shipped by the official alpine image.
+    user: "999:1000"
+    # No host port: internal network only.
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    read_only: true
+    tmpfs:
+      - /tmp
+    # /data is a named volume, so AOF/RDB writes survive a read-only root FS.
     volumes:
       - redisdata:/data
     healthcheck:
@@ -90,8 +133,22 @@ services:
     working_dir: /app
     command: node scripts/migrate.js
     restart: "no"
+    # The migrator only opens Postgres; it must not inherit the fleet's
+    # secrets or capability tokens.
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
-      <<: *common-env
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
     depends_on:
       postgres:
         condition: service_healthy
@@ -99,6 +156,10 @@ services:
   gateway:
     <<: *app
     command: node services/gateway/index.js
+    # The only service with a public interface; peers stay on the internal net.
+    networks:
+      - public
+      - internal
     environment:
       <<: *common-env
       PORT: 3000
@@ -116,7 +177,11 @@ services:
       RATE_LIMIT_AUTH_MAX: ${RATE_LIMIT_AUTH_MAX:-10}
       RATE_LIMIT_USER_MAX: ${RATE_LIMIT_USER_MAX:-120}
       RATE_LIMIT_MUTATE_MAX: ${RATE_LIMIT_MUTATE_MAX:-30}
-      RATE_LIMIT_FAIL_CLOSED: ${RATE_LIMIT_FAIL_CLOSED:-false}
+      # Fail closed if Redis is down: never silently drop to local counters.
+      RATE_LIMIT_FAIL_CLOSED: ${RATE_LIMIT_FAIL_CLOSED:-true}
+      RATE_LIMIT_STREAM_MAX: ${RATE_LIMIT_STREAM_MAX:-20}
+      MAX_STREAMS: ${MAX_STREAMS:-500}
+      EVENT_RETENTION_HOURS: ${EVENT_RETENTION_HOURS:-168}
     healthcheck:
       test:
         - CMD
@@ -157,6 +222,9 @@ services:
       <<: *common-env
       PORT: 3010
       REALTIME_SERVICE_TOKEN: ${REALTIME_SERVICE_TOKEN:?REALTIME_SERVICE_TOKEN must be set}
+      # Bounded event log / concurrent stream budget for SSE fan-out.
+      MAX_STREAMS: ${MAX_STREAMS:-500}
+      EVENT_RETENTION_HOURS: ${EVENT_RETENTION_HOURS:-168}
     expose:
       - "3010"
 
@@ -167,7 +235,12 @@ services:
       <<: *common-env
       PORT: 3011
       SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
+      # The wallet verifies all four: the full gateway/test/admin capability
+      # and the three operation/type-scoped peer capabilities.
       WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
+      WALLET_DEBIT_SERVICE_TOKEN: ${WALLET_DEBIT_SERVICE_TOKEN:?WALLET_DEBIT_SERVICE_TOKEN must be set}
+      WALLET_BONUS_SERVICE_TOKEN: ${WALLET_BONUS_SERVICE_TOKEN:?WALLET_BONUS_SERVICE_TOKEN must be set}
+      WALLET_WIN_SERVICE_TOKEN: ${WALLET_WIN_SERVICE_TOKEN:?WALLET_WIN_SERVICE_TOKEN must be set}
     expose:
       - "3011"
 
@@ -254,14 +327,14 @@ services:
       PORT: 3022
       SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
       PROMOTIONS_SERVICE_TOKEN: ${PROMOTIONS_SERVICE_TOKEN:?PROMOTIONS_SERVICE_TOKEN must be set}
-      WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
+      # Claims only ever credit type=bonus; never hold the full wallet token.
+      WALLET_BONUS_SERVICE_TOKEN: ${WALLET_BONUS_SERVICE_TOKEN:?WALLET_BONUS_SERVICE_TOKEN must be set}
     expose:
       - "3022"
 
-  # Unified Aviator/crash game. It holds three distinct capabilities: its own
-  # lifecycle token, the wallet token for stakes/payouts, and the realtime
-  # token for the public event feed. It never receives the admin or promotions
-  # token.
+  # Unified Aviator/crash game. Its wallet capabilities are scoped to stakes
+  # (debits) and win credits; it never receives the full wallet token, the
+  # admin token or the promotions token.
   crash:
     <<: *app
     command: node services/crash/index.js
@@ -270,7 +343,8 @@ services:
       PORT: 3023
       SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
       CRASH_SERVICE_TOKEN: ${CRASH_SERVICE_TOKEN:?CRASH_SERVICE_TOKEN must be set}
-      WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
+      WALLET_DEBIT_SERVICE_TOKEN: ${WALLET_DEBIT_SERVICE_TOKEN:?WALLET_DEBIT_SERVICE_TOKEN must be set}
+      WALLET_WIN_SERVICE_TOKEN: ${WALLET_WIN_SERVICE_TOKEN:?WALLET_WIN_SERVICE_TOKEN must be set}
       REALTIME_SERVICE_TOKEN: ${REALTIME_SERVICE_TOKEN:?REALTIME_SERVICE_TOKEN must be set}
       WALLET_INTERNAL_URL: http://wallet:3011
       REALTIME_INTERNAL_URL: http://realtime:3010
@@ -280,3 +354,10 @@ services:
 volumes:
   pgdata:
   redisdata:
+
+# Only the gateway attaches to `public`. Data services and all peers are on
+# `internal`, which has no route to the internet or the host port namespace.
+networks:
+  public: {}
+  internal:
+    internal: true
