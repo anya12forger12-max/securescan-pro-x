@@ -180,6 +180,7 @@
 				</div>
 				<!--begin::Form-->
 				<form class="kt-form" method="post" action="/admin/user/save">
+				    @csrf
 					<div class="kt-portlet__body">
 						<input name="id" value="{{$user->id}}" type="hidden">
 						<div class="form-group row">

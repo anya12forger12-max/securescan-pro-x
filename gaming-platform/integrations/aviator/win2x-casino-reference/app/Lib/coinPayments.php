@@ -44,7 +44,7 @@ class coinPayments extends CPHelper
 	function ValidatePayment($cost, $currency) {
 		if(!isset($_POST['ipn_mode']))
 		{
-			$this->paymentError[] = 'ipn mode not set.';
+			$this->paymentErrors[] = 'ipn mode not set.';
 
 			return false;
 
@@ -54,64 +54,66 @@ class coinPayments extends CPHelper
 			
 			//Verify that the http authentication checks out with the users supplied information 
 			// 
-			if($_SERVER['PHP_AUTH_USER']==$this->merchantId && $_SERVER['PHP_AUTH_PW']==$this->secretKey)
+			if(isset($_SERVER['PHP_AUTH_USER'], $_SERVER['PHP_AUTH_PW']) &&
+				hash_equals((string)$this->merchantId, (string)$_SERVER['PHP_AUTH_USER']) &&
+				hash_equals((string)$this->secretKey, (string)$_SERVER['PHP_AUTH_PW']))
 			{
 				// Failsafe to prevent malformed requests to throw an error
 				if(empty($_POST['merchant']))
 				{
 
-					$this->paymentError[] = 'POST data does not contain a merchant ID.';
+					$this->paymentErrors[] = 'POST data does not contain a merchant ID.';
 
 					return false;
 
 					
 				}
 
-				if($this->checkFields()) {
-					echo 'IPN OK';
+				if($this->checkFields($currency, $cost)) {
 					return true;
 				}
 
 			}
 
-			$this->paymentError[] = 'Request does not autheticate (wrong merchant ID + secret Key combo)';
+			$this->paymentErrors[] = 'Request does not autheticate (wrong merchant ID + secret Key combo)';
 
 			return false;
 
 		}
 
-		return $this->validatePaymentHMAC();
+		return $this->validatePaymentHMAC($cost, $currency);
 
 	}
 
 
-	private function validatePaymentHMAC() {
+	private function validatePaymentHMAC($cost, $currency) {
 		if(!empty($_SERVER['HTTP_HMAC'])) {
 
 			$hmac = hash_hmac("sha512", file_get_contents('php://input'), $this->secretKey);
 
-			if($hmac == $_SERVER['HTTP_HMAC']) {
+			if(hash_equals($hmac, (string)$_SERVER['HTTP_HMAC'])) {
 
-				if($this->checkFields()) {
-
-					echo 'IPN OK';
+				if($this->checkFields($currency, $cost)) {
 					return true;
 
 				}
 			}
 
-			$this->paymentError[] = 'HMAC hashes do not match';
+			$this->paymentErrors[] = 'HMAC hashes do not match';
 
 			return false;
 		}
 
-		$this->paymentError[] = 'Does not contain a HMAC request';
+		$this->paymentErrors[] = 'Does not contain a HMAC request';
 
 		return false;
 	}
 
 
 	private function checkFields($currency, $cost) {
+		foreach(['merchant', 'currency1', 'amount1', 'status'] as $field) {
+			if(!isset($_POST[$field])) return false;
+		}
 		// Ensure the paid out merchant is the same as the application
 		if($_POST['merchant'] == $this->merchantId) {
 
@@ -130,28 +132,28 @@ class coinPayments extends CPHelper
 
 					if(intval($_POST['status']) == -2) {
 
-						$this->paymentError[] = 'The payment has been chargedback through paypal.';
+						$this->paymentErrors[] = 'The payment has been chargedback through paypal.';
 
 						return false;
 
 					}
 
-					$this->paymentError[] = 'The payment most likely has not been completed yet.';
+					$this->paymentErrors[] = 'The payment most likely has not been completed yet.';
 
 					return false;
 
 				}
 
-				$this->paymentError[] = 'The amount paid does not match the original payment.';
+				$this->paymentErrors[] = 'The amount paid does not match the original payment.';
 
 			}
 
-			$this->paymentError[] = 'The currency requested and currency paid differ, suspected form tampering.';
+			$this->paymentErrors[] = 'The currency requested and currency paid differ, suspected form tampering.';
 
 			return false;
 		}
 
-		$this->paymentError[] = 'Merchant ID does not match.';
+		$this->paymentErrors[] = 'Merchant ID does not match.';
 
 		return false;
 	}

@@ -72,7 +72,7 @@ Route::group(['middleware' => 'auth'], function () {
 	});
 });
 
-Route::group(['prefix' => '/admin', 'middleware' => 'auth', 'middleware' => 'access:admin'], function () {
+Route::group(['prefix' => '/admin', 'middleware' => ['auth', 'access:admin']], function () {
 	Route::get('/', ['as' => 'admin.index', 'uses' => 'AdminController@index']);
 	Route::get('/users', ['as' => 'admin.users', 'uses' => 'AdminController@users']);
 	Route::get('/user/{id}', ['as' => 'admin.user', 'uses' => 'AdminController@user']);
@@ -120,7 +120,7 @@ Route::group(['prefix' => '/admin', 'middleware' => 'auth', 'middleware' => 'acc
 	Route::post('/betBattle', 'BattleController@adminBet');
 });
 
-Route::group(['prefix' => '/moder', 'middleware' => 'auth', 'middleware' => 'access:moder'], function () {
+Route::group(['prefix' => '/moder', 'middleware' => ['auth', 'access:moder']], function () {
 	Route::post('/getBanned', 'AdminController@getBanned');
 	Route::post('/ban', 'ChatController@ban');
 	Route::post('/unban', 'ChatController@unban');

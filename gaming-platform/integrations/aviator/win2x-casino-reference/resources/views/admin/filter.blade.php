@@ -64,6 +64,7 @@
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close"></button>
             </div>
             <form class="kt-form-new" method="post" action="/admin/filter/new">
+                @csrf
 				<div class="modal-body">
 					<div class="form-group">
 						<label for="name">Filter:</label>
@@ -87,6 +88,7 @@
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close"></button>
             </div>
             <form class="kt-form-new" method="post" action="/admin/filter/save">
+                @csrf
 				<input type="hidden" value="{{$f->id}}" name="id">
 				<div class="modal-body">
 					<div class="form-group">

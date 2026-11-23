@@ -65,7 +65,7 @@ class DiceController extends Controller {
 		try {
 			$chance = round($perc, 2);
 			$vip = round(96/$chance, 2);
-			$rand = rand(0, 10000);
+			$rand = $this->secureInt(0, 10000);
 			$generate = $rand / 100;
 
 			if($sum == round($sum*$vip, 2)) {
@@ -73,11 +73,11 @@ class DiceController extends Controller {
 				return response()->json(['type' => 'error', 'msg' => 'Your bet is equal to the win!']);
 			}
 			
-			if($profit['now'] < $profit['need'] && mt_rand(1, 10) > 7 || $profit['now'] && mt_rand(1, 10) > 7) {
+			if($profit['now'] < $profit['need'] && $this->secureInt(1, 10) > 7 || $profit['now'] && $this->secureInt(1, 10) > 7) {
 				while($perc >= $generate) {
 					$chance = round($perc, 2);
 					$vip = round(96/$chance,2);
-					$rand = rand(0, 10000);
+					$rand = $this->secureInt(0, 10000);
 					$generate = $rand / 100;
 				}
 			}
@@ -206,11 +206,11 @@ class DiceController extends Controller {
             'msg' => '[Dice] Failed to retrieve user!'
         ];
 		
-		$perc = round((1 + (95-1)) * mt_rand(0, 2147483647) / 2147483647, 2);
+		$perc = round((1 + (95-1)) * $this->secureInt(0, 2147483647) / 2147483647, 2);
 		
-		$sum = $this->settings->dice_min_bet+mt_rand($this->settings->fake_min_bet * 2, $this->settings->fake_max_bet * 2) / 2;
+		$sum = $this->settings->dice_min_bet+$this->secureInt($this->settings->fake_min_bet * 2, $this->settings->fake_max_bet * 2) / 2;
 		$bl = ['balance', 'bonus'];
-		$bl_true = $bl[array_rand($bl)];
+		$bl_true = $bl[$this->secureArrayKey($bl)];
 		
         $balType = $bl_true;
 		
@@ -273,7 +273,7 @@ class DiceController extends Controller {
 			}
 			$chance = round($perc, 2);
 			$vip = round(96/$chance, 2);
-			$rand = rand(0, 10000);
+			$rand = $this->secureInt(0, 10000);
 			$generate = $rand / 100;
 
 			if($sum == round($sum*$vip, 2)) {
@@ -380,7 +380,7 @@ class DiceController extends Controller {
 			}
 			$chance = round($perc, 2);
 			$vip = round(96/$chance, 2);
-			$rand = rand(0, 10000);
+			$rand = $this->secureInt(0, 10000);
 			$generate = $rand / 100;
 
 			if($sum == round($sum*$vip, 2)) {

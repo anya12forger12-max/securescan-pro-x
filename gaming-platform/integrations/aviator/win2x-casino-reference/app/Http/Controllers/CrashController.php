@@ -182,7 +182,7 @@ class CrashController extends Controller {
 	}
 	
 	public function random_float($min, $max, $includeMax) {
-		return $min + \mt_rand(0, (\mt_getrandmax() - ($includeMax ? 0 : 1))) / \mt_getrandmax() * ($max - $min);
+		return $min + $this->secureInt(0, $includeMax ? 9007199254740991 : 9007199254740990) / 9007199254740991 * ($max - $min);
 	}
 	
 	private function getUser() {
@@ -193,8 +193,8 @@ class CrashController extends Controller {
     public function addBetFake() {
 		$user = $this->getUser();
 		$o = [5, 10, 15];
-		$ar_o = array_rand($o, 2);
-		$sum = $this->roundToTheNearestAnything(mt_rand($this->settings->double_fake_min, $this->settings->double_fake_max), $o[$ar_o[0]]);
+		$ar_o = $this->secureArrayKey($o, 2);
+		$sum = $this->roundToTheNearestAnything($this->secureInt($this->settings->double_fake_min, $this->settings->double_fake_max), $o[$ar_o[0]]);
 		$withdraw = 1.15; //round($this->random_float(1.15, 25, true), 2)
 		$countBet = CrashBets::where(['user_id' => $user->id, 'round_id' => $this->game->id])->count();
 		
@@ -284,7 +284,7 @@ class CrashController extends Controller {
     public function getFloat() {
 		$profit = Profit::calc();
         $lastZero = Crash::where('multiplier', 1)->orderBy('id', 'desc')->first();
-        if(!is_null($lastZero) && ($lastZero->id >= ($this->game->id+mt_rand(3, 10)))) return 1;
+        if(!is_null($lastZero) && ($lastZero->id >= ($this->game->id+$this->secureInt(3, 10)))) return 1;
 
         $list = [];
         for($i = 0; $i < 50; $i++) $list[] = 1;
@@ -294,14 +294,14 @@ class CrashController extends Controller {
         for($i = 0; $i < 3; $i++) $list[] = 5;
         for($i = 0; $i < 2; $i++) $list[] = 10;
         for($i = 0; $i < 1; $i++) $list[] = 100;
-        shuffle($list);
+        $this->secureShuffle($list);
 		
 		if($this->game->multiplier) return $this->game->multiplier; 
-        $m = $list[mt_rand(0, count($list)-1)];
-        if($m > 1) $m = mt_rand(1, $m);
-		if($profit['need'] < $profit['now'] && mt_rand(1, 10) > 5 || $profit['now'] < 0 && mt_rand(1, 10) > 5) return '1.'.mt_rand(0,4).mt_rand(0,9);
-        if($m == 1 && $profit['need'] < $profit['now'] || $profit['now'] < 0) return $list[0].'.0'.mt_rand(0,9);
-		$num = round($m.'.'.mt_rand(0,9).mt_rand(1,9), 2);
+        $m = $list[$this->secureInt(0, count($list)-1)];
+        if($m > 1) $m = $this->secureInt(1, $m);
+		if($profit['need'] < $profit['now'] && $this->secureInt(1, 10) > 5 || $profit['now'] < 0 && $this->secureInt(1, 10) > 5) return '1.'.$this->secureInt(0,4).$this->secureInt(0,9);
+        if($m == 1 && $profit['need'] < $profit['now'] || $profit['now'] < 0) return $list[0].'.0'.$this->secureInt(0,9);
+		$num = round($m.'.'.$this->secureInt(0,9).$this->secureInt(1,9), 2);
         return $num;
     }
 
@@ -309,8 +309,8 @@ class CrashController extends Controller {
         $list = [];
         for($i = 0; $i < $chance; $i++) $list[] = true;
         for($i = 0; $i < (100-$chance); $i++) $list[] = false;
-        shuffle($list);
-        return $list[mt_rand(0, count($list)-1)];
+        $this->secureShuffle($list);
+        return $list[$this->secureInt(0, count($list)-1)];
     }
 
     public function Cashout() {

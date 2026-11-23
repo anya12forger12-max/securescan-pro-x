@@ -220,10 +220,10 @@ class WheelController extends Controller {
             'msg' => '[Wheel] Failed to retrieve user!'
         ];
 		$clrs = ['black', 'red', 'green', 'yellow'];
-		$clrs_true = $clrs[array_rand($clrs)];
+		$clrs_true = $clrs[$this->secureArrayKey($clrs)];
 		$bl = ['balance', 'bonus'];
-		$bl_true = $bl[array_rand($bl)];
-		$price = $this->settings->wheel_min_bet+mt_rand($this->settings->fake_min_bet * 2, $this->settings->fake_max_bet * 2) / 2;
+		$bl_true = $bl[$this->secureArrayKey($bl)];
+		$price = $this->settings->wheel_min_bet+$this->secureInt($this->settings->fake_min_bet * 2, $this->settings->fake_max_bet * 2) / 2;
 		$color = $clrs_true;
 		$balance = $bl_true;
 		if(is_null($color)) return [
@@ -402,9 +402,9 @@ class WheelController extends Controller {
 		$filter = array_filter($list, function($var) use($color) {
 			return ($var[1] == $color);
 		});
-		shuffle($filter);
+		$this->secureShuffle($filter);
 		
-		$с = $filter[mt_rand(0, count($filter)-1)];
+		$с = $filter[$this->secureInt(0, count($filter)-1)];
 		
         return $с;
     }
@@ -418,9 +418,9 @@ class WheelController extends Controller {
 		for($i = 0; $i < 40; $i++) $color[] = 'red';
 		for($i = 0; $i < 12; $i++) $color[] = 'green';
 		for($i = 0; $i < 0.1; $i++) $color[] = 'yellow';
-		shuffle($color);
+		$this->secureShuffle($color);
 
-		$wcolor = $color[mt_rand(0, count($color)-1)];
+		$wcolor = $color[$this->secureInt(0, count($color)-1)];
 		
 		$checkUser = WheelBets::where(['fake' => 0, 'game_id' => $this->game->id])->orderBy('id', 'desc')->count();
 		if($checkUser >= 1 && $this->game->ranked != 1) {
@@ -434,15 +434,15 @@ class WheelController extends Controller {
 					'value' => ((isset($prices[$color])) ? $prices[$color] : 0)*(($color == 'black') ? 2 : (($color == 'red') ? 3 : 5))
 				];
 				
-				shuffle($pricesList);
+				$this->secureShuffle($pricesList);
 				
 				usort($pricesList, function($a, $b) {
 					return($a['value']-$b['value']);
 				});
 				
-				if(!is_null($lastYellow) && ($lastYellow->id >= ($this->game->id+mt_rand(130, 200)))) {
+				if(!is_null($lastYellow) && ($lastYellow->id >= ($this->game->id+$this->secureInt(130, 200)))) {
 					$wcolor = 'yellow';
-				} elseif(is_null($lastYellow) && $this->game->id >= mt_rand(130, 200)) {
+				} elseif(is_null($lastYellow) && $this->game->id >= $this->secureInt(130, 200)) {
 					$wcolor = 'yellow';
 				} else {
 					$min = reset($pricesList);
@@ -665,9 +665,9 @@ class WheelController extends Controller {
 		$filter = array_filter($list, function($var) use($color) {
 			return ($var[1] == $color);
 		});
-		shuffle($filter);
+		$this->secureShuffle($filter);
 		
-		$с = $filter[mt_rand(0, count($filter)-1)];
+		$с = $filter[$this->secureInt(0, count($filter)-1)];
 
 		Wheel::where('id', $this->game->id)->update([
 			'winner_color' => $с[1],

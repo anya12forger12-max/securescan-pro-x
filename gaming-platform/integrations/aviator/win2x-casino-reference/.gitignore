@@ -9,3 +9,10 @@ Homestead.json
 Homestead.yaml
 npm-debug.log
 yarn-error.log
+
+# Never commit environment files or database admin consoles
+env
+.env
+*.pem
+*.key
+adminer.php

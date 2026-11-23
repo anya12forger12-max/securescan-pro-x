@@ -181,11 +181,8 @@ class ChatController extends Controller
             return response()->json(['message' => $error->first('messages'), 'status' => 'error']);
         }
         
-        if($this->user->is_admin) $messages = strip_tags($request->get('messages'), '<img>');
-        else {
-			if(substr_count(strtolower($request->get('messages')), '<img class="s')) $messages = $request->get('messages');
-			else $messages = html_entity_decode(strip_tags($request->get('messages'), '<img>'));
-		}
+        // Rendered as raw HTML; use a strict allowlist, never strip_tags().
+        $messages = $this->sanitizeChatMessage($request->get('messages'));
         
 		$dep = Payments::where('user_id', $this->user->id)->where('status', 1)->sum('sum');
         if(!$this->user->is_admin && !$this->user->is_moder && !$this->user->is_youtuber) {
@@ -236,9 +233,10 @@ class ChatController extends Controller
         }
 		
 		if(substr_count(strtolower($messages), '$bal')) {
-			if(\Cache::has('bal.'.$request->get('balType').'.user.' . $this->user->id)) return response()->json(['message' => 'You perform this action too often!', 'status' => 'error']);
-        	\Cache::put('bal.'.$request->get('balType').'.user.' . $this->user->id, '', 300);
-			$returnValue = ['unique_id' => $unique_id, 'avatar' => $avatar, 'time2' => Carbon::now()->getTimestamp(), 'time' => $time, 'messages' => '<div class="chat-transaction flex-row align-center"><div class="chat-transaction__icon"><svg class="icon"><use xlink:href="/img/symbols.svg#icon-bank-'.$request->get('balType').'"></use></svg></div><div class="flex-column flex-column_align-start"><div class="chat-transaction__status">' . ($request->get('balType') == 'balance' ? 'My balance' : 'My bonuses') . '</div><span class="chat-message-transaction-link">'.($request->get('balType') == 'balance' ? $this->user->balance : $this->user->bonus).' <svg class="icon icon-coin '.$request->get('balType').'"><use xlink:href="/img/symbols.svg#icon-coin"></use></svg></span></div></div>', 'username' => $username, 'ban' => $ban, 'admin' => $admin, 'moder' => $moder, 'youtuber' => $youtuber];
+			$balType = $request->get('balType') === 'bonus' ? 'bonus' : 'balance';
+			if(\Cache::has('bal.'.$balType.'.user.' . $this->user->id)) return response()->json(['message' => 'You perform this action too often!', 'status' => 'error']);
+        	\Cache::put('bal.'.$balType.'.user.' . $this->user->id, '', 300);
+			$returnValue = ['unique_id' => $unique_id, 'avatar' => $avatar, 'time2' => Carbon::now()->getTimestamp(), 'time' => $time, 'messages' => '<div class="chat-transaction flex-row align-center"><div class="chat-transaction__icon"><svg class="icon"><use xlink:href="/img/symbols.svg#icon-bank-'.$balType.'"></use></svg></div><div class="flex-column flex-column_align-start"><div class="chat-transaction__status">' . ($balType == 'balance' ? 'My balance' : 'My bonuses') . '</div><span class="chat-message-transaction-link">'.($balType == 'balance' ? $this->user->balance : $this->user->bonus).' <svg class="icon icon-coin '.$balType.'"><use xlink:href="/img/symbols.svg#icon-coin"></use></svg></span></div></div>', 'username' => $username, 'ban' => $ban, 'admin' => $admin, 'moder' => $moder, 'youtuber' => $youtuber];
 			$this->redis->rpush(self::CHAT_CHANNEL, json_encode($returnValue));
 			$this->redis->publish(self::NEW_MSG_CHANNEL, json_encode($returnValue));
 			return response()->json(['message' => 'You have shown your balance in chat!', 'status' => 'success']);
@@ -269,4 +267,30 @@ class ChatController extends Controller
         }
         return response()->json(['message' => 'Message deleted!', 'status' => 'success']);
     }
+
+    /** Escape all text, keeping only strictly validated sticker <img> tags. */
+    private function sanitizeChatMessage($raw) {
+        $raw = html_entity_decode((string)$raw, ENT_QUOTES, 'UTF-8');
+        $out = ''; $offset = 0;
+        if(preg_match_all('/<\s*img\b[^>]*>/i', $raw, $matches, PREG_OFFSET_CAPTURE)) {
+            foreach($matches[0] as $tag) {
+                $out .= e(substr($raw, $offset, $tag[1] - $offset));
+                $out .= $this->sanitizeChatImage($tag[0]);
+                $offset = $tag[1] + strlen($tag[0]);
+            }
+        }
+        return $out . e(substr($raw, $offset));
+    }
+
+    private function sanitizeChatImage($tag) {
+        if(!preg_match('/\bclass\s*=\s*(["\'])(.*?)\1/i', $tag, $c)) return '';
+        $class = trim($c[2]);
+        if(!preg_match('/^s(?:\s+s-[A-Za-z0-9_-]+)*$/i', $class)) return '';
+        if(!preg_match('/\bsrc\s*=\s*(["\'])(.*?)\1/i', $tag, $s)) return '';
+        $src = $s[2];
+        $allowed = preg_match('#^/img/[A-Za-z0-9_./-]+$#', $src) ||
+                   preg_match('#^data:image/(?:gif|png|jpeg);base64,[A-Za-z0-9+/=]+$#i', $src);
+        return $allowed ? '<img class="'.e($class).'" src="'.e($src).'" alt="">' : '';
+    }
+
 }

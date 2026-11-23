@@ -227,12 +227,12 @@ class BattleController extends Controller {
 		$user = $this->getUser();
 		
 		$clrs = ['blue', 'red'];
-		$clrs_true = $clrs[array_rand($clrs)];
+		$clrs_true = $clrs[$this->secureArrayKey($clrs)];
 		$bl = ['balance', 'bonus'];
-		$bl_true = $bl[array_rand($bl)];
+		$bl_true = $bl[$this->secureArrayKey($bl)];
 		$color = $clrs_true;
 		$balType = $bl_true;
-		$sum = $this->settings->battle_min_bet+mt_rand($this->settings->fake_min_bet * 2, $this->settings->fake_max_bet * 2) / 2;
+		$sum = $this->settings->battle_min_bet+$this->secureInt($this->settings->fake_min_bet * 2, $this->settings->fake_max_bet * 2) / 2;
 		
 		if($balType != 'balance' && $balType != 'bonus') return [
             'success' => false,
@@ -342,12 +342,12 @@ class BattleController extends Controller {
 	}
 	
 	public function getSlider() {
-		$winTicket = mt_rand(1, 1000);
+		$winTicket = $this->secureInt(1, 1000);
 		if($this->game->winner_team == 'red') {
-			$winTicket = mt_rand(1, $this->getTicketsOfGame($this->game)[0]);
+			$winTicket = $this->secureInt(1, $this->getTicketsOfGame($this->game)[0]);
 		}
 		if($this->game->winner_team == 'blue') {
-			$winTicket = mt_rand($this->getTicketsOfGame($this->game)[1], 1000);
+			$winTicket = $this->secureInt($this->getTicketsOfGame($this->game)[1], 1000);
 		}
 		$red = $this->getChanceOfColor('red', $this->game) * 10;
 		$winner = 'red';

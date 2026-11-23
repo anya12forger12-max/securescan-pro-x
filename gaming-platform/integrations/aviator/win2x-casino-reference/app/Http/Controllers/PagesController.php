@@ -146,7 +146,7 @@ class PagesController extends Controller
 					'start' => $b->start
 				];
 			}
-			$win = $list[array_rand($list)];
+			$win = $list[$this->secureArrayKey($list)];
 
 			$remaining = Carbon::now()->addMinutes($this->settings->bonus_group_time)->getTimestamp();
 
@@ -198,7 +198,7 @@ class PagesController extends Controller
 					'start' => $b->start
 				];
 			}
-			$win = $list[array_rand($list)];
+			$win = $list[$this->secureArrayKey($list)];
 
 			$remaining = 0;
 			
@@ -576,8 +576,8 @@ class PagesController extends Controller
 		
 		$info = [
 			'unique_id' => $user->unique_id,
-			'avatar' => $user->avatar,
-			'username' => $user->username,
+			'avatar' => e((string)$user->avatar),
+			'username' => e((string)$user->username),
 			'betAmount' => round($betAmount, 2),
 			'totalGames' => $betCount,
 			'wins' => $betWin,
@@ -675,46 +675,78 @@ class PagesController extends Controller
 	}
 	
 	public function result_cp(Request $r) {
-        $track = $r->custom;
-        $status = $r->status;
+		// CoinPayments IPNs are authenticated with an HMAC over the raw body.
+		// Never credit a deposit from unauthenticated request fields.
+		$CP = new coinPayments();
+		$CP->setMerchantId($this->settings->merchant_id);
+		$CP->setSecretKey($this->settings->ipn_secret);
 
-        $data = Deposit::where('trx', $track)->orderBy('id','DESC')->first();
+		try {
+			if(!$CP->ValidatePayment(0, 'USD')) {
+				return response('Invalid IPN', 403);
+			}
+		} catch(\Throwable $e) {
+			return response('Invalid IPN', 403);
+		}
 
-        if($data->status == 0) {
-			if($status >= 100 || $status == 2) {
-				$this->userDataUpdate($data);
-            }
-        }
+		$data = Deposit::where('trx', $r->input('custom'))
+			->where('status', 0)->orderBy('id', 'DESC')->first();
+		if(is_null($data)) {
+			return response('IPN OK', 200);
+		}
+
+		if(strtoupper((string)$r->input('currency1')) !== 'USD' ||
+		   floatval($r->input('amount1')) + 0.01 < floatval($data->usd_amo)) {
+			return response('Invalid IPN amount', 403);
+		}
+
+		DB::transaction(function() use ($data) {
+			$this->userDataUpdate($data);
+		});
+
+		return response('IPN OK', 200);
 	}
-	
+
 	public function result_pm(Request $r) {
-		$passphrase = strtoupper(md5($this->settings->pm_passphrase));
-        
-        define('ALTERNATE_PHRASE_HASH', $passphrase);
-        define('PATH_TO_LOG', '/var/log/');
-        $string =
-        $_POST['PAYMENT_ID'] . ':' . $_POST['PAYEE_ACCOUNT'] . ':' .
-        $_POST['PAYMENT_AMOUNT'] . ':' . $_POST['PAYMENT_UNITS'] . ':' .
-        $_POST['PAYMENT_BATCH_NUM'] . ':' .
-        $_POST['PAYER_ACCOUNT'] . ':' . ALTERNATE_PHRASE_HASH . ':' .
-        $_POST['TIMESTAMPGMT'];
-        
-        $hash = strtoupper(md5($string));
-        $hash2 = $_POST['V2_HASH'];
+		$required = ['PAYMENT_ID', 'PAYEE_ACCOUNT', 'PAYMENT_AMOUNT',
+			'PAYMENT_UNITS', 'PAYMENT_BATCH_NUM', 'PAYER_ACCOUNT',
+			'TIMESTAMPGMT', 'V2_HASH'];
+		foreach($required as $key) {
+			if(!$r->has($key)) return response('Invalid IPN', 403);
+		}
 
-        if($hash == $hash2) {
-            $amo = $_POST['PAYMENT_AMOUNT'];
-            $unit = $_POST['PAYMENT_UNITS'];
-            $track = $_POST['PAYMENT_ID'];
-            
-            $data = Deposit::where('trx', $track)->orderBy('id', 'DESC')->first();
-            
-            if($_POST['PAYEE_ACCOUNT'] == $this->settings->pm_usd_wallet && $unit == 'USD' && $data->status == 0) {
-                $this->userDataUpdate($data);               
-            }
-        }
+		$passphrase = strtoupper(md5((string)$this->settings->pm_passphrase));
+		$string = implode(':', [
+			$r->input('PAYMENT_ID'), $r->input('PAYEE_ACCOUNT'),
+			$r->input('PAYMENT_AMOUNT'), $r->input('PAYMENT_UNITS'),
+			$r->input('PAYMENT_BATCH_NUM'), $r->input('PAYER_ACCOUNT'),
+			$passphrase, $r->input('TIMESTAMPGMT')
+		]);
+
+		if(!hash_equals(strtoupper(md5($string)), strtoupper((string)$r->input('V2_HASH')))) {
+			return response('Invalid IPN', 403);
+		}
+		if(!hash_equals((string)$this->settings->pm_usd_wallet, (string)$r->input('PAYEE_ACCOUNT')) ||
+		   strtoupper((string)$r->input('PAYMENT_UNITS')) !== 'USD') {
+			return response('Invalid IPN', 403);
+		}
+
+		$data = Deposit::where('trx', $r->input('PAYMENT_ID'))
+			->where('status', 0)->orderBy('id', 'DESC')->first();
+		if(is_null($data)) {
+			return response('IPN OK', 200);
+		}
+		if(floatval($r->input('PAYMENT_AMOUNT')) + 0.01 < floatval($data->usd_amo)) {
+			return response('Invalid IPN amount', 403);
+		}
+
+		DB::transaction(function() use ($data) {
+			$this->userDataUpdate($data);
+		});
+
+		return response('IPN OK', 200);
 	}
-	
+
 	public function userDataUpdate($data) { 
         if($data->status == 0) {
             $data->status = 1;

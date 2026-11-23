@@ -467,7 +467,7 @@ class JackpotController extends Controller {
 			'msg' => '[ROOM #'.$room->name.'] Bets in this game are closed!'
 		];
 		
-		$sum = $room->min+mt_rand($this->settings->fake_min_bet * 2, $this->settings->fake_max_bet * 2) / 2;
+		$sum = $room->min+$this->secureInt($this->settings->fake_min_bet * 2, $this->settings->fake_max_bet * 2) / 2;
 
 		DB::beginTransaction();
 
@@ -511,7 +511,7 @@ class JackpotController extends Controller {
 			}
 
 			$bl = ['balance', 'bonus'];
-			$bl_true = $bl[array_rand($bl)];
+			$bl_true = $bl[$this->secureArrayKey($bl)];
 			
 			$balance = ($bl_true == 'balance') ? 'balance' : 'bonus';
 			$betType = JackpotBets::where('game_id', $game->id)->where('user_id', $user->id)->where('balance', '!=', $balance)->count();
@@ -608,14 +608,14 @@ class JackpotController extends Controller {
 		
 		$winnerBet = null;
 		if(!$game->winner_id) {
-			$winnerTicket = ($game->winner_ticket > 0) ? $game->winner_ticket : mt_rand(0, $data['bets'][0]['bet']['to']);
+			$winnerTicket = ($game->winner_ticket > 0) ? $game->winner_ticket : $this->secureInt(0, $data['bets'][0]['bet']['to']);
 		} else {
 			$winner2 = [];
 			foreach($data['bets'] as $key => $d) {
 				if($game->winner_id == $data['bets'][$key]['user']['user_id']) $winner2[] = $d['bet'];
 			}
-			$winner2 = $winner2[array_rand($winner2)];
-			$winnerTicket = mt_rand($winner2['from'], $winner2['to']);
+			$winner2 = $winner2[$this->secureArrayKey($winner2)];
+			$winnerTicket = $this->secureInt($winner2['from'], $winner2['to']);
 		}
 		foreach($data['bets'] as $bet) if($bet['bet']['from'] <= $winnerTicket && $bet['bet']['to'] >= $winnerTicket) $winnerBet = $bet;
 		if(is_null($winnerBet)) return [
@@ -650,7 +650,7 @@ class JackpotController extends Controller {
 		}
 		$cords = null;
 		$center = $rotate['end']-$rotate['start'];
-		if(floor($center) > 1) $cords = mt_rand(floor($rotate['start']), floor($rotate['end']));
+		if(floor($center) > 1) $cords = $this->secureInt(floor($rotate['start']), floor($rotate['end']));
 		if(floor($center) < 1) $cords = $rotate['start'] + ($center/2);
 
 		$this->redis->publish('jackpot', json_encode([
@@ -763,7 +763,7 @@ class JackpotController extends Controller {
 	}
 	
 	private function getRandomColor() {
-        $color = str_pad(dechex(mt_rand(0, 0xFFFFFF)), 6, '0', STR_PAD_LEFT);
+        $color = str_pad(dechex($this->secureInt(0, 0xFFFFFF)), 6, '0', STR_PAD_LEFT);
 		return $color;
 	}
 	

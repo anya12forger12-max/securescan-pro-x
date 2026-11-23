@@ -221,7 +221,7 @@ class CoinFlipController extends Controller {
 
 			$win_sum = round($room->bank-($room->bank/100*$this->settings->flip_commission), 2);
 
-			$winnerTicket = mt_rand(1, $room->tails_to);
+			$winnerTicket = $this->secureInt(1, $room->tails_to);
 			if(($room->heads_from <= $winnerTicket) && ($room->heads_to >= $winnerTicket)) $winner = User::where('id', $room->heads)->first();
 			if(($room->tails_from <= $winnerTicket) && ($room->tails_to >= $winnerTicket)) $winner = User::where('id', $room->tails)->first();
 			$room->winner_id = $winner->id;

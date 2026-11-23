@@ -68,6 +68,7 @@
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close"></button>
             </div>
             <form class="kt-form-new" method="post" action="/admin/bonus/new">
+                @csrf
 				<div class="modal-body">
 					<div class="form-group">
 						<label for="name">Sum:</label>
@@ -117,6 +118,7 @@
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close"></button>
             </div>
             <form class="kt-form-new" method="post" action="/admin/bonus/save">
+                @csrf
 				<input type="hidden" value="{{$b->id}}" name="id">
 				<div class="modal-body">
 					<div class="form-group">

@@ -121,4 +121,43 @@ class Controller extends BaseController
 			return array('error' => 'cURL error: '.curl_error($this->ch));
 		}
 	}
+
+	/**
+	 * Cryptographically secure replacement for mt_rand()/rand(). Real-money
+	 * game outcomes must be unpredictable; the Mersenne Twister can be
+	 * recovered from observed public results. random_int() uses the OS CSPRNG.
+	 */
+	protected function secureInt($min, $max) {
+		if ($min > $max) { $t = $min; $min = $max; $max = $t; }
+		return random_int($min, $max);
+	}
+
+	/** Secure equivalent of array_rand(), including its $num > 1 key-array form. */
+	protected function secureArrayKey($array, $num = 1) {
+		$keys = array_keys($array);
+		$count = count($keys);
+		if ($num === 1) {
+			return $keys[random_int(0, $count - 1)];
+		}
+		if ($num >= $count) {
+			$this->secureShuffle($keys);
+			return $keys;
+		}
+		for ($i = 0; $i < $num; $i++) {
+			$j = random_int($i, $count - 1);
+			$t = $keys[$i]; $keys[$i] = $keys[$j]; $keys[$j] = $t;
+		}
+		return array_slice($keys, 0, $num);
+	}
+
+	/** Secure Fisher-Yates shuffle; reindexes exactly like native shuffle(). */
+	protected function secureShuffle(array &$array) {
+		$values = array_values($array);
+		for ($i = count($values) - 1; $i > 0; $i--) {
+			$j = random_int(0, $i);
+			$t = $values[$i]; $values[$i] = $values[$j]; $values[$j] = $t;
+		}
+		$array = $values;
+	}
+
 }

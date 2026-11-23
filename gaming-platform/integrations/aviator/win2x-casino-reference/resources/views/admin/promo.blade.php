@@ -72,6 +72,7 @@
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close"></button>
             </div>
             <form class="kt-form-new" method="post" action="/admin/promo/new">
+                @csrf
 				<div class="modal-body">
 					<div class="form-group">
 						<label for="name">Code:</label>
@@ -117,6 +118,7 @@
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close"></button>
             </div>
             <form class="kt-form-new" method="post" action="/admin/promo/save">
+                @csrf
 				<input type="hidden" value="{{$code->id}}" name="id">
 				<div class="modal-body">
 					<div class="form-group">

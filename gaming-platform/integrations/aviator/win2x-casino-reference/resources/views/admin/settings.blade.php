@@ -51,6 +51,7 @@
 			</div>
 		</div>
 		<form class="kt-form" method="post" action="/admin/setting/save">
+		    @csrf
 			<div class="kt-portlet__body">
 				<div class="tab-content">
 					<div class="tab-pane active" id="site" role="tabpanel">
