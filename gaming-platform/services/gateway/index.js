@@ -16,10 +16,31 @@ const REALTIME_SERVICE_TOKEN = process.env.REALTIME_SERVICE_TOKEN;
 const PROMOTIONS_SERVICE_TOKEN = process.env.PROMOTIONS_SERVICE_TOKEN;
 const CRASH_SERVICE_TOKEN = process.env.CRASH_SERVICE_TOKEN;
 const ADMIN_BOOTSTRAP_TOKEN = process.env.ADMIN_BOOTSTRAP_TOKEN;
+// Normalise once and use the same canonical list for CORS and CSP. Browsers
+// send `Origin` without a trailing slash, so a raw allow-list entry such as
+// `http://localhost:3000/` would silently fail CORS while still appearing in
+// connect-src. Malformed entries are kept as-is and rejected by both checks.
 const CORS_ORIGINS = (process.env.CORS_ORIGIN ?? "http://localhost:5173")
   .split(",")
   .map((origin) => origin.trim())
-  .filter(Boolean);
+  .filter(Boolean)
+  .map((value) => {
+    try {
+      const url = new URL(value);
+      if (
+        (url.protocol === "http:" || url.protocol === "https:") &&
+        !url.username &&
+        !url.password &&
+        url.pathname === "/" &&
+        !url.search &&
+        !url.hash
+      )
+        return url.origin;
+    } catch {
+      // Fall through to the raw value; it fails validation in both consumers.
+    }
+    return value;
+  });
 
 /** Echo only a configured origin. A comma-separated allow-list in one header
  * is invalid, and credentials require an exact origin rather than `*`. */
@@ -30,16 +51,44 @@ function corsOrigin(req) {
     : null;
 }
 
+/**
+ * CSP source lists are space-separated, so a comma-separated CORS_ORIGIN
+ * allow-list must be expanded into individual exact origins. Never emit `*`
+ * (or a wildcard host): a credentialed browser client still needs an exact
+ * scheme/host/port match. Malformed entries are ignored instead of producing
+ * an invalid header; normalise through URL so trailing slashes are harmless.
+ */
+function cspConnectSrc(origins) {
+  const sources = ["'self'"];
+  for (const value of origins) {
+    if (/[\s,;*'"\\]/.test(value)) continue;
+    let origin;
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+      if (url.username || url.password || url.pathname !== "/" || url.search || url.hash) continue;
+      origin = url.origin;
+    } catch {
+      continue;
+    }
+    if (!sources.includes(origin)) sources.push(origin);
+  }
+  return sources.join(" ");
+}
+const CONNECT_SRC = cspConnectSrc(CORS_ORIGINS);
+
 /** Baseline response hardening. The CRA client loads only same-origin
  * scripts/styles, so a self-only policy (with inline styles for React and data
- * URIs for images/fonts) does not break it. Auth responses additionally get a
+ * URIs for images/fonts) does not break it. `connect-src` also includes every
+ * configured browser origin so a separately built frontend using
+ * REACT_APP_API_URL can reach the gateway. Auth responses additionally get a
  * no-store cache policy in the request hook; static build assets keep theirs. */
 const BASE_SECURITY_HEADERS = Object.freeze({
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
   "content-security-policy":
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-    "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; " +
+    `img-src 'self' data:; font-src 'self' data:; connect-src ${CONNECT_SRC}; ` +
     "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
 });
 
@@ -85,6 +134,31 @@ const rateLimitConfig = {
   redisUrl: process.env.REDIS_URL,
 };
 const rateLimiter = RATE_LIMIT_ENABLED ? createRateLimiter(rateLimitConfig) : null;
+
+/**
+ * SSE connections are long-lived: charging each attempt to a sliding-window
+ * request counter keeps a slot occupied long after the socket is gone. Streams
+ * are therefore exempt from the request limiter and counted by *live sockets*
+ * instead. The cap reuses RATE_LIMIT_STREAM_MAX but now describes concurrency,
+ * and is a resource guard independent of RATE_LIMIT_ENABLED. Buckets keep the
+ * same verified-user / anonymous-IP split as the normal request limiters.
+ */
+const activeStreams = new Map();
+const streamBucket = (req, userId) =>
+  userId ? `user:${userId}` : `ip:anon:${req.ip ?? req.socket?.remoteAddress ?? "unknown"}`;
+
+function acquireStreamSlot(key) {
+  const active = activeStreams.get(key) ?? 0;
+  if (active >= rateLimitConfig.streamMax) return false;
+  activeStreams.set(key, active + 1);
+  return true;
+}
+
+function releaseStreamSlot(key) {
+  const active = activeStreams.get(key) ?? 0;
+  if (active <= 1) activeStreams.delete(key);
+  else activeStreams.set(key, active - 1);
+}
 
 /** Only genuinely unauthenticated auth endpoints are keyed by IP. `/v1/auth/me`
  * carries a player JWT and must not share a NAT's quota with login attempts. */
@@ -310,8 +384,45 @@ app.addHook("onRequest", async (req, reply) => {
   if (req.method === "OPTIONS") return;
   // Capability-authenticated peer routes are not player traffic.
   if (path.startsWith("/internal/")) return;
-
   const ip = req.ip ?? req.socket?.remoteAddress ?? "unknown";
+
+  const applyLimit = (result) => {
+    reply.header("x-ratelimit-limit", String(result.limit));
+    reply.header("x-ratelimit-remaining", String(result.remaining));
+    reply.header("x-ratelimit-reset", String(Math.ceil(result.resetAt / 1000)));
+    if (result.allowed) return undefined;
+    const retryAfter = Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1000));
+    reply.header("retry-after", String(retryAfter));
+    return reply.code(429).send({
+      error: result.unavailable ? "RATE_LIMIT_UNAVAILABLE" : "RATE_LIMITED",
+      message: result.unavailable ? "rate limiter unavailable" : "too many requests",
+      retryAfter,
+    });
+  };
+
+  const verifiedUserId = () => {
+    const raw = req.headers.authorization;
+    if (typeof raw === "string" && raw.startsWith("Bearer ")) {
+      try {
+        const decoded = jwt.verify(raw.slice(7), JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
+        if (typeof decoded.userId === "string") return decoded.userId;
+      } catch {
+        // An invalid token is still counted by IP; the downstream service
+        // performs the authoritative rejection.
+      }
+    }
+    return null;
+  };
+
+  // A real stream is a long-lived socket, so authenticated GETs are charged to
+  // proxy()'s live-socket cap instead of this sliding-window counter. Every
+  // other attempt still needs a request budget: without it, a caller could
+  // hammer the only public port with free JWT failures or bogus methods.
+  if (matchesPrefix(path, "/v1/events/stream")) {
+    if (req.method === "GET" && verifiedUserId()) return;
+    return applyLimit(await rateLimiter.check(`ip:anon:${ip}:stream`, rateLimitConfig.streamMax));
+  }
+
   let limit;
   let key;
   if (IP_LIMITED_AUTH_PATH.test(path)) {
@@ -320,43 +431,13 @@ app.addHook("onRequest", async (req, reply) => {
     // ordinary public reads would otherwise exhaust everyone's login quota.
     key = `ip:auth:${ip}`;
   } else {
-    const raw = req.headers.authorization;
-    let userId = null;
-    if (typeof raw === "string" && raw.startsWith("Bearer ")) {
-      try {
-        const decoded = jwt.verify(raw.slice(7), JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
-        if (typeof decoded.userId === "string") userId = decoded.userId;
-      } catch {
-        // An invalid token is still counted by IP; the downstream service
-        // performs the authoritative rejection.
-      }
-    }
-    if (matchesPrefix(path, "/v1/events/stream")) {
-      // SSE connections are long-lived: count new connection attempts in their
-      // own bucket rather than skipping them or charging the read quota. The
-      // key style matches the user/IP buckets above.
-      limit = rateLimitConfig.streamMax;
-      key = userId ? `user:${userId}:stream` : `ip:anon:${ip}:stream`;
-    } else {
-      const mutating = ["POST", "PATCH", "PUT", "DELETE"].includes(req.method);
-      limit = mutating ? rateLimitConfig.mutateMax : rateLimitConfig.userMax;
-      key = userId ? `user:${userId}:${mutating ? "write" : "read"}` : `ip:anon:${ip}`;
-    }
+    const userId = verifiedUserId();
+    const mutating = ["POST", "PATCH", "PUT", "DELETE"].includes(req.method);
+    limit = mutating ? rateLimitConfig.mutateMax : rateLimitConfig.userMax;
+    key = userId ? `user:${userId}:${mutating ? "write" : "read"}` : `ip:anon:${ip}`;
   }
 
-  const result = await rateLimiter.check(key, limit);
-  reply.header("x-ratelimit-limit", String(result.limit));
-  reply.header("x-ratelimit-remaining", String(result.remaining));
-  reply.header("x-ratelimit-reset", String(Math.ceil(result.resetAt / 1000)));
-  if (!result.allowed) {
-    const retryAfter = Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1000));
-    reply.header("retry-after", String(retryAfter));
-    return reply.code(429).send({
-      error: result.unavailable ? "RATE_LIMIT_UNAVAILABLE" : "RATE_LIMITED",
-      message: result.unavailable ? "rate limiter unavailable" : "too many requests",
-      retryAfter,
-    });
-  }
+  return applyLimit(await rateLimiter.check(key, limit));
 });
 
 async function proxy(req, reply) {
@@ -441,6 +522,30 @@ async function proxy(req, reply) {
     headers["x-service-token"] = injectedToken(target, peerToken);
   }
 
+  // Live-socket cap for SSE, keyed exactly like the request buckets: verified
+  // player subject or source IP. Slots are taken only after authorisation and
+  // released on the response's "close", including upstream failures and any
+  // early client disconnect while waiting for the stream headers.
+  let releaseStream = () => {};
+  if (matchesPrefix(path, "/v1/events/stream")) {
+    const key = streamBucket(req, decoded?.userId);
+    if (!acquireStreamSlot(key)) {
+      return reply.code(429).send({
+        error: "TOO_MANY_STREAMS",
+        message: "concurrent event stream limit reached",
+      });
+    }
+    let released = false;
+    releaseStream = () => {
+      if (released) return;
+      released = true;
+      releaseStreamSlot(key);
+    };
+    // ServerResponse "close" fires after ordinary responses finish and when a
+    // hijacked SSE socket goes away, so one hook covers every exit path.
+    reply.raw.once("close", releaseStream);
+  }
+
   const upstream = `http://${upstreamHost(target.service)}:${target.port}${parsed.pathname}${parsed.search}`;
   const init = { method: req.method, headers };
   if (req.body !== undefined) {
@@ -456,6 +561,12 @@ async function proxy(req, reply) {
     const res = await fetch(upstream, init);
     const contentType = res.headers.get("content-type") ?? "";
     const requestId = res.headers.get("x-request-id");
+    // Auth's cookie refresh flow relies on the exact HttpOnly Set-Cookie value
+    // surviving the proxy. Keep every value as a separate header: joining them
+    // with commas would corrupt Expires attributes.
+    const setCookies =
+      res.headers.getSetCookie?.() ??
+      (res.headers.get("set-cookie") ? [res.headers.get("set-cookie")] : []);
 
     // SSE responses never end, so buffering with res.text() would hang. Pipe
     // the upstream body straight to the client and let the socket close decide
@@ -476,6 +587,7 @@ async function proxy(req, reply) {
         vary: "Origin",
         ...(streamOrigin ? { "access-control-allow-origin": streamOrigin } : {}),
         ...(requestId ? { "x-request-id": requestId } : {}),
+        ...(setCookies.length ? { "set-cookie": setCookies } : {}),
       });
       const reader = res.body.getReader();
       const pump = async () => {
@@ -500,6 +612,7 @@ async function proxy(req, reply) {
           req.log.warn({ err }, "event stream closed");
         } finally {
           rawReply.end();
+          releaseStream();
         }
       };
       void pump();
@@ -514,8 +627,10 @@ async function proxy(req, reply) {
     reply.code(res.status);
     if (contentType) reply.header("content-type", contentType);
     if (requestId) reply.header("x-request-id", requestId);
+    if (setCookies.length) reply.header("set-cookie", setCookies);
     return reply.send(text);
   } catch (err) {
+    releaseStream();
     req.log.warn({ err, service: target.service }, "upstream request failed");
     // Do not reflect upstream/internal error details back to callers.
     return reply.code(503).send({

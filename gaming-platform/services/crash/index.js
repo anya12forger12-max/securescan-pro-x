@@ -20,8 +20,8 @@ import { ERROR_CODES, moneyMul, serviceTokenOk, toMoney } from "@gp/shared-types
  * never had. Rounds are provably fair: the SHA-256 hash of the server seed is
  * published before betting opens, and the seed plus its derived crash point
  * are revealed after the round finishes. Bets debit the wallet atomically and
- * cash-outs credit it with an idempotency key derived from the bet id, so an
- * ambiguous HTTP response can be replayed without paying twice.
+ * cash-outs credit it with an idempotency key derived from the persisted bet
+ * claim, so an ambiguous HTTP response can be replayed without paying twice.
  *
  * The only identity accepted from the browser is a signed player JWT. Internal
  * lifecycle calls require the crash-scoped capability token, and wallet /
@@ -266,6 +266,24 @@ const definitiveWalletRejection = (err) =>
   err.status >= 400 &&
   err.status < 500;
 
+/**
+ * Replay an idempotent wallet call after an ambiguous response. The factory is
+ * invoked again with the exact same request body, including its deterministic
+ * key: if the wallet committed the first time it returns that original
+ * transaction, otherwise the same key is applied at most once. A definitive
+ * rejection from the replay keeps its own class and HTTP status, so callers can
+ * still distinguish "did not happen" from "may have happened".
+ */
+async function walletIdempotent(request) {
+  try {
+    return await request();
+  } catch (err) {
+    if (!(err instanceof WalletAmbiguousError)) throw err;
+    app.log.warn({ err }, "wallet response ambiguous; replaying the same idempotency key");
+    return request();
+  }
+}
+
 /** Responsible gaming is the single source of truth for self-exclusion. Every
  * wager is gated on it and an unreachable/stale service fails closed, so an
  * excluded player cannot stake during an RG or network outage. */
@@ -292,22 +310,30 @@ async function wageringAllowed(userId, amount) {
   }
 }
 
-async function walletRequest(path, body, scopedTokenValue, attempt = 0) {
+async function walletRequest(path, body, scopedTokenValue) {
   // Send only the narrow capability for this call. Peer containers no longer
   // receive the full wallet token, so there is nothing to fall back to; a
   // compromised crash process cannot escalate to arbitrary credit/debit types.
-  const response = await fetchWithTimeout(
-    `${env.WALLET_INTERNAL_URL}${path}`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-service-token": scopedTokenValue,
+  let response;
+  try {
+    response = await fetchWithTimeout(
+      `${env.WALLET_INTERNAL_URL}${path}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-service-token": scopedTokenValue,
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    },
-    5000,
-  );
+      5000,
+    );
+  } catch (err) {
+    // A timeout or transport failure proves nothing: the wallet may have
+    // committed just before the socket died. Classify it as ambiguous so the
+    // caller replays the same claim instead of rolling back a real debit.
+    throw new WalletAmbiguousError(`wallet request failed: ${err.message}`, 0, err.code);
+  }
   const text = await response.text();
   let payload = null;
   let parseFailed = false;
@@ -326,8 +352,9 @@ async function walletRequest(path, body, scopedTokenValue, attempt = 0) {
       response.status,
       payload?.error?.code,
     );
-    if (response.status >= 500 && attempt < 2)
-      return walletRequest(path, body, scopedTokenValue, attempt + 1);
+    // Do not stack retries here: walletIdempotent() already replays the whole
+    // request once with the same key. Three attempts inside that replay used
+    // to hold the global serialized() lifecycle lock for ~30s per claim.
     throw err;
   }
   return payload?.data ?? payload;
@@ -338,39 +365,52 @@ async function walletRequest(path, body, scopedTokenValue, attempt = 0) {
 const debitToken = () => env.WALLET_DEBIT_SERVICE_TOKEN ?? env.WALLET_SERVICE_TOKEN;
 const winToken = () => env.WALLET_WIN_SERVICE_TOKEN ?? env.WALLET_SERVICE_TOKEN;
 
-const walletDebit = (userId, amount, roundId, betId) =>
-  walletRequest("/internal/wallet/debit", {
-    userId,
-    amount,
-    referenceType: "crash_bet",
-    referenceId: roundId,
-    idempotencyKey: `crash-debit-${betId}`,
-  }, debitToken());
+// A wallet key belongs to a persisted bet claim, never to an HTTP attempt.
+// Deriving it from crash_bets.idempotency_key (with the bet id as a fallback)
+// makes a replay of the same bet reuse the wallet transaction even across a
+// process restart, while a genuinely new bet in another round gets a new key.
+const BET_CLAIM_PREFIX = "crash-bet-";
+const walletClaimId = (bet) =>
+  typeof bet.idempotency_key === "string" && bet.idempotency_key.startsWith(BET_CLAIM_PREFIX)
+    ? bet.idempotency_key.slice(BET_CLAIM_PREFIX.length)
+    : bet.id;
+const debitKey = (bet) => `crash-debit-${walletClaimId(bet)}`;
+const creditKey = (bet) => `crash-credit-${walletClaimId(bet)}`;
+const refundKey = (bet) => `crash-refund-${walletClaimId(bet)}`;
 
-const walletCredit = (userId, amount, betId) =>
-  walletRequest("/internal/wallet/credit", {
-    userId,
-    amount,
+const walletDebit = (bet) =>
+  walletIdempotent(() => walletRequest("/internal/wallet/debit", {
+    userId: bet.user_id,
+    amount: Number(bet.amount),
+    referenceType: "crash_bet",
+    referenceId: bet.round_id,
+    idempotencyKey: debitKey(bet),
+  }, debitToken()));
+
+const walletCredit = (bet, payout = Number(bet.payout)) =>
+  walletIdempotent(() => walletRequest("/internal/wallet/credit", {
+    userId: bet.user_id,
+    amount: payout,
     type: "win",
     referenceType: "crash_bet",
-    referenceId: betId,
-    idempotencyKey: `crash-credit-${betId}`,
-  }, winToken());
+    referenceId: bet.id,
+    idempotencyKey: creditKey(bet),
+  }, winToken()));
 
 /** Duplicate/refunded stakes must not be booked as wins. Refunds are credits,
  * so they use the win capability with a distinct, idempotent key. The wallet
  * authorises the win token for type=adjustment only when referenceType is
  * 'crash_refund' and the key starts with 'crash-refund-' — all three are fixed
  * below, so the scoped token is safe to send here. */
-const walletRefund = (userId, amount, betId) =>
-  walletRequest("/internal/wallet/credit", {
-    userId,
-    amount,
+const walletRefund = (bet) =>
+  walletIdempotent(() => walletRequest("/internal/wallet/credit", {
+    userId: bet.user_id,
+    amount: Number(bet.amount),
     type: "adjustment",
     referenceType: "crash_refund",
-    referenceId: betId,
-    idempotencyKey: `crash-refund-${betId}`,
-  }, winToken());
+    referenceId: bet.id,
+    idempotencyKey: refundKey(bet),
+  }, winToken()));
 
 async function publish(topic, payload) {
   try {
@@ -478,6 +518,7 @@ async function startRound(id) {
 //   * a bet row exists before any wallet call, so every debit has a bet to
 //     reconcile against;
 //   * the round row is locked while reserving, so betting cannot close mid-insert;
+//   * a bet row is never replaced on retry, so its wallet keys stay stable;
 //   * all wallet keys are deterministic per bet, so retries never double-pay.
 // ---------------------------------------------------------------------------
 
@@ -496,11 +537,55 @@ async function reserveBet(roundId, userId, amount, autoCashout, sessionId) {
       await client.query("ROLLBACK");
       return { error: [409, ERROR_CODES.CONFLICT, "betting is closed for this round"] };
     }
-    // A previous attempt rejected for insufficient balance (or refunded) left
-    // a terminal row; removing it under the round lock lets the player retry.
-    await client.query(
-      `DELETE FROM crash_bets WHERE round_id = $1 AND user_id = $2
-        AND status IN ('cancelled','refunded')`, [roundId, userId]);
+    // A retry after an ambiguous response must reuse the original claim (and
+    // therefore its wallet keys). Never DELETE and re-INSERT here: a fresh bet
+    // id would give the wallet a fresh key and could book a second wager for
+    // a debit that had already committed.
+    const existing = await client.query(
+      `SELECT * FROM crash_bets WHERE round_id = $1 AND user_id = $2 FOR UPDATE`,
+      [roundId, userId],
+    );
+    if (existing.rowCount) {
+      const prior = existing.rows[0];
+      if (prior.status === "pending") {
+        await client.query("COMMIT");
+        return { bet: prior, retry: true };
+      }
+      if (prior.status === "cancelled") {
+        // A definitive rejection recorded no debit. Reusing the same row lets
+        // a player retry after topping up without minting another wallet key,
+        // but that key is frozen to the stored economics: accepting a changed
+        // amount/target/session would charge the new stake against the old key.
+        const priorAuto = prior.auto_cashout === null ? null : Number(prior.auto_cashout);
+        const wantedAuto = autoCashout ?? null;
+        if (
+          Number(prior.amount) !== amount ||
+          priorAuto !== wantedAuto ||
+          (prior.session_id ?? null) !== (sessionId ?? null)
+        ) {
+          await client.query("COMMIT");
+          return {
+            error: [
+              409,
+              ERROR_CODES.CONFLICT,
+              "stake details changed; retry with the original amount and target",
+            ],
+          };
+        }
+        const revived = await client.query(
+          `UPDATE crash_bets SET status = 'pending', settled_at = NULL
+            WHERE id = $1 AND status = 'cancelled' RETURNING *`, [prior.id]);
+        await client.query("COMMIT");
+        if (revived.rowCount) return { bet: revived.rows[0], retry: true };
+      }
+      await client.query("COMMIT");
+      // A refunded stake was already returned; reactivating it would be a free
+      // bet, and inserting a new claim would duplicate the net-zero ledger pair.
+      const message = prior.status === "refunded"
+        ? "stake was refunded; betting is closed"
+        : "already bet on this round";
+      return { error: [409, ERROR_CODES.CONFLICT, message] };
+    }
     const betId = randomUUID();
     const inserted = await client.query(
       `INSERT INTO crash_bets
@@ -511,11 +596,13 @@ async function reserveBet(roundId, userId, amount, autoCashout, sessionId) {
         autoCashout === undefined ? null : autoCashout.toFixed(2), `crash-bet-${betId}`],
     );
     if (!inserted.rowCount) {
-      // A retry after an ambiguous debit may reuse its still-pending row.
-      const existing = await client.query(
-        `SELECT * FROM crash_bets WHERE round_id = $1 AND user_id = $2`, [roundId, userId]);
+      // A concurrent request won the insert race; read its committed claim.
+      const winner = await client.query(
+        `SELECT * FROM crash_bets WHERE round_id = $1 AND user_id = $2 FOR UPDATE`,
+        [roundId, userId],
+      );
       await client.query("COMMIT");
-      const prior = existing.rows[0];
+      const prior = winner.rows[0];
       if (prior?.status === "pending") return { bet: prior, retry: true };
       return { error: [409, ERROR_CODES.CONFLICT, "already bet on this round"] };
     }
@@ -553,10 +640,11 @@ async function refundBet(bet, { ensureDebit = true } = {}) {
   try {
     if (ensureDebit) {
       // A pending bet may have been abandoned before the wallet call. Replay
-      // the idempotent debit first so a refund can never mint new credits.
-      await walletDebit(bet.user_id, Number(bet.amount), bet.round_id, bet.id);
+      // the debit with this bet's deterministic key first so a refund can
+      // never mint new credits or create a second net-zero tx pair on retry.
+      await walletDebit(bet);
     }
-    await walletRefund(bet.user_id, Number(bet.amount), bet.id);
+    await walletRefund(bet);
     await pool.query(
       `UPDATE crash_bets SET status = 'refunded', settled_at = now()
         WHERE id = $1 AND status IN ('pending','active','cancelled')`,
@@ -582,7 +670,7 @@ async function reconcileUnsettled() {
         await refundBet(bet);
         continue;
       }
-      await walletDebit(bet.user_id, Number(bet.amount), bet.round_id, bet.id);
+      await walletDebit(bet);
       const activation = await activateReservedBet(bet);
       if (activation.error) await refundBet(bet);
     } catch (err) {
@@ -596,6 +684,31 @@ async function reconcileUnsettled() {
       }
     }
   }
+  // Migration 0010 cancels older live rounds directly in SQL, so their already
+  // debited `active` bets never pass through cancelRound()'s refund loop and
+  // can no longer be cashed out (the round is no longer running). Sweep them
+  // with the same deterministic refund claim instead of leaving stakes stuck.
+  const cancelledRoundBets = await pool.query(
+    `SELECT b.* FROM crash_bets b
+       JOIN crash_rounds r ON r.id = b.round_id
+      WHERE r.status = 'cancelled' AND b.status IN ('pending','active')`,
+  );
+  for (const bet of cancelledRoundBets.rows) {
+    try {
+      await refundBet(bet);
+    } catch (err) {
+      if (definitiveWalletRejection(err) && err.status === 409) {
+        // No debit was ever recorded for this pending claim: close it without
+        // minting a refund credit.
+        await pool.query(
+          `UPDATE crash_bets SET status = 'cancelled', settled_at = now()
+            WHERE id = $1 AND status = 'pending'`, [bet.id]);
+      } else {
+        app.log.warn({ err, betId: bet.id }, "cancelled round bet kept for refund reconciliation");
+      }
+    }
+  }
+
   const cashing = await pool.query(`SELECT * FROM crash_bets WHERE status = 'cashing_out'`);
   for (const bet of cashing.rows) {
     try {
@@ -615,7 +728,7 @@ async function finalizeCashout(bet) {
   const multiplier = Number(bet.cashout_at);
   if (!Number.isFinite(payout) || payout <= 0 || !Number.isFinite(multiplier))
     throw new Error(`incomplete cash-out claim for bet ${bet.id}`);
-  await walletCredit(bet.user_id, payout, bet.id);
+  await walletCredit(bet, payout);
   const settled = await pool.query(
     `UPDATE crash_bets SET status = 'cashed_out', settled_at = now()
       WHERE id = $1 AND status = 'cashing_out' RETURNING id`,
@@ -992,9 +1105,11 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
   let bet = reserved.bet;
 
   try {
-    // Use the STORED amount, not the request body: a retry cannot change the
-    // stake it is reconciling.
-    await walletDebit(userId, Number(bet.amount), round.id, bet.id);
+    // Use the STORED claim, not the request body: a replay cannot change the
+    // stake, wallet key or identity it is reconciling. walletDebit retries an
+    // ambiguous response with this same key, so a committed debit is returned
+    // as the original wallet transaction instead of being booked again.
+    await walletDebit(bet);
   } catch (err) {
     if (definitiveWalletRejection(err)) {
       // Definitive rejection: no debit happened, so no refund is needed.
@@ -1009,7 +1124,7 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
       503,
       ERROR_CODES.SERVICE_UNAVAILABLE,
       "bet is pending; retry this request to reconcile",
-      { idempotencyKey: `crash-debit-${bet.id}`, betId: bet.id, ambiguous: true },
+      { idempotencyKey: debitKey(bet), betId: bet.id, ambiguous: err instanceof WalletAmbiguousError },
     );
   }
 
@@ -1045,7 +1160,7 @@ app.post("/v1/crash/rounds/:id/cashout", async (req, reply) => {
   if (!userId)
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
   let payout;
-  let pendingBetId = null;
+  let pendingBet = null;
   try {
     payout = await serialized(async () => {
       const roundResult = await pool.query(`SELECT * FROM crash_rounds WHERE id = $1`, [req.params.id]);
@@ -1057,7 +1172,7 @@ app.post("/v1/crash/rounds/:id/cashout", async (req, reply) => {
       );
       const bet = betResult.rows[0];
       if (!bet) return { error: [404, ERROR_CODES.NOT_FOUND, "no bet on this round"] };
-      pendingBetId = bet.id;
+      pendingBet = bet;
       // An interrupted credit can be finalized even after the round ends.
       if (bet.status === "cashing_out") {
         const value = await finalizeCashout(bet);
@@ -1086,8 +1201,8 @@ app.post("/v1/crash/rounds/:id/cashout", async (req, reply) => {
       ERROR_CODES.SERVICE_UNAVAILABLE,
       "cash-out could not be confirmed; retry this request to reconcile",
       {
-        idempotencyKey: pendingBetId ? `crash-credit-${pendingBetId}` : null,
-        betId: pendingBetId,
+        idempotencyKey: pendingBet ? creditKey(pendingBet) : null,
+        betId: pendingBet?.id ?? null,
         ambiguous: err instanceof WalletAmbiguousError,
       },
     );

@@ -132,11 +132,19 @@ const initialState: ContextDataType = {
 
 const Context = React.createContext<ContextType>(null!);
 
-function persist(token: string | null, refreshToken: string | null) {
-  if (token) localStorage.setItem(config.tokenKey, token);
-  else localStorage.removeItem(config.tokenKey);
-  if (refreshToken) localStorage.setItem(config.refreshKey, refreshToken);
-  else localStorage.removeItem(config.refreshKey);
+/** Older builds wrote tokens to web storage. Delete those keys once at
+ * startup (and on sign-out) so no long-lived credential is left behind;
+ * current sessions keep only an in-memory access token and an HttpOnly cookie. */
+function clearLegacyTokens() {
+  try {
+    localStorage.removeItem(config.legacyTokenKey);
+    localStorage.removeItem(config.legacyRefreshKey);
+    sessionStorage.removeItem(config.legacyTokenKey);
+    sessionStorage.removeItem(config.legacyRefreshKey);
+  } catch {
+    // Storage may be unavailable (privacy mode / blocked cookies); in-memory
+    // auth still works, so never fail a session over cleanup.
+  }
 }
 
 /** Keep the api client's 15s timeout while allowing an identity change to
@@ -170,6 +178,34 @@ function scopedSignal(scope: AbortSignal | undefined): {
   };
 }
 
+/** Upstream game endpoints use database field names. Normalise them once so
+ * the board components can rely on a single client-side shape. */
+function normalizeCodenames(raw: CodenamesGame): CodenamesGame {
+  const server = raw as CodenamesGame & { current_team?: string };
+  return { ...server, turn: server.turn ?? server.current_team };
+}
+
+function normalizeGinRummy(raw: GinRummyGame, userId?: string | null): GinRummyGame {
+  const server = raw as GinRummyGame & {
+    current_turn?: string | null;
+    player1_hand?: string[];
+    player2_hand?: string[];
+    discard_pile?: string[];
+  };
+  const hand =
+    userId && userId === server.player1_id
+      ? server.player1_hand
+      : userId && userId === server.player2_id
+        ? server.player2_hand
+        : undefined;
+  return {
+    ...server,
+    turn_user_id: server.turn_user_id ?? server.current_turn ?? null,
+    hand: hand ?? server.hand,
+    discard: server.discard ?? server.discard_pile,
+  };
+}
+
 type StatePatch = Partial<ContextDataType> | ((prev: ContextDataType) => Partial<ContextDataType>);
 
 export const Provider = ({ children }: { children: React.ReactNode }) => {
@@ -184,12 +220,18 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
   // previous session cannot repopulate state after sign-out or account switch.
   const authGenerationRef = useRef(0);
   const lastSeqRef = useRef(0);
-  const refreshPromiseRef = useRef<Promise<string | null> | null>(null);
+  const refreshPromiseRef = useRef<Promise<AuthData | null> | null>(null);
+  // Every cookie-affecting auth call is queued. The browser applies Set-Cookie
+  // in response order, so a refresh landing after logout must never be able to
+  // restore a session the user just ended (or overwrite a new account).
+  const authQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const identityEstablishedRef = useRef(true);
   const loadAbortRef = useRef<AbortController | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
-  // Assigned once loadCrash is defined so the event stream can request an
+  // Assigned once the loaders are defined so the event stream can request an
   // authoritative refresh without capturing a stale closure.
   const crashRefreshRef = useRef<() => void>(() => undefined);
+  const dashboardRefreshRef = useRef<() => void>(() => undefined);
 
   // tokenRef is written only by identity transitions and token rotation above;
   // it is deliberately not mirrored from state.token, because a state commit
@@ -220,15 +262,6 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     [isCurrent],
   );
 
-  /** All localStorage writes go through the same scope check. */
-  const persistIfCurrent = useCallback(
-    (token: string | null, generation: number, access: string | null, refresh: string | null) => {
-      if (!isCurrent(token, generation)) return;
-      persist(access, refresh);
-    },
-    [isCurrent],
-  );
-
   /** Begin a new identity epoch: invalidate every in-flight loader, reset the
    * event cursor and cancel the previous stream before the new state is set. */
   const invalidateIdentity = useCallback((token: string | null) => {
@@ -255,6 +288,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
 
   const setIdentity = useCallback(
     (token: string | null, user: User | null) => {
+      if (token) identityEstablishedRef.current = true;
       const generation = invalidateIdentity(token);
       resetState(token, user, generation);
       return generation;
@@ -262,35 +296,50 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     [invalidateIdentity, resetState],
   );
 
-  /** Rotate the 15-minute access token with the durable refresh token. One
-   * shared promise prevents parallel 401s from racing the single-use token.
+  /** Serialise cookie-affecting requests. A rotation already in flight is
+   * awaited before login/logout starts, and later callers queue behind it. */
+  const serializeAuth = useCallback(<T,>(action: () => Promise<T>): Promise<T> => {
+    const result = authQueueRef.current.then(action);
+    authQueueRef.current = result.catch(() => undefined);
+    return result;
+  }, []);
+
+  /** Rotate the 15-minute access token with the HttpOnly refresh cookie. One
+   * shared promise prevents parallel 401s from racing the single-use cookie.
    * The generation captured at start is rechecked before every write so a
    * sign-out or a new login during the request cannot be undone by it. */
-  const refreshSession = useCallback((): Promise<string | null> => {
+  const refreshSession = useCallback((): Promise<AuthData | null> => {
+    // After sign-out no new rotation may be issued: it would set a fresh
+    // cookie after logout's Max-Age=0 response and silently sign back in.
+    if (!identityEstablishedRef.current) return Promise.resolve(null);
     if (refreshPromiseRef.current) return refreshPromiseRef.current;
-    const refreshToken = localStorage.getItem(config.refreshKey);
-    if (!refreshToken) return Promise.resolve(null);
     const token = identityRef.current;
     const generation = authGenerationRef.current;
 
-    const pending: Promise<string | null> = apiRequest<AuthData>("/auth/refresh", {
-      method: "POST",
-      body: { refresh_token: refreshToken },
-    })
+    const pending: Promise<AuthData | null> = serializeAuth(() =>
+      apiRequest<AuthData>("/auth/refresh", {
+        method: "POST",
+        credentials: "include",
+      }),
+    )
       .then((data) => {
         if (!isCurrent(token, generation)) return null;
-        persistIfCurrent(token, generation, data.token, data.refresh_token);
         // Token rotation is not an identity change: keep identityRef, the
-        // generation and the event cursor, only rotate the access token.
+        // generation and the event cursor, only rotate the in-memory token.
         tokenRef.current = data.token;
         updateIfCurrent(token, generation, { token: data.token, user: data.user });
-        return data.token;
+        return data;
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (!isCurrent(token, generation)) return null;
-        const cleared = invalidateIdentity(null);
-        persistIfCurrent(null, cleared, null, null);
-        resetState(null, null, cleared);
+        // Only an explicit invalid/expired credential ends the session. A
+        // 429, 5xx or transport failure must not turn a still-valid cookie
+        // into a phantom sign-out that a reload would immediately undo.
+        if (err instanceof ApiError && (err.status === 400 || err.status === 401)) {
+          identityEstablishedRef.current = false;
+          const cleared = invalidateIdentity(null);
+          resetState(null, null, cleared);
+        }
         return null;
       })
       .finally(() => {
@@ -298,7 +347,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       });
     refreshPromiseRef.current = pending;
     return pending;
-  }, [invalidateIdentity, isCurrent, persistIfCurrent, resetState, updateIfCurrent]);
+  }, [invalidateIdentity, isCurrent, resetState, serializeAuth, updateIfCurrent]);
 
   const call = useCallback(
     async <T,>(path: string, init: RequestOptions = {}): Promise<T> => {
@@ -323,7 +372,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
         if (!(err instanceof ApiError && err.status === 401) || path.startsWith("/auth/")) throw err;
         const refreshed = await refreshSession();
         if (!refreshed) throw err;
-        return request(refreshed);
+        return request(refreshed.token);
       }
     },
     [refreshSession],
@@ -352,43 +401,18 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     [isCurrent],
   );
 
-  // Restore the session the same way the Aviator client reads its `cert`
-  // query parameter, but from durable storage and with server verification.
+  // Restore a session on load with the HttpOnly refresh cookie only: there is
+  // no access token in web storage to verify or replay. Legacy token keys are
+  // deleted here so credentials from earlier builds cannot linger.
   useEffect(() => {
     let cancelled = false;
     const generation = authGenerationRef.current;
-    const stored = localStorage.getItem(config.tokenKey);
-    if (!stored) {
-      update({ ready: true });
-      return;
-    }
+    clearLegacyTokens();
     void (async () => {
       try {
-        const data = await apiRequest<{ user: User }>("/auth/me", { token: stored });
-        if (cancelled || !isCurrent(null, generation)) return;
-        setIdentity(stored, data.user);
-        return;
-      } catch (err) {
-        if (cancelled || !isCurrent(null, generation)) return;
-        // A stale access token is normal after 15 minutes; the 30-day refresh
-        // token should keep the session alive instead of forcing a new login.
-        if (err instanceof ApiError && err.status === 401) {
-          const refreshed = await refreshSession();
-          if (cancelled || !isCurrent(null, generation)) return;
-          if (refreshed) {
-            try {
-              const me = await apiRequest<{ user: User }>("/auth/me", { token: refreshed });
-              if (!cancelled && isCurrent(null, generation)) setIdentity(refreshed, me.user);
-              return;
-            } catch {
-              // Fall through and clear the unusable session.
-            }
-          }
-        }
-        if (!isCurrent(null, generation)) return;
-        const cleared = invalidateIdentity(null);
-        persistIfCurrent(null, cleared, null, null);
-        resetState(null, null, cleared);
+        const data = await refreshSession();
+        if (cancelled || !isCurrent(null, generation) || !data) return;
+        setIdentity(data.token, data.user);
       } finally {
         if (!cancelled && isCurrent(null, generation)) update({ ready: true });
       }
@@ -396,7 +420,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     return () => {
       cancelled = true;
     };
-  }, [invalidateIdentity, isCurrent, persistIfCurrent, refreshSession, resetState, setIdentity, update]);
+  }, [isCurrent, refreshSession, setIdentity, update]);
 
   // Durable event stream. Fetch is used instead of EventSource because the
   // gateway requires an Authorization header on every event request.
@@ -467,10 +491,25 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
           while (split >= 0) {
             const frame = buffer.slice(0, split);
             buffer = buffer.slice(split + 2);
-            const line = frame.split("\n").find((item) => item.startsWith("data:"));
+            const frameLines = frame.split("\n");
+            const eventName = frameLines.find((item) => item.startsWith("event:"))?.slice(6).trim();
+            const line = frameLines.find((item) => item.startsWith("data:"));
             if (line) {
               try {
-                const event = JSON.parse(line.slice(5).trim()) as RealtimeEvent;
+                const event = JSON.parse(line.slice(5).trim()) as RealtimeEvent & {
+                  resync_required?: boolean;
+                };
+                // A retention gap is a control frame, not an event: it has no
+                // sequence and must not be dropped by the cursor check. Reload
+                // authoritative state so the hole cannot linger unnoticed.
+                if (eventName === "gap" || event.resync_required === true) {
+                  toast.warn("Event history gap - refreshing live data");
+                  if (stillCurrent()) {
+                    crashRefreshRef.current();
+                    dashboardRefreshRef.current();
+                  }
+                  continue;
+                }
                 const seq = Number(event.seq);
                 if (Number.isFinite(seq) && seq > lastSeqRef.current) {
                   lastSeqRef.current = seq;
@@ -522,19 +561,24 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     // A sign-out or account switch may have happened while these requests were
     // in flight. Never write a previous user's data into the current session.
     if (!isCurrent(token, generation)) return;
-    updateIfCurrent(token, generation, {
-      balance: balance.status === "fulfilled" ? balance.value.account.balance : "0.00",
-      myBets: transactions.status === "fulfilled" ? transactions.value.items : [],
-      rooms: rooms.status === "fulfilled" ? rooms.value.rooms : [],
-      promotions: promotions.status === "fulfilled" ? promotions.value.items : [],
-      tournaments: tournaments.status === "fulfilled" ? tournaments.value.items : [],
-    });
+    // A failed request says nothing about the user's actual balance or data.
+    // Keep the last known values instead of presenting an outage as zero.
+    updateIfCurrent(token, generation, (prev) => ({
+      balance: balance.status === "fulfilled" ? balance.value.account.balance : prev.balance,
+      myBets: transactions.status === "fulfilled" ? transactions.value.items : prev.myBets,
+      rooms: rooms.status === "fulfilled" ? rooms.value.rooms : prev.rooms,
+      promotions: promotions.status === "fulfilled" ? promotions.value.items : prev.promotions,
+      tournaments: tournaments.status === "fulfilled" ? tournaments.value.items : prev.tournaments,
+    }));
     if (rooms.status === "fulfilled" && rooms.value.rooms.length) {
       const room = rooms.value.rooms[0].name;
       const messages = await call<{ messages: ChatMessage[] }>(
         `/chat/rooms/${encodeURIComponent(room)}/messages?limit=50`,
-      ).catch(() => ({ messages: [] }));
-      updateIfCurrent(token, generation, { room, messages: messages.messages });
+      ).catch(() => null);
+      updateIfCurrent(token, generation, (prev) => ({
+        room,
+        messages: messages ? messages.messages : prev.messages,
+      }));
     }
   }, [call, isCurrent, updateIfCurrent]);
 
@@ -544,79 +588,82 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
 
   const applyAuth = useCallback(
     async (data: AuthData) => {
+      identityEstablishedRef.current = true;
       const generation = invalidateIdentity(data.token);
-      persistIfCurrent(data.token, generation, data.token, data.refresh_token);
       resetState(data.token, data.user, generation);
       await loadDashboard();
     },
-    [invalidateIdentity, loadDashboard, persistIfCurrent, resetState],
+    [invalidateIdentity, loadDashboard, resetState],
   );
 
   const signUp = useCallback(
     async (username: string, email: string, password: string) => {
       const generation = authGenerationRef.current;
-      const ok = await guard("Register", async () => {
-        await call("/auth/register", { method: "POST", body: { username, email, password } });
-        return call<AuthData>("/auth/login", {
-          method: "POST",
-          body: { identifier: username, password },
-        });
-      });
+      const ok = await guard("Register", () =>
+        serializeAuth(async () => {
+          await call("/auth/register", { method: "POST", body: { username, email, password } });
+          return call<AuthData>("/auth/login", {
+            method: "POST",
+            credentials: "include",
+            body: { identifier: username, password },
+          });
+        }),
+      );
       if (!ok || authGenerationRef.current !== generation) return false;
       await applyAuth(ok as AuthData);
       toast.success("Account created");
       return true;
     },
-    [applyAuth, call, guard],
+    [applyAuth, call, guard, serializeAuth],
   );
 
   const signIn = useCallback(
     async (identifier: string, password: string) => {
       const generation = authGenerationRef.current;
       const data = await guard("Sign in", () =>
-        call<AuthData>("/auth/login", { method: "POST", body: { identifier, password } }),
+        serializeAuth(() =>
+          call<AuthData>("/auth/login", {
+            method: "POST",
+            credentials: "include",
+            body: { identifier, password },
+          }),
+        ),
       );
       if (!data || authGenerationRef.current !== generation) return false;
       await applyAuth(data as AuthData);
       toast.success("Signed in");
       return true;
     },
-    [applyAuth, call, guard],
+    [applyAuth, call, guard, serializeAuth],
   );
 
   const signOut = useCallback(async () => {
     // Bump before any await so an in-flight refresh or loader immediately
     // becomes stale, even if the logout request is slow or never resolves.
     const generation = invalidateIdentity(null);
-    // Send the refresh token so the server revokes it too; clearing only local
-    // storage would leave a 30-day credential usable by anyone who copied it.
-    const refreshToken = localStorage.getItem(config.refreshKey);
-    // Drop credentials up front so no new refresh can be started from the
-    // token we are in the middle of revoking, and stop rendering the outgoing
-    // user's data while the network request is still in flight.
-    persistIfCurrent(null, generation, null, null);
+    identityEstablishedRef.current = false;
+    // Drop the in-memory token up front and stop rendering the outgoing user's
+    // data while the network request is still in flight.
+    clearLegacyTokens();
     resetState(null, null, generation);
-    const pendingRefresh = refreshPromiseRef.current;
-    refreshPromiseRef.current = null;
-    // Start revocation now; a slow refresh must not delay it.
-    const logout = refreshToken
-      ? apiRequest("/auth/logout", {
-          method: "POST",
-          body: { refresh_token: refreshToken },
-        }).catch(() => undefined)
-      : Promise.resolve();
+    // The logout must be the last cookie write. serializeAuth drains any
+    // refresh in flight first and queues later logins behind the revocation;
+    // the backend also revokes the whole token family for defense in depth.
     try {
-      if (pendingRefresh) await pendingRefresh.catch(() => null);
-      await logout;
+      await serializeAuth(() =>
+        apiRequest("/auth/logout", { method: "POST", credentials: "include" }).catch(
+          () => undefined,
+        ),
+      );
     } finally {
       // A new sign-in during logout owns the generation now; never clear its
-      // freshly persisted token or state.
+      // fresh token or state.
       if (!isCurrent(null, generation)) return;
-      persistIfCurrent(null, generation, null, null);
+      clearLegacyTokens();
       resetState(null, null, generation);
       toast.info("Signed out");
     }
-  }, [invalidateIdentity, isCurrent, persistIfCurrent, resetState]);
+  }, [invalidateIdentity, isCurrent, resetState, serializeAuth]);
 
   const createSession = useCallback(
     async (kind: GameKind) => {
@@ -681,16 +728,25 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       const result = await guard("Load game", () => call<Record<string, unknown>>(paths[kind]));
       if (!result || !isCurrent(token, generation)) return;
       const data = result as Record<string, unknown>;
-      if (kind === "codenames") patch.codenames = data.game as CodenamesGame;
-      if (kind === "gin-rummy") patch.ginRummy = data.game as GinRummyGame;
-      if (kind === "pictionary") patch.pictionary = data.round as PictionaryRound;
+      if (kind === "codenames") patch.codenames = normalizeCodenames(data.game as CodenamesGame);
+      if (kind === "gin-rummy")
+        patch.ginRummy = normalizeGinRummy(data.game as GinRummyGame, state.user?.id);
+      if (kind === "pictionary") {
+        const round = data.round as PictionaryRound;
+        // Guesses are a sibling of `round` in the service response; copying
+        // only the round used to make every submitted guess invisible.
+        patch.pictionary = {
+          ...round,
+          guesses: (data.guesses ?? round.guesses ?? []) as PictionaryRound["guesses"],
+        };
+      }
       if (kind === "crash") {
         const round = data.round as CrashRound;
         patch.crash = { round, myBet: (data.myBet as CrashBet) ?? null, history: state.crash.history };
       }
       updateIfCurrent(token, generation, patch);
     },
-    [call, guard, isCurrent, state.crash.history, updateIfCurrent],
+    [call, guard, isCurrent, state.crash.history, state.user?.id, updateIfCurrent],
   );
 
   const createCodenames = useCallback(
@@ -707,7 +763,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       if (result) {
         updateIfCurrent(token, generation, {
           gameKind: "codenames",
-          codenames: result.game,
+          codenames: normalizeCodenames(result.game),
           gameId: result.game.id,
         });
       }
@@ -771,12 +827,12 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       if (result) {
         updateIfCurrent(token, generation, {
           gameKind: "gin-rummy",
-          ginRummy: result.game,
+          ginRummy: normalizeGinRummy(result.game, state.user?.id),
           gameId: result.game.id,
         });
       }
     },
-    [call, guard, updateIfCurrent],
+    [call, guard, state.user?.id, updateIfCurrent],
   );
 
   const joinGinRummy = useCallback(
@@ -790,12 +846,12 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       if (result) {
         updateIfCurrent(token, generation, {
           gameKind: "gin-rummy",
-          ginRummy: result.game,
+          ginRummy: normalizeGinRummy(result.game, state.user?.id),
           gameId: result.game.id,
         });
       }
     },
-    [call, guard, updateIfCurrent],
+    [call, guard, state.user?.id, updateIfCurrent],
   );
 
   const ginMove = useCallback(
@@ -809,9 +865,12 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
           body,
         }),
       )) as { game: GinRummyGame } | null;
-      if (result) updateIfCurrent(token, generation, { ginRummy: result.game });
+      if (result)
+        updateIfCurrent(token, generation, {
+          ginRummy: normalizeGinRummy(result.game, state.user?.id),
+        });
     },
-    [call, guard, updateIfCurrent],
+    [call, guard, state.user?.id, updateIfCurrent],
   );
 
   const drawGinRummy = useCallback(
@@ -984,22 +1043,31 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     ]);
     if (!isCurrent(token, generation)) return;
     const round = current.status === "fulfilled" ? current.value.round : null;
-    let myBet: CrashBet | null = null;
-    if (round) {
+    let myBet: CrashBet | null | undefined;
+    if (current.status === "fulfilled" && round) {
       const detail = await call<{ myBet: CrashBet | null }>(`/crash/rounds/${round.id}`).catch(
         () => null,
       );
       if (!isCurrent(token, generation)) return;
       myBet = detail?.myBet ?? null;
     }
-    updateIfCurrent(token, generation, {
-      crash: {
-        round,
-        myBet,
-        history: history.status === "fulfilled" ? history.value.items : [],
-      },
+    // A failed poll is not authoritative state. Keep the last known round,
+    // bet and history rather than showing a fabricated "no flight" screen.
+    updateIfCurrent(token, generation, (prev) => {
+      if (current.status === "rejected") return {};
+      return {
+        crash: {
+          round: round ?? null,
+          myBet: myBet === undefined ? prev.crash.myBet : myBet,
+          history: history.status === "fulfilled" ? history.value.items : prev.crash.history,
+        },
+      };
     });
   }, [call, isCurrent, updateIfCurrent]);
+
+  useEffect(() => {
+    dashboardRefreshRef.current = () => void loadDashboard();
+  }, [loadDashboard]);
 
   useEffect(() => {
     crashRefreshRef.current = () => void loadCrash();

@@ -35,8 +35,44 @@ const envSchema = baseEnvSchema.extend({
 const env = loadEnv(envSchema);
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 
+// The browser talks to the gateway over the configured origin. Origins are
+// normalised once so `http://localhost:3000/` behaves exactly like the bare
+// form for both CORS and the cookie's Secure decision.
+const CORS_ORIGINS = env.CORS_ORIGIN.split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+  .map((value) => {
+    try {
+      const url = new URL(value);
+      if (
+        (url.protocol === "http:" || url.protocol === "https:") &&
+        !url.username &&
+        !url.password &&
+        url.pathname === "/" &&
+        !url.search &&
+        !url.hash
+      )
+        return url.origin;
+    } catch {
+      // Keep the raw value; an invalid origin must not widen the allow-list.
+    }
+    return value;
+  });
+const REFRESH_COOKIE = "gp_refresh_token";
+const REFRESH_COOKIE_PATH = "/v1/auth";
+const REFRESH_COOKIE_MAX_AGE = env.REFRESH_TTL_DAYS * 24 * 60 * 60;
+const isSecureOrigin = (value) => /^https:\/\//i.test(value);
+/** Decide Secure from the origin actually making the request. Deriving it from
+ * the whole allow-list with `.some()` would set Secure on a local http client
+ * whenever any unrelated https origin was configured, making refresh impossible. */
+const refreshCookieSecure = (req) => {
+  const origin = headerString(req.headers, "origin");
+  if (origin && CORS_ORIGINS.includes(origin)) return isSecureOrigin(origin);
+  return CORS_ORIGINS.length > 0 && CORS_ORIGINS.every(isSecureOrigin);
+};
+
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
-await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
+await app.register(cors, { origin: CORS_ORIGINS });
 await app.register(jwt, { secret: env.JWT_ACCESS_SECRET });
 registerErrorHandler(app);
 
@@ -106,12 +142,57 @@ const mintAccessToken = (user) =>
 
 const hashRefreshToken = (token) => createHash("sha256").update(token).digest("hex");
 
-async function issueRefreshToken(executor, userId) {
+// Refresh tokens travel in an HttpOnly cookie for browser clients. The cookie
+// is scoped to /v1/auth so it is never attached to ordinary game API calls.
+const serializeRefreshCookie = (token, maxAge, secure) =>
+  [
+    `${REFRESH_COOKIE}=${encodeURIComponent(token)}`,
+    `Max-Age=${maxAge}`,
+    `Path=${REFRESH_COOKIE_PATH}`,
+    "HttpOnly",
+    "SameSite=Strict",
+    ...(secure ? ["Secure"] : []),
+  ].join("; ");
+const setRefreshCookie = (reply, token, req) =>
+  reply.header(
+    "set-cookie",
+    serializeRefreshCookie(token, REFRESH_COOKIE_MAX_AGE, refreshCookieSecure(req)),
+  );
+const clearRefreshCookie = (reply, req) =>
+  reply.header("set-cookie", serializeRefreshCookie("", 0, refreshCookieSecure(req)));
+
+/** Cookie first: a browser must never fall back to an attacker-supplied body
+ * token while it has a refresh cookie. Body tokens remain available only to
+ * non-browser clients that have no cookie at all. */
+function requestRefreshToken(req) {
+  const header = headerString(req.headers, "cookie");
+  if (header) {
+    for (const part of header.split(";")) {
+      const separator = part.indexOf("=");
+      if (separator < 0 || part.slice(0, separator).trim() !== REFRESH_COOKIE) continue;
+      const raw = part.slice(separator + 1).trim();
+      if (!raw) return null;
+      try {
+        return decodeURIComponent(raw);
+      } catch {
+        return raw;
+      }
+    }
+    // A cookie header exists but carries no refresh cookie: fall through to
+    // the body so legacy non-browser clients keep working.
+  }
+  return null;
+}
+
+/** Every login starts a family; rotation keeps the family id. Sign-out revokes
+ * the whole family so a concurrently rotated token cannot survive logout. */
+async function issueRefreshToken(executor, userId, familyId = randomUUID()) {
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + env.REFRESH_TTL_DAYS * 24 * 60 * 60 * 1000);
   await executor.query(
-    `INSERT INTO auth_refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
-    [userId, hashRefreshToken(token), expiresAt],
+    `INSERT INTO auth_refresh_tokens (user_id, token_hash, expires_at, family_id)
+     VALUES ($1, $2, $3, $4)`,
+    [userId, hashRefreshToken(token), expiresAt, familyId],
   );
   return token;
 }
@@ -124,10 +205,11 @@ const publicUser = (row) => ({
   created_at: row.created_at,
 });
 
-function authData(user, refreshToken) {
+function authData(user) {
+  // Never include the refresh token here: it lives only in the HttpOnly cookie
+  // and must be unreachable from JavaScript (and from XSS).
   return {
     token: mintAccessToken(user),
-    refresh_token: refreshToken,
     token_type: "Bearer",
     expires_in: env.JWT_EXPIRES_IN,
     user: publicUser(user),
@@ -150,7 +232,9 @@ const LoginSchema = z.object({
   identifier: z.string().min(1),
   password: z.string().min(1),
 });
-const RefreshSchema = z.object({ refresh_token: z.string().min(1) });
+// A body token is accepted only from clients that cannot use cookies. Browser
+// clients send no body at all and rely on the HttpOnly refresh cookie.
+const RefreshSchema = z.object({ refresh_token: z.string().min(1).optional() });
 
 // ---------------------------------------------------------------------------
 // Routes
@@ -203,7 +287,8 @@ app.post("/v1/auth/login", async (req, reply) => {
 
     await pool.query(`UPDATE auth_users SET last_login_at = now() WHERE id = $1`, [row.id]);
     const refreshToken = await issueRefreshToken(pool, row.id);
-    return ok(reply, 200, authData(row, refreshToken), reqId(req));
+    setRefreshCookie(reply, refreshToken, req);
+    return ok(reply, 200, authData(row), reqId(req));
   } catch (err) {
     req.log.error({ err }, "login failed");
     return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "login failed");
@@ -211,15 +296,20 @@ app.post("/v1/auth/login", async (req, reply) => {
 });
 
 app.post("/v1/auth/refresh", async (req, reply) => {
-  const parsed = RefreshSchema.safeParse(req.body);
+  const parsed = RefreshSchema.safeParse(req.body ?? {});
   if (!parsed.success) return validationError(reply, parsed);
 
-  const tokenHash = hashRefreshToken(parsed.data.refresh_token);
+  const cookieToken = requestRefreshToken(req);
+  const refreshTokenInput = cookieToken ?? parsed.data.refresh_token;
+  if (!refreshTokenInput)
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "refresh token required");
+
+  const tokenHash = hashRefreshToken(refreshTokenInput);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const found = await client.query(
-      `SELECT id, user_id FROM auth_refresh_tokens
+      `SELECT id, user_id, family_id FROM auth_refresh_tokens
        WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()
        FOR UPDATE`,
       [tokenHash],
@@ -229,9 +319,9 @@ app.post("/v1/auth/refresh", async (req, reply) => {
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid or expired refresh token");
     }
 
-    const { id: oldId, user_id: userId } = found.rows[0];
+    const { id: oldId, user_id: userId, family_id: familyId } = found.rows[0];
     await client.query(`UPDATE auth_refresh_tokens SET revoked_at = now() WHERE id = $1`, [oldId]);
-    const refreshToken = await issueRefreshToken(client, userId);
+    const refreshToken = await issueRefreshToken(client, userId, familyId);
     const userResult = await client.query(
       `SELECT ${PUBLIC_USER_COLUMNS} FROM auth_users WHERE id = $1`,
       [userId],
@@ -241,7 +331,16 @@ app.post("/v1/auth/refresh", async (req, reply) => {
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid or expired refresh token");
     }
     await client.query("COMMIT");
-    return ok(reply, 200, authData(userResult.rows[0], refreshToken), reqId(req));
+    const data = authData(userResult.rows[0]);
+    if (cookieToken) {
+      // Cookie clients never receive the rotated token in JSON: only the new
+      // HttpOnly cookie carries it, so XSS cannot read or exfiltrate it.
+      setRefreshCookie(reply, refreshToken, req);
+      return ok(reply, 200, data, reqId(req));
+    }
+    // Body-token clients have no cookie and still need the rotated token to
+    // continue; they are non-browser callers by definition.
+    return ok(reply, 200, { ...data, refresh_token: refreshToken }, reqId(req));
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
     req.log.error({ err }, "refresh failed");
@@ -253,18 +352,38 @@ app.post("/v1/auth/refresh", async (req, reply) => {
 
 app.post("/v1/auth/logout", async (req, reply) => {
   const parsed = RefreshSchema.safeParse(req.body ?? {});
-  if (parsed.success) {
+  const parsedToken = parsed.success ? parsed.data.refresh_token : undefined;
+  const token = requestRefreshToken(req) ?? parsedToken;
+  if (token) {
     try {
-      await pool.query(
-        `UPDATE auth_refresh_tokens SET revoked_at = now()
-         WHERE token_hash = $1 AND revoked_at IS NULL`,
-        [hashRefreshToken(parsed.data.refresh_token)],
+      // Look up the family without filtering on revoked_at: a refresh that
+      // rotated this token a moment ago has already revoked it, but its new
+      // sibling must still be killed by this logout.
+      const found = await pool.query(
+        `SELECT family_id FROM auth_refresh_tokens WHERE token_hash = $1`,
+        [hashRefreshToken(token)],
       );
+      if (found.rowCount && found.rows[0].family_id) {
+        await pool.query(
+          `UPDATE auth_refresh_tokens SET revoked_at = now()
+           WHERE family_id = $1 AND revoked_at IS NULL`,
+          [found.rows[0].family_id],
+        );
+      } else {
+        await pool.query(
+          `UPDATE auth_refresh_tokens SET revoked_at = now()
+           WHERE token_hash = $1 AND revoked_at IS NULL`,
+          [hashRefreshToken(token)],
+        );
+      }
     } catch (err) {
       // Logout is idempotent: never leak whether the token existed.
       req.log.error({ err }, "logout revoke failed");
     }
   }
+  // Always expire the browser credential, even if the body/cookie was absent
+  // or database revocation failed; a stale cookie must not outlive logout.
+  clearRefreshCookie(reply, req);
   return ok(reply, 200, { ok: true }, reqId(req));
 });
 

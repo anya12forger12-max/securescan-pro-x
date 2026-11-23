@@ -10,6 +10,8 @@ export const config = {
   gateway: gatewayOrigin,
   api: `${gatewayOrigin}/v1`,
   events: `${gatewayOrigin}/v1/events/stream`,
-  tokenKey: "gp.access.token",
-  refreshKey: "gp.refresh.token",
+  // No token is persisted any more. These old keys exist only so the client
+  // can delete credentials written by earlier builds during session bootstrap.
+  legacyTokenKey: "gp.access.token",
+  legacyRefreshKey: "gp.refresh.token",
 } as const;

@@ -33,13 +33,15 @@ export async function verifyGameResult(pool, input) {
          SELECT 1 FROM gin_rummy_games g
           WHERE g.session_id = s.id AND g.winner_id = $2
             AND g.win_type = 'validated') THEN 100
-       -- A concession is still a completed game the player joined, so the
-       -- client's score submission must succeed. It simply earns no points:
-       -- colluding accounts cannot farm the board by forfeiting to each other.
+       -- A concession (/end) and an unverifiable historical 'completed' win
+       -- are still games the player finished, so score submission succeeds.
+       -- Neither earns points: only the hand-checked /meld win above does, so
+       -- colluding accounts cannot farm the board by forfeiting or by claiming
+       -- an old result we can no longer validate.
        WHEN s.game_type = 'gin-rummy' AND EXISTS (
          SELECT 1 FROM gin_rummy_games g
           WHERE g.session_id = s.id AND g.winner_id = $2
-            AND g.win_type = 'concession') THEN 0
+            AND g.win_type IN ('concession','completed')) THEN 0
        WHEN s.game_type = 'pictionary' AND EXISTS (
          SELECT 1 FROM pictionary_rounds r
           WHERE r.session_id = s.id AND r.winner_id = $2) THEN 100

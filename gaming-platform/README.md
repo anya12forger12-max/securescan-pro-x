@@ -7,7 +7,7 @@ back to that layout. This project supplies the missing bootstrap layer and the
 peer services those services assume are running, so the platform can be
 installed, migrated and started as one system.
 
-All fifteen application services boot, the ten migrations apply cleanly, and the main
+All fifteen application services boot, the thirteen migrations apply cleanly, and the main
 auth / RBAC / wallet / chat / realtime / promotions / Codenames / Gin-rummy /
 crash / audit flows pass end to end through the gateway (a separate 20-flow
 integration run; `npm run smoke` covers the deploy-critical subset). The four
@@ -46,8 +46,9 @@ executed by the platform. Their playable ideas are now implemented natively:
   betting and reveal the seed and crash point afterwards; `GET
   /v1/crash/rounds/:id` includes a verification proof.
 * Stakes use the new atomic `POST /internal/wallet/debit` endpoint. Cash-outs
-  use the existing idempotent credit path with a key derived from the bet id,
-  so an ambiguous response can never pay twice.
+  use the existing idempotent credit path with keys derived from the persisted
+  bet claim, so an ambiguous response replays the original wallet transaction
+  instead of booking a duplicate net-zero pair.
 * The browser stage renders the multiplier curve locally from the server's
   `startedAt`, while all outcomes, settlement and auto cash-outs stay
   authoritative in the service.
@@ -72,10 +73,14 @@ These are fixed here (each fix is commented inline at the site):
   allowed to use. Previously any caller could set `x-user-id: <victim>` and gain
   full impersonation against wallet, promotions, RG and tournaments.
 - **Abuse control at the edge** — the gateway applies Redis-backed sliding-window
-  limits: unauthenticated auth endpoints per source IP, all other player routes
-  (including event streams) per verified user. Every limited response carries
-  `X-RateLimit-*` headers and a 429 with `Retry-After`. Peer routes stay exempt
-  because they are capability scoped.
+  limits: unauthenticated auth endpoints per source IP and all ordinary player
+  routes per verified user. Every limited response carries `X-RateLimit-*`
+  headers and a 429 with `Retry-After`. Event streams are sockets, not requests:
+  they are exempt from the request window and counted by a separate live-socket
+  cap that is released when the connection closes. Peer routes stay exempt
+  because they are capability scoped. The CSP `connect-src` allow-list expands
+  `CORS_ORIGIN` into exact origins, so an externally built client can reach the
+  gateway without a wildcard policy.
 - **Privileged route gating / audit prefix** — admin routes require a verified
   player token plus an admin-risk RBAC permission; peer-to-peer routes require
   the matching capability token. A failed RBAC check fails closed. The gateway route and
@@ -153,7 +158,11 @@ Gateway-authenticated SSE carries the live `crash.*` events.
 | `src/components/crash/*` | live crash stage, multiplier curve, cash-out and round proof |
 
 The browser never sees a service token. It signs in through
-`POST /v1/auth/login`, stores only the player JWT, calls `/v1/*`, and opens
+`POST /v1/auth/login`, keeps the short-lived player JWT only in memory, and
+receives the rotating refresh token in an `HttpOnly; SameSite=Strict` cookie
+scoped to `/v1/auth`. No credential is written to `localStorage` or
+`sessionStorage`; older token keys are deleted on session start and sign-out.
+The client calls `/v1/*` with the in-memory token and opens
 `GET /v1/events/stream?since=0` with `fetch` streaming because `EventSource`
 cannot send the required `Authorization` header. The gateway injects all
 identity and capability headers.
@@ -181,8 +190,10 @@ identity and capability headers.
 | `0008_crash.sql` | crash rounds/bets, wager support, extended game catalogue |
 | `0009_crash_recovery.sql` | `pending`/`cashing_out` bet states and persisted round deadlines |
 | `0010_crash_state_guards.sql` | idempotent state guards and Gin Rummy win attribution |
+| `0011_gin_rummy_win_type.sql` | neutral `completed` default for unverifiable historical wins |
+| `0012_refresh_token_family.sql` | token families so logout revokes already-rotated refresh siblings |
 
-All ten are applied by the one-shot `migrate` service before any application
+All thirteen are applied by the one-shot `migrate` service before any application
 starts, on first boot and on every upgrade. Applied files are checksummed, so
 editing an already-applied migration fails the deploy instead of drifting.
 
@@ -388,15 +399,14 @@ Wallet credentials are scoped further:
 | `WALLET_WIN_SERVICE_TOKEN` | crash | `/internal/wallet/credit` with `type=win` only, plus the exact crash refund shape (`type=adjustment`, `referenceType=crash_refund`, `idempotencyKey` beginning `crash-refund-`) |
 
 A scoped token used outside its operation/type gets `403 FORBIDDEN`; an unknown
-token still gets `401 UNAUTHORIZED`. Peers send their narrow token in
-`x-wallet-scope` and, during a mixed-version rollout, also carry the legacy full
-token in `x-service-token` so an older wallet container keeps working. The
-upgraded wallet treats `x-wallet-scope` as authoritative, so the compatibility
-header cannot escalate privileges; once the whole fleet is upgraded the legacy
-header can be dropped. The gateway keeps injecting the full token for existing
-`/internal/wallet/credit` and `/debit` security tests. The promotions service
-locally accepts the bonus token under its legacy env name only after validating
-that at least one wallet credential is present.
+token still gets `401 UNAUTHORIZED`. Crash and promotions send only their narrow
+token, in `x-service-token`; Compose does not give them the full wallet
+credential at all. The gateway still injects the full token for
+`/internal/wallet/*` because that route is the gateway/test/admin capability.
+The wallet also accepts a token in `x-wallet-scope` as authoritative when an
+older peer supplies one, but that header cannot escalate privileges. The
+legacy `WALLET_SERVICE_TOKEN` env name is a local-only fallback for peers; it
+is validated before use and is never injected into the scoped containers.
 
 Claim the first admin exactly once, through the gateway, with the player token
 of the account that should become admin:
@@ -428,7 +438,12 @@ entry fees and prize pools.
 ### Realtime
 
 Event reads require a player JWT; clients may not subscribe globally with a
-service token.
+service token. Retention can prune rows behind an old `since` cursor, so both
+polling and SSE replay report an explicit `gap` (`resync_required`,
+`oldest_seq`) instead of silently skipping history. SSE emits an id-less
+`event: gap` control frame before replaying the earliest retained rows, so the
+last numeric event id is unchanged. Event topics are restricted to a safe
+single-line SSE event-name pattern on both publish and replay.
 
 ```bash
 curl -N -H "Authorization: Bearer $TOKEN" 'http://localhost:3000/v1/events/stream?since=0'
