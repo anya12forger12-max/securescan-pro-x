@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import type { FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { getPool, closePool, createGame, getGame, setGameStatus, submitClue, getCluesForGame, submitGuess, listGuessesForGame, listRevealedWords, playerTeam, isTeamSpymaster } from "./db.js";
+import { getPool, closePool, createGame, getGame, setGameStatus, submitClue, getCluesForGame, submitGuess, listGuessesForGame, listRevealedWords, playerTeam, isTeamSpymaster, isSessionParticipant, activateSession } from "./db.js";
 import type { GameStatus, Team, GuessOutcome } from "./db.js";
 import type { CodenamesEnv } from "./env.js";
 
@@ -84,6 +84,11 @@ export async function buildCodenamesService(env: CodenamesEnv) {
       return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid or expired token" });
     }
     const pool = getPool(env.DATABASE_URL);
+    // Team assignment and score verification both derive seats from the
+    // session, so only a seated player may create a game for it.
+    if (!(await isSessionParticipant(pool, parsed.data.session_id, decoded.userId))) {
+      return reply.code(403).send({ error: "FORBIDDEN", message: "join the session before creating a game" });
+    }
     const game = await createGame(pool, {
       id: randomUUID(),
       session_id: parsed.data.session_id,
@@ -272,6 +277,10 @@ export async function buildCodenamesService(env: CodenamesEnv) {
         : [];
     if (!expected.length || !(await setGameStatus(pool, id, body.data.status, expected)))
       return reply.code(409).send({ error: "INVALID_TRANSITION", message: `cannot move from ${game.status} to ${body.data.status}` });
+    // The game only becomes playable here; the session stays joinable during
+    // setup so teams can be assembled, then closes when play starts.
+    if (body.data.status === "active" && game.session_id)
+      await activateSession(pool, game.session_id);
     return reply.send({ ok: true });
   });
   // ---- health and readiness ----

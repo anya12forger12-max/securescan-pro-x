@@ -18,9 +18,19 @@ export async function createRound(pool, input) {
     // The app accepts guesses only while status === 'drawing'. Insert that
     // state explicitly instead of relying on a schema default that disagreed
     // with it ('active'), which made every guess fail with 409.
-    const result = await pool.query(`INSERT INTO pictionary_rounds (id, session_id, word, drawer_id, status)
-     VALUES ($1, $2, $3, $4, 'drawing')
-     RETURNING id, session_id, word, drawer_id, status, started_at, ended_at, winner_id`, [input.id, input.session_id, input.word, input.drawer_id]);
+    // A round starts play immediately, so close the session's join window in the
+    // same statement. Otherwise an outsider could join after the first round and
+    // appear as an eligible participant in session-scoped leaderboard checks.
+    const result = await pool.query(`
+     WITH round AS (
+       INSERT INTO pictionary_rounds (id, session_id, word, drawer_id, status)
+       VALUES ($1, $2, $3, $4, 'drawing')
+       RETURNING id, session_id, word, drawer_id, status, started_at, ended_at, winner_id
+     ), activated AS (
+       UPDATE game_sessions SET status = 'active'
+        WHERE id = $2 AND status = 'waiting'
+     )
+     SELECT * FROM round`, [input.id, input.session_id, input.word, input.drawer_id]);
     return result.rows[0];
 }
 export async function getRound(pool, id) {

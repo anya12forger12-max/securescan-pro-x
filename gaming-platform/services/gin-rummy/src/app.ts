@@ -5,7 +5,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { getPool, closePool, createGame, getGame, getGameForUpdate, joinGame, setGameStatus, updateGameState, } from "./db.js";
+import { getPool, closePool, createGame, getGame, getGameForUpdate, joinGameWithSessionSeat, isSessionParticipant, setGameStatus, updateGameState, } from "./db.js";
 import type { GameRow } from "./db.js";
 import type { GinRummyEnv } from "./env.js";
 
@@ -159,6 +159,12 @@ export async function buildGinRummyService(env: GinRummyEnv) {
     const token = authHeader.replace("Bearer ", "");
     const decoded: JwtPayload = await app.jwt.verify(token);
     const pool = getPool(env.DATABASE_URL);
+    // A game is stored against a session for leaderboard verification, so the
+    // caller must actually hold a seat in that session. Without this check any
+    // authenticated user could attach a game to somebody else's session.
+    if (!(await isSessionParticipant(pool, parsed.data.session_id, decoded.userId))) {
+      return reply.code(403).send({ error: "FORBIDDEN", message: "join the session before creating a game" });
+    }
     const game = await createGame(pool, {
       id: randomUUID(),
       session_id: parsed.data.session_id,
@@ -211,9 +217,9 @@ export async function buildGinRummyService(env: GinRummyEnv) {
     if (game.player1_id === decoded.userId) {
       return reply.code(409).send({ error: "ALREADY_SEATED", message: "the host already occupies player one" });
     }
-    const updated = await joinGame(pool, parsed.data.id, decoded.userId);
+    const updated = await joinGameWithSessionSeat(pool, game, decoded.userId);
     if (!updated) {
-      // Another join won the race between our read and the atomic UPDATE.
+      // Another join won the race between our read and the atomic claim.
       return reply.code(409).send({ error: "GAME_NOT_WAITING", message: "game is not waiting for players" });
     }
     return reply.send({ game: publicGame(updated, decoded.userId) });

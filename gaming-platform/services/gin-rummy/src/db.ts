@@ -143,6 +143,56 @@ export async function joinGame(pool: Queryable, id: string, player2_id: string):
   return result.rows[0] ?? null;
 }
 
+export async function isSessionParticipant(pool: Queryable, sessionId: string, userId: string): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT 1 FROM game_sessions s
+       JOIN game_players p ON p.session_id = s.id
+      WHERE s.id = $1 AND s.status IN ('waiting', 'active') AND p.user_id = $2
+      LIMIT 1`,
+    [sessionId, userId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Claim the opponent seat and the matching session seat together. The game
+ * UUID is the host's invitation, so a player may join the game directly, but
+ * the resulting seat must still be visible to session-scoped verification.
+ * Play starting here is also when the session's join window closes: a late
+ * `/v1/game/sessions/:id/join` must not add a player to a game in progress. */
+export async function joinGameWithSessionSeat(
+  pool: PoolType,
+  game: GameRow,
+  userId: string,
+): Promise<GameRow | null> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const updated = await joinGame(client, game.id, userId);
+    if (!updated) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    await client.query(
+      `INSERT INTO game_players (session_id, user_id)
+       SELECT $1, $2
+        WHERE EXISTS (SELECT 1 FROM game_sessions WHERE id = $1 AND status IN ('waiting', 'active'))
+       ON CONFLICT (session_id, user_id) DO NOTHING`,
+      [game.session_id, userId],
+    );
+    await client.query(
+      `UPDATE game_sessions SET status = 'active' WHERE id = $1 AND status = 'waiting'`,
+      [game.session_id],
+    );
+    await client.query("COMMIT");
+    return updated;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 /** End a game only if it is still in the expected state. The conditional
  * UPDATE is the final guard against a racing /end overtaking a validated /meld
  * win; callers must roll back and report a conflict when it returns false. */

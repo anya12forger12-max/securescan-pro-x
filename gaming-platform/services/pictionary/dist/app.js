@@ -77,14 +77,32 @@ export async function buildPictionaryService(env) {
     // ---------- get round ----------
     app.get("/v1/pictionary/rounds/:id", async (req, reply) => {
         const { id } = req.params;
+        const authHeader = req.headers.authorization;
+        if (!authHeader) {
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "missing bearer token" });
+        }
+        const decoded = await app.jwt.verify(authHeader.replace("Bearer ", ""));
         const pool = getPool(env.DATABASE_URL);
         const round = await getRound(pool, id);
         if (!round) {
             return reply.code(404).send({ error: "ROUND_NOT_FOUND", message: "round not found" });
         }
+        if (!(await isSessionParticipant(pool, round.session_id, decoded.userId))) {
+            return reply.code(403).send({ error: "FORBIDDEN", message: "only session players may view this round" });
+        }
         const guesses = await getGuessesForRound(pool, id);
+        // Correct guesses are stored verbatim. While the round is still being
+        // drawn, returning another player's text would reveal the secret word to
+        // anyone who learns the round UUID. Only the guesser sees their own text;
+        // once the round ends the word is public and the full log is safe.
+        const safeGuesses = guesses.map((guess) => {
+            if (round.status === "ended" || guess.user_id === decoded.userId)
+                return guess;
+            const { guess: _hidden, ...safeGuess } = guess;
+            return safeGuess;
+        });
         const { word: _word, ...safeRound } = round;
-        return reply.send({ round: safeRound, guesses });
+        return reply.send({ round: safeRound, guesses: safeGuesses });
     });
     // ---------- submit guess ----------
     app.post("/v1/pictionary/rounds/:id/guess", async (req, reply) => {

@@ -61,6 +61,10 @@ export declare function isTeamSpymaster(pool: Queryable, sessionId: string, user
 /** Conditional status write. The route validates the transition, but only the
  * WHERE clause makes it atomic: a delayed request cannot reopen a game that
  * another request already moved on. */
+export declare function isSessionParticipant(pool: Queryable, sessionId: string, userId: string): Promise<boolean>;
+/** Starting a game is the moment play begins: close the session's join window
+ * so a late seat cannot change team assignment or leaderboard eligibility. */
+export declare function activateSession(pool: Queryable, sessionId: string): Promise<void>;
 export declare function setGameStatus(pool: Queryable, id: string, status: GameStatus, expectedStatus?: GameStatus | GameStatus[]): Promise<boolean>;
 export declare function submitClue(pool: PoolType, input: {
     id: string;

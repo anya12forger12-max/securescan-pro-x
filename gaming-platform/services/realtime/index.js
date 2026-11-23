@@ -72,8 +72,10 @@ let deliveryChain = Promise.resolve();
 const MAX_CLIENT_QUEUE = 256;
 
 /** Bound durable history as well: prune rows past the retention window in the
- * background. The timer is unref'd so it never keeps the process alive, and
- * replay still works for every row that has not been pruned. */
+ * background. The timer is unref'd so it never keeps the process alive. Since
+ * pruning can remove rows behind a client's `since` cursor, both polling and
+ * SSE replay report an explicit retention gap before sending whatever rows
+ * remain (see retentionSnapshot/formatGap below). */
 const pruneTimer = setInterval(async () => {
   if (shuttingDown) return;
   try {
@@ -134,6 +136,13 @@ function publicEvent(event) {
   return { ...event, payload: sanitizePayload(event.payload) };
 }
 
+/** SSE `event:` is a single line: a topic containing CR/LF would start forged
+ * frames (for example a fake `data:` line with a huge seq) and permanently
+ * desynchronise browser cursors. Publishing validates topics, but rows written
+ * by an older version may still be replayed, so sanitise on the way out too. */
+const safeTopic = (topic) =>
+  /^[a-z][a-z0-9._-]{0,63}$/.test(String(topic)) ? topic : "event";
+
 /** pg returns bigserial as a string; send the full normalized event so SSE
  * clients can use `seq` directly instead of guessing from the frame id. */
 function formatEvent(event) {
@@ -141,10 +150,44 @@ function formatEvent(event) {
   const normalized = {
     ...safe,
     seq: Number(safe.seq),
+    topic: safeTopic(safe.topic),
     published_at:
       safe.published_at instanceof Date ? safe.published_at.toISOString() : safe.published_at,
   };
   return `id: ${normalized.seq}\nevent: ${normalized.topic}\ndata: ${JSON.stringify(normalized)}\n\n`;
+}
+
+/**
+ * Retention pruning can delete rows in front of a client's `since` cursor, so
+ * replaying `seq > since` would silently skip the missing history. The oldest
+ * retained seq tells clients that a gap occurred; a null oldest means every
+ * row has been pruned, which is a gap for any non-zero cursor. Both /v1/events
+ * and the SSE replay path use this snapshot so the signal is consistent.
+ */
+async function retentionSnapshot(since) {
+  const result = await pool.query(
+    `SELECT min(seq)::bigint AS oldest, COALESCE(max(seq), 0)::bigint AS latest FROM realtime_events`,
+  );
+  const row = result.rows[0] ?? {};
+  const oldest = row.oldest === null || row.oldest === undefined ? null : Number(row.oldest);
+  const latest = Number(row.latest ?? 0);
+  return { gap: oldest === null ? since > 0 : since < oldest, oldest, latest };
+}
+
+/**
+ * SSE control frame for a retention gap. It deliberately has no `id:` line so
+ * the last numeric event id seen by a client stays unchanged, and no `seq`
+ * field in its data so old consumers that only understand normal events ignore
+ * it. The earliest retained events are replayed immediately afterwards.
+ */
+function formatGap(since, oldest, latest) {
+  return `event: gap\ndata: ${JSON.stringify({
+    gap: true,
+    resync_required: true,
+    since,
+    oldest_seq: oldest,
+    latest_seq: latest,
+  })}\n\n`;
 }
 
 /** Flush one client's queue in seq order. write() returning false means the
@@ -312,7 +355,9 @@ function scheduleReconnect() {
 }
 
 const EventSchema = z.object({
-  topic: z.string().min(1).max(64),
+  // Only a safe SSE event name may be published. Control characters would be
+  // written verbatim into the `event:` line and could forge additional frames.
+  topic: z.string().regex(/^[a-z][a-z0-9._-]{0,63}$/, "invalid event topic"),
   payload: z.unknown().default({}),
 });
 
@@ -350,29 +395,37 @@ app.post("/internal/events", async (req, reply) => {
 app.get("/v1/events", async (req, reply) => {
   const since = Math.max(0, Number(req.query.since ?? 0) || 0);
   const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
+  // Keep `items` and `latest` unchanged for existing pollers; only add the
+  // gap metadata when the cursor predates the oldest retained row. The query
+  // still returns the earliest available events in seq order after the gap.
+  const { gap, oldest, latest } = await retentionSnapshot(since);
   const result = await pool.query(
     `SELECT seq, topic, payload, published_at FROM realtime_events
      WHERE seq > $1 ORDER BY seq ASC LIMIT $2`,
     [since, limit],
   );
-  const latest = await pool.query(`SELECT COALESCE(max(seq), 0)::bigint AS n FROM realtime_events`);
   return ok(
     reply,
     200,
-    { items: result.rows.map(publicEvent), latest: Number(latest.rows[0].n) },
+    {
+      items: result.rows.map(publicEvent),
+      latest,
+      gap,
+      ...(gap ? { gap_since: since, oldest_seq: oldest, resync_required: true } : {}),
+    },
     reqId(req),
   );
 });
 
 app.get("/v1/events/stream", async (req, reply) => {
   const sinceParam = req.query.since;
-  let since;
-  if (sinceParam === undefined) {
-    const latest = await pool.query(`SELECT COALESCE(max(seq), 0)::bigint AS n FROM realtime_events`);
-    since = Number(latest.rows[0].n);
-  } else {
-    since = Math.max(0, Number(sinceParam) || 0);
-  }
+  const requested = sinceParam === undefined ? null : Math.max(0, Number(sinceParam) || 0);
+  // One snapshot supplies both the replay cursor and the retention check. A
+  // request without `since` is explicitly live-only, so it has no gap to
+  // report even if older rows have already been pruned.
+  const { gap, oldest, latest } = await retentionSnapshot(requested ?? 0);
+  const since = requested ?? latest;
+  const gapDetected = requested !== null && gap;
 
   // Bound concurrent fan-out. The check sits immediately before hijack/add
   // with no await in between, so two simultaneous requests cannot both take
@@ -391,6 +444,12 @@ app.get("/v1/events/stream", async (req, reply) => {
     ...(allowedOrigin ? { "access-control-allow-origin": allowedOrigin } : {}),
   });
   res.write(": connected\n\n");
+  if (gapDetected) {
+    // Tell the client before replaying the earliest retained rows. Without
+    // this marker a pruned `since` would look like an uneventful reconnection;
+    // normal numeric-id event frames follow it unchanged.
+    res.write(formatGap(since, oldest, latest));
+  }
 
   // Register before taking the snapshot: a publish between the snapshot query
   // and clients.add() would otherwise notify existing streams only and leave

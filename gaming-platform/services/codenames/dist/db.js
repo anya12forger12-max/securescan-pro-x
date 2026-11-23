@@ -147,6 +147,18 @@ export async function isTeamSpymaster(pool, sessionId, userId, team) {
 /** Conditional status write. The route validates the transition, but only the
  * WHERE clause makes it atomic: a delayed request cannot reopen a game that
  * another request already moved on. */
+export async function isSessionParticipant(pool, sessionId, userId) {
+    const result = await pool.query(`SELECT 1 FROM game_sessions s
+       JOIN game_players p ON p.session_id = s.id
+      WHERE s.id = $1 AND s.status IN ('waiting', 'active') AND p.user_id = $2
+      LIMIT 1`, [sessionId, userId]);
+    return (result.rowCount ?? 0) > 0;
+}
+/** Starting a game is the moment play begins: close the session's join window
+ * so a late seat cannot change team assignment or leaderboard eligibility. */
+export async function activateSession(pool, sessionId) {
+    await pool.query(`UPDATE game_sessions SET status = 'active' WHERE id = $1 AND status = 'waiting'`, [sessionId]);
+}
 export async function setGameStatus(pool, id, status, expectedStatus) {
     const params = [id, status];
     let guard = "";
