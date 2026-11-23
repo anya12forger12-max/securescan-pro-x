@@ -148,7 +148,7 @@ $(document).ready(function() {
         for(var i in res.bets)
         {
             let bet = res.bets[i];
-            html += '<tr><td class="username"><button type="button" class="btn btn-link" data-id="'+ bet.user.unique_id +'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+ bet.user.avatar +'" alt=""></div><span class="sanitize-name">'+ bet.user.username +'</span></span></button></td><td><div class="bet-number"><span class="bet-wrap"><span>'+ bet.price +'</span><svg class="icon icon-coin '+ bet.balType +'"><use xlink:href="/img/symbols.svg#icon-coin"></use></svg></span></div></td><td>х'+ bet.withdraw +'</td><td>';
+            html += '<tr><td class="username"><button type="button" class="btn btn-link" data-id="'+ bet.user.unique_id +'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+ escapeHtml(bet.user.avatar) +'" alt=""></div><span class="sanitize-name">'+ escapeHtml(bet.user.username) +'</span></span></button></td><td><div class="bet-number"><span class="bet-wrap"><span>'+ bet.price +'</span><svg class="icon icon-coin '+ bet.balType +'"><use xlink:href="/img/symbols.svg#icon-coin"></use></svg></span></div></td><td>х'+ bet.withdraw +'</td><td>';
             if(bet.status == 1) html += '<span class="bet-wrap win"><span>'+ bet.won +'</span><svg class="icon icon-coin"><use xlink:href="/img/symbols.svg#icon-coin"></use></svg></span>';
             if(bet.status == 0) html += '<span class="bet-wrap wait"><svg class="icon"><use xlink:href="/img/symbols.svg#icon-time"></use></svg></span>';
             html += '</td></tr>';

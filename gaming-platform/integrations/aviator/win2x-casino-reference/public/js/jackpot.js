@@ -67,7 +67,7 @@ $(document).ready(function() {
 				if(r.data.winner_bonus > 0) wbn += '<div class="payout">'+ r.data.winner_bonus +' <svg class="icon icon-coin bonus"><use xlink:href="/img/symbols.svg#icon-coin"></use></svg></div>';
 				
 				var html = '';
-					html += '<div class="game-tooltip isTransparent won '+ r.room +'"><div class="wrap"><div class="user"><button type="button" class="btn btn-link" data-id="'+ r.data.winner_id +'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+ r.data.winner_avatar +'" alt=""></div><span class="sanitize-name">'+ r.data.winner_name +'</span></span></button></div>'+ wbl + wbn +'<div class="badge"><div class="text">Победитель</div></div><div class="status"><span>Lucky ticket <span class="profit">'+ r.data.ticket +'</span> <svg class="icon"><use xlink:href="/img/symbols.svg#icon-ticket"></use></svg></span></div></div></div>';
+					html += '<div class="game-tooltip isTransparent won '+ r.room +'"><div class="wrap"><div class="user"><button type="button" class="btn btn-link" data-id="'+ r.data.winner_id +'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+ escapeHtml(r.data.winner_avatar) +'" alt=""></div><span class="sanitize-name">'+ escapeHtml(r.data.winner_name) +'</span></span></button></div>'+ wbl + wbn +'<div class="badge"><div class="text">Победитель</div></div><div class="status"><span>Lucky ticket <span class="profit">'+ r.data.ticket +'</span> <svg class="icon"><use xlink:href="/img/symbols.svg#icon-ticket"></use></svg></span></div></div></div>';
 				$('.game-area-content').append(html);
 				setTimeout(function () { $('.game-tooltip.won.'+r.room).addClass('isActive'); }, 1000);
 			}, 6200);
@@ -105,13 +105,13 @@ $(document).ready(function() {
 
         let bets = '';
         res.bets.forEach(bet => {
-            bets += '<tr><td class="username"> <button type="button" class="btn btn-link" data-id="'+bet.user.id+'"> <span class="sanitize-user"><div class="sanitize-avatar"><img src="'+bet.user.avatar+'" alt="" style="border: 1px solid #'+bet.bet.color+';"></div> <span class="sanitize-name">'+bet.user.username+'</span> </span> </button></td><td><div class="bet-number"> <span class="bet-wrap"> <span>'+bet.bet.amount+'</span> <svg class="icon icon-coin '+bet.bet.balance+'"> <use xlink:href="/img/symbols.svg#icon-coin"></use> </svg> </span></div></td><td>'+bet.bet.chance+'%</td><td><div class="bet-number rtl"> <span class="bet-wrap"> <span>'+bet.bet.from+' - '+bet.bet.to+'</span> <svg class="icon"> <use xlink:href="/img/symbols.svg#icon-ticket"></use> </svg> </span></div></td></tr>';
+            bets += '<tr><td class="username"> <button type="button" class="btn btn-link" data-id="'+bet.user.id+'"> <span class="sanitize-user"><div class="sanitize-avatar"><img src="'+escapeHtml(bet.user.avatar)+'" alt="" style="border: 1px solid #'+escapeHtml(bet.bet.color)+';"></div> <span class="sanitize-name">'+escapeHtml(bet.user.username)+'</span> </span> </button></td><td><div class="bet-number"> <span class="bet-wrap"> <span>'+bet.bet.amount+'</span> <svg class="icon icon-coin '+escapeHtml(bet.bet.balance)+'"> <use xlink:href="/img/symbols.svg#icon-coin"></use> </svg> </span></div></td><td>'+bet.bet.chance+'%</td><td><div class="bet-number rtl"> <span class="bet-wrap"> <span>'+bet.bet.from+' - '+bet.bet.to+'</span> <svg class="icon"> <use xlink:href="/img/symbols.svg#icon-ticket"></use> </svg> </span></div></td></tr>';
         });
         $('#bets').html(bets);
 
         let chances = '';
         res.chances.forEach(chance => {
-            chances += '<div class="item" data-toggle="tooltip" data-placement="top" title="'+chance.user.username+'"><div class="user"><img src="'+chance.user.avatar+'" alt="" style="border: 1px solid #'+chance.color+';"></div><div class="hit">'+chance.chance+'%</div></div>';
+            chances += '<div class="item" data-toggle="tooltip" data-placement="top" title="'+escapeHtml(chance.user.username)+'"><div class="user"><img src="'+escapeHtml(chance.user.avatar)+'" alt="" style="border: 1px solid #'+escapeHtml(chance.color)+';"></div><div class="hit">'+chance.chance+'%</div></div>';
 
             data.push(parseFloat(chance.chance));
             colors.push('#' + chance.color);

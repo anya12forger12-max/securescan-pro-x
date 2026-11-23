@@ -114,15 +114,15 @@ $(document).ready(function() {
 						html += '<td class="username">';
 						html += '<button type="button" class="btn btn-link" data-id="' + data.users[i].unique_id + '">';
 						html += '<span class="sanitize-user">';
-						html += '<div class="sanitize-avatar"><img src="' + data.users[i].avatar + '" alt=""></div>';
-						html += '<span class="sanitize-name">' + data.users[i].username + '</span>';
+						html += '<div class="sanitize-avatar"><img src="' + escapeHtml(data.users[i].avatar) + '" alt=""></div>';
+						html += '<span class="sanitize-name">' + escapeHtml(data.users[i].username) + '</span>';
 						html += '</span>';
 						html += '</button>';
 						html += '</td>';
 						html += '<td>'+ timeConverter(data.users[i].banchat) +'</td>';
-						html += '<td>'+ (data.users[i].banchat_reason ? data.users[i].banchat_reason : 'Unspecified') +'</td>';
+						html += '<td>'+ (data.users[i].banchat_reason ? escapeHtml(data.users[i].banchat_reason) : 'Unspecified') +'</td>';
 						html += '<td>';
-						html += '<button type="button" class="btn btn-light btnUnBan" data-name="' + data.users[i].username + '" data-id="' + data.users[i].unique_id + '"><svg class="icon"><use xlink:href="/img/symbols.svg#icon-ban"></use></svg><span>Unban</span></button>';
+						html += '<button type="button" class="btn btn-light btnUnBan" data-name="' + escapeHtml(data.users[i].username) + '" data-id="' + data.users[i].unique_id + '"><svg class="icon"><use xlink:href="/img/symbols.svg#icon-ban"></use></svg><span>Unban</span></button>';
 						html += '</td>';
 						html += '</tr>';
 					}
@@ -159,10 +159,10 @@ $(document).ready(function() {
 	.on('ban_message', function(data) {
 		if(data.ban) {
 			$('.message-block.user_' + data.unique_id + ' .btnBan').remove();
-			$('.message-block.user_' + data.unique_id + ' .delete').append('<button type="button" class="btn btn-light btnUnBan" data-name="' + data.username + '" data-id="' + data.unique_id + '"><svg class="icon"><use xlink:href="/img/symbols.svg#icon-ban"></use></svg><span>Unban</span></button>');
+			$('.message-block.user_' + data.unique_id + ' .delete').append('<button type="button" class="btn btn-light btnUnBan" data-name="' + escapeHtml(data.username) + '" data-id="' + data.unique_id + '"><svg class="icon"><use xlink:href="/img/symbols.svg#icon-ban"></use></svg><span>Unban</span></button>');
 		} else {
 			$('.message-block.user_' + data.unique_id + ' .btnUnBan').remove();
-			$('.message-block.user_' + data.unique_id + ' .delete').append('<button type="button" class="btn btn-light btnBan" data-name="' + data.username + '" data-id="' + data.unique_id + '"><svg class="icon"><use xlink:href="/img/symbols.svg#icon-ban"></use></svg><span>Ban</span></button>');
+			$('.message-block.user_' + data.unique_id + ' .delete').append('<button type="button" class="btn btn-light btnBan" data-name="' + escapeHtml(data.username) + '" data-id="' + data.unique_id + '"><svg class="icon"><use xlink:href="/img/symbols.svg#icon-ban"></use></svg><span>Ban</span></button>');
 		}
 	})
 });

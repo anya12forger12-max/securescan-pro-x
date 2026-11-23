@@ -22,7 +22,6 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta name="csrf-token" content="{{ csrf_token() }}">
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
     <meta name="description" content="">
@@ -34,10 +33,16 @@
     <link rel="stylesheet" href="/css/animation.css">
     <link rel="stylesheet" href="/css/media.css">
     <script src="https://code.jquery.com/jquery-3.3.1.min.js" integrity="sha256-FgpCb/KJQlLNfOu91ta32o/NMZxltwRo8QtmkMRdAu8=" crossorigin="anonymous"></script>
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <script>
-        $.ajaxSetup({
-            headers: { 'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content') }
-        });
+        $.ajaxSetup({ headers: { "X-CSRF-TOKEN": $('meta[name="csrf-token"]').attr("content") } });
+        // Escape untrusted values before inserting them into HTML strings.
+        function escapeHtml(value) {
+            if (value === null || value === undefined) return '';
+            return String(value).replace(/[&<>"']/g, function (ch) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+            });
+        }
     </script>
     {!! NoCaptcha::renderJs() !!}
     <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.3/umd/popper.min.js"></script>
@@ -671,7 +676,7 @@
 						</div>
 						<div class="deposit-section tab active" data-type="deposite">
 							<form action="/pay" method="post" id="payment">
-							    @csrf
+								@csrf
 								<div class="form-row">
 									<label>
 										<div class="form-label">Refill amount ($)</div>
@@ -1211,7 +1216,7 @@
 						</div>
 						<div class="caption-line"><span>By login and password</span></div>
 						<form method="POST" action="{{ route('login') }}">
-						    @csrf
+								@csrf
 							<div class="form-row">
 								<div class="form-field">
 									<div class="input-valid">
@@ -1275,7 +1280,7 @@
 						</div>
 						<div class="caption-line"><span>By login and password</span></div>
 						<form method="POST" action="{{ route('register') }}">
-						    @csrf
+								@csrf
 							<div class="form-row">
 								<div class="form-field">
 									<div class="input-valid">
@@ -1349,7 +1354,7 @@
 					<h3 class="caption"><span>Reset password</span></h3>
 					<div class="auth-form">
 						<form method="POST" action="{{ route('password.email') }}">
-						    @csrf
+								@csrf
 							<div class="form-row">
 								<div class="form-field">
 									<div class="input-valid">
@@ -1407,7 +1412,7 @@
 					<h3 class="caption"><span>Update password</span></h3>
 					<div class="auth-form">
 						<form method="POST" action="{{ route('password.update') }}">
-						    @csrf
+								@csrf
 							<input type="hidden" name="token" value="{{ session('token') }}">
 							<div class="form-row">
 								<div class="form-field">

@@ -59,7 +59,7 @@ function parseBets(bets) {
 	var list = [];
 	for(var i in bets) {
 		let bet = bets[i];
-		list += '<tr data-userid="'+bet.user_id+'"><td class="username"><button type="button" class="btn btn-link" data-id="'+bet.unique_id+'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+bet.avatar+'" alt=""></div><span class="sanitize-name">'+bet.username+'</span></span></button></td><td><div class="bet-number"><span class="bet-wrap"><span>'+bet.sum+'</span><svg class="icon icon-coin '+bet.balance+'"><use xlink:href="/img/symbols.svg#icon-coin"></use></svg></span></div></td><td><span class="bet-type bet_'+bet.color+'">'+ (bet.color == 'black' ? 'x2' : (bet.color == 'red' ? 'x3' : (bet.color == 'green' ? 'x5' : 'x50'))) +'</span></td></tr>';
+		list += '<tr data-userid="'+bet.user_id+'"><td class="username"><button type="button" class="btn btn-link" data-id="'+bet.unique_id+'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+escapeHtml(bet.avatar)+'" alt=""></div><span class="sanitize-name">'+escapeHtml(bet.username)+'</span></span></button></td><td><div class="bet-number"><span class="bet-wrap"><span>'+bet.sum+'</span><svg class="icon icon-coin '+bet.balance+'"><use xlink:href="/img/symbols.svg#icon-coin"></use></svg></span></div></td><td><span class="bet-type bet_'+bet.color+'">'+ (bet.color == 'black' ? 'x2' : (bet.color == 'red' ? 'x3' : (bet.color == 'green' ? 'x5' : 'x50'))) +'</span></td></tr>';
 	}
 	$('.table-stats-wrap tbody').html(list);
 }

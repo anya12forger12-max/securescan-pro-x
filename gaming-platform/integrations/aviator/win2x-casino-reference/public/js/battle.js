@@ -24,7 +24,7 @@ $(document).ready(function() {
 		var list = [];
 		for(var i in data.bets) {
 			let bet = data.bets[i];
-			list += '<tr><td class="username"><button type="button" class="btn btn-link" data-id="'+ bet.unique_id +'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+ bet.avatar +'" alt=""></div><span class="sanitize-name">'+ bet.username +'</span></span></button></td><td><div class="bet-number"><span class="bet-wrap"><span>'+ bet.price +'</span><svg class="icon icon-coin '+ bet.balType +'"><use xlink:href="/img/symbols.svg#icon-coin"></use></svg></span></div></td><td><span class="bet-type bet_'+ bet.color +'">'+ (bet.color == 'red' ? 'Red' : 'Blue') +'</span></td></tr>';
+			list += '<tr><td class="username"><button type="button" class="btn btn-link" data-id="'+ bet.unique_id +'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+ escapeHtml(bet.avatar) +'" alt=""></div><span class="sanitize-name">'+ escapeHtml(bet.username) +'</span></span></button></td><td><div class="bet-number"><span class="bet-wrap"><span>'+ bet.price +'</span><svg class="icon icon-coin '+ bet.balType +'"><use xlink:href="/img/symbols.svg#icon-coin"></use></svg></span></div></td><td><span class="bet-type bet_'+ bet.color +'">'+ (bet.color == 'red' ? 'Red' : 'Blue') +'</span></td></tr>';
 		}
 		$('.table-stats-wrap tbody').html(list);
 		

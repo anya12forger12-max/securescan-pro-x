@@ -10,10 +10,10 @@ $(document).ready(function () {
 				you += '<div class="players block">';
 				you += '<div class="user">';
 				you += '<div class="ava user-link" data-id="'+ data.unique_id +'">';
-				you += '<img src="'+ data.avatar +'">';
+				you += '<img src="'+ escapeHtml(data.avatar) +'">';
 				you += '</div>';
 				you += '<div class="info">';
-				you += '<div class="name user-link" data-id="'+ data.unique_id +'">'+ data.username +'</div>';
+				you += '<div class="name user-link" data-id="'+ data.unique_id +'">'+ escapeHtml(data.username) +'</div>';
 				you += '<p>'+ data.heads_from +' - '+ data.heads_to +' <svg class="icon"><use xlink:href="/img/symbols.svg#icon-ticket"></use></svg></p>';
 				you += '</div>';
 				you += '</div>';
@@ -67,10 +67,10 @@ $(document).ready(function () {
 			all += '<div class="players block">';
 			all += '<div class="user">';
 			all += '<div class="ava user-link" data-id="'+ data.unique_id +'">';
-			all += '<img src="'+ data.avatar +'">';
+			all += '<img src="'+ escapeHtml(data.avatar) +'">';
 			all += '</div>';
 			all += '<div class="info">';
-			all += '<div class="name user-link" data-id="'+ data.unique_id +'">'+ data.username +'</div>';
+			all += '<div class="name user-link" data-id="'+ data.unique_id +'">'+ escapeHtml(data.username) +'</div>';
 			all += '<p>'+ data.heads_from +' - '+ data.heads_to +' <svg class="icon"><use xlink:href="/img/symbols.svg#icon-ticket"></use></svg></p>';
 			all += '</div>';
 			all += '</div>';
@@ -115,10 +115,10 @@ $(document).ready(function () {
 	});
 	socket.on('end.flip', function (data) {
 		var html = '';
-			html = '<div class="user"><div class="ava user-link" data-id="'+ data.user2.unique_id +'"><img src="'+ data.user2.avatar +'"></div><div class="info"><div class="name user-link" data-id="'+ data.user2.unique_id +'">'+ data.user2.username +'</div><p>'+ data.user2.from +' - '+ data.user2.to +' <svg class="icon"><use xlink:href="/img/symbols.svg#icon-ticket"></use></svg></p></div></div>';
+			html = '<div class="user"><div class="ava user-link" data-id="'+ data.user2.unique_id +'"><img src="'+ escapeHtml(data.user2.avatar) +'"></div><div class="info"><div class="name user-link" data-id="'+ data.user2.unique_id +'">'+ escapeHtml(data.user2.username) +'</div><p>'+ data.user2.from +' - '+ data.user2.to +' <svg class="icon"><use xlink:href="/img/symbols.svg#icon-ticket"></use></svg></p></div></div>';
 		
 		var stat = '';
-			stat = '<tr><td class="username"><button type="button" class="btn btn-link" data-id="'+ data.user1.unique_id +'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+ data.user1.avatar +'" alt=""></div><span class="sanitize-name">'+ data.user1.username +'</span></span></button></td><td class="username"><button type="button" class="btn btn-link" data-id="'+ data.user2.unique_id +'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+ data.user2.avatar +'" alt=""></div><span class="sanitize-name">'+ data.user2.username +'</span></span></button></td><td class="username"><button type="button" class="btn btn-link" data-id="'+ data.winner.unique_id +'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+ data.winner.avatar +'" alt="" style="border: solid 1px #4986f5;"></div><span class="sanitize-name">'+ data.winner.username +'</span></span></button></td><td><div class="bet-number"><span class="bet-wrap"><span>'+ data.game.bank +'</span><svg class="icon icon-coin '+ data.game.balType +'"><use xlink:href="/img/symbols.svg#icon-coin"></use></svg></span></div></td><td><div class="bet-number"><span class="bet-wrap"><span>'+ data.winner.ticket +'</span><svg class="icon"><use xlink:href="/img/symbols.svg#icon-ticket"></use></svg></span></div></td><td><button class="btn btn-primary checkGame" data-hash="'+ data.game.hash +'">Check</button></td></tr>';
+			stat = '<tr><td class="username"><button type="button" class="btn btn-link" data-id="'+ data.user1.unique_id +'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+ escapeHtml(data.user1.avatar) +'" alt=""></div><span class="sanitize-name">'+ escapeHtml(data.user1.username) +'</span></span></button></td><td class="username"><button type="button" class="btn btn-link" data-id="'+ data.user2.unique_id +'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+ escapeHtml(data.user2.avatar) +'" alt=""></div><span class="sanitize-name">'+ escapeHtml(data.user2.username) +'</span></span></button></td><td class="username"><button type="button" class="btn btn-link" data-id="'+ data.winner.unique_id +'"><span class="sanitize-user"><div class="sanitize-avatar"><img src="'+ escapeHtml(data.winner.avatar) +'" alt="" style="border: solid 1px #4986f5;"></div><span class="sanitize-name">'+ escapeHtml(data.winner.username) +'</span></span></button></td><td><div class="bet-number"><span class="bet-wrap"><span>'+ data.game.bank +'</span><svg class="icon icon-coin '+ data.game.balType +'"><use xlink:href="/img/symbols.svg#icon-coin"></use></svg></span></div></td><td><div class="bet-number"><span class="bet-wrap"><span>'+ data.winner.ticket +'</span><svg class="icon"><use xlink:href="/img/symbols.svg#icon-ticket"></use></svg></span></div></td><td><button class="btn btn-primary checkGame" data-hash="'+ data.game.hash +'">Check</button></td></tr>';
 		
 		var users = [{
 				avatar: data.user1.avatar
@@ -148,7 +148,7 @@ $(document).ready(function () {
 		list[2] = data.winner.avatar;
 		var slider = '';
 		list.forEach(function (avatar) {
-			slider += '<li><img src="' + avatar + '"></li>';
+			slider += '<li><img src="' + escapeHtml(avatar) + '"></li>';
 		});
 		
 		$('.flip_'+ data.game.id + ' .right .players').html(html);

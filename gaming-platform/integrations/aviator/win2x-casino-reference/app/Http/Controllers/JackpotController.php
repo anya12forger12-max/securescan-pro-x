@@ -184,8 +184,7 @@ class JackpotController extends Controller {
 	}
 
 	public function newBet(Request $r) {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 2);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 2)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
 		if($this->user->ban) return;
 		$room = Rooms::where('name', $r->get('room'))->first();
 		if(is_null($room)) return [
@@ -271,7 +270,7 @@ class JackpotController extends Controller {
 				'user_id' => $user->id,
 				'sum' => floatval($r->get('amount')),
 				'color' => ($bet) ? $bet->color : $this->getRandomColor(),
-				'balance' => $r->get('balance')
+				'balance' => $balance
 			]);
 
 			DB::commit();
@@ -402,7 +401,7 @@ class JackpotController extends Controller {
 				'user_id' => $user->id,
 				'sum' => floatval($r->get('amount')),
 				'color' => ($bet) ? $bet->color : $this->getRandomColor(),
-				'balance' => $r->get('balance'),
+				'balance' => $balance,
 				'fake' => 1
 			]);
 

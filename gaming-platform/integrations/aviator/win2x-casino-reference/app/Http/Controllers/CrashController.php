@@ -66,8 +66,7 @@ class CrashController extends Controller {
     }
 
     public function newBet(Request $r) {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 2);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 2)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
 		if($this->user->ban) return;
         if($this->game->status > 0) return [
             'success' => false,
@@ -358,23 +357,35 @@ class CrashController extends Controller {
                 ];
             }
 			
-			if($bet->balType == 'balance') {
-				DB::table('users')
-                    ->where('id', $this->user->id)
+			$won = round($bet->price*$float, 2);
+
+            // Claim the bet atomically. A stale $bet->status check before the
+            // transaction cannot stop two concurrent cashouts from both paying
+            // the same bet; only the UPDATE that flips status 0->1 may credit.
+            $claimed = DB::table('crash_bets')
+                    ->where('id', $bet->id)
+                    ->where('status', 0)
                     ->update([
-                        'balance' => $this->user->balance+round($bet->price*$float, 2)
+                        'withdraw' => $float,
+                        'won' => $won,
+                        'status' => 1
                     ]);
-				
-				$this->user->requery += round(($bet->price*$float)-$bet->price, 2);
-				$this->user->save();
+            if(!$claimed) {
+                DB::rollback();
+                return ['success' => false, 'msg' => 'You have already withdrawn your bet!'];
+            }
+
+			if($bet->balType == 'balance') {
+				DB::table('users')->where('id', $this->user->id)->increment('balance', $won);
+				DB::table('users')->where('id', $this->user->id)
+					->increment('requery', round(($bet->price*$float)-$bet->price, 2));
 
 				if($this->user->ref_id) {
 					$ref = User::where('unique_id', $this->user->ref_id)->first();
 					if($ref) {
 						$ref_sum = round((($bet->price*$float) - $bet->price)/100*$this->settings->ref_perc, 2);
-						$ref->ref_money += $ref_sum;
-						$ref->ref_money_all += $ref_sum;
-						$ref->save();
+						User::where('id', $ref->id)->increment('ref_money', $ref_sum);
+						User::where('id', $ref->id)->increment('ref_money_all', $ref_sum);
 						
 						Profit::create([
 							'game' => 'ref',
@@ -384,20 +395,8 @@ class CrashController extends Controller {
 				}
 			}
 			if($bet->balType == 'bonus') {
-				DB::table('users')
-                    ->where('id', $this->user->id)
-                    ->update([
-                        'bonus' => $this->user->bonus+round($bet->price*$float, 2)
-                    ]);
+				DB::table('users')->where('id', $this->user->id)->increment('bonus', $won);
 			}
-
-            DB::table('crash_bets')
-                    ->where('id', $bet->id)
-                    ->update([
-                        'withdraw' => $float,
-                        'won' => round($bet->price*$float, 2),
-                        'status' => 1
-                    ]);
 
             DB::commit();
 

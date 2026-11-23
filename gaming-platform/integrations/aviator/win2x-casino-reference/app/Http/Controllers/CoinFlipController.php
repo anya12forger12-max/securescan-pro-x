@@ -40,8 +40,7 @@ class CoinFlipController extends Controller {
 	}
 	
 	public function createRoom(Request $r) {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 2);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 2)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
 		if($this->user->ban) return;
 		$balType = $r->get('balance');
 		
@@ -142,8 +141,7 @@ class CoinFlipController extends Controller {
     }
 	
 	public function joinGame(Request $r) {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 2);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 2)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
 		if($this->user->ban) return;
 		$balType = $r->get('balance');
 		if($balType != 'balance' && $balType != 'bonus') return response()->json(['type' => 'error', 'msg' => 'Unable to determine your balance type!']);
@@ -168,6 +166,19 @@ class CoinFlipController extends Controller {
 				DB::rollback();
 				return response()->json(['type' => 'error', 'msg' => 'Game #'.$room->id.' already begin!']);
 			}
+
+			// Claim the free slot atomically. Two different players can pass the
+			// stale $room->status check above at the same time; without this both
+			// get debited and both settle a winner for the same room.
+			$claimed = DB::table('flip')
+                    ->where('id', $room->id)
+                    ->where('status', 0)
+                    ->where(function($query) { $query->whereNull('tails')->orWhere('tails', 0); })
+                    ->update(['tails' => $this->user->id, 'status' => 1]);
+            if(!$claimed) {
+                DB::rollback();
+                return response()->json(['type' => 'error', 'msg' => 'Game #'.$room->id.' already begin!']);
+            }
 			if(!$coins) {
 				DB::rollback();
 				return response()->json(['type' => 'error', 'msg' => 'You have not entered a bid amount!']);

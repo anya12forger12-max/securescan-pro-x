@@ -100,13 +100,13 @@ class ChatController extends Controller
 			$admin = 1;
 		}
 		
-		$returnValue = ['unique_id' => $unique_id, 'avatar' => $avatar, 'time2' => Carbon::now()->getTimestamp(), 'time' => $time, 'messages' => '<span style="color: #4986f5;">User "'.$user->username.'" blocked in chat on '.floatval($r->get('time')).' mins.'. ($r->get('reason') ? ' Reason: '.htmlspecialchars($r->get('reason')).'.' : '') .'</span>', 'username' => $username, 'ban' => $ban, 'admin' => $admin, 'moder' => $moder, 'youtuber' => $youtuber];
+		$returnValue = ['unique_id' => $unique_id, 'avatar' => $avatar, 'time2' => Carbon::now()->getTimestamp(), 'time' => $time, 'messages' => '<span style="color: #4986f5;">User "'.htmlspecialchars($user->username).'" blocked in chat on '.floatval($r->get('time')).' mins.'. ($r->get('reason') ? ' Reason: '.htmlspecialchars($r->get('reason')).'.' : '') .'</span>', 'username' => $username, 'ban' => $ban, 'admin' => $admin, 'moder' => $moder, 'youtuber' => $youtuber];
 		$returnBan = ['unique_id' => $user->unique_id, 'username' => $banusername, 'ban' => 1];
 		$this->redis->publish(self::BAN_CHANNEL, json_encode($returnBan));
 		$this->redis->rpush(self::CHAT_CHANNEL, json_encode($returnValue));
 		$this->redis->publish(self::NEW_MSG_CHANNEL, json_encode($returnValue));
 		
-		return response()->json(['success' => true, 'msg' => 'User '. $user->username .' blocked in chat on '. $r->get('time') .' mins!', 'type' => 'success']);
+		return response()->json(['success' => true, 'msg' => 'User '. htmlspecialchars($user->username) .' blocked in chat on '. $r->get('time') .' mins!', 'type' => 'success']);
 	}
 	
 	public function unban(Request $r) {
@@ -136,13 +136,13 @@ class ChatController extends Controller
 			$admin = 1;
 		}
 		
-		$returnValue = ['unique_id' => $unique_id, 'avatar' => $avatar, 'time2' => Carbon::now()->getTimestamp(), 'time' => $time, 'messages' => '<span style="color: #4986f5;">User "'.$user->username.'" unlocked in chat.</span>', 'username' => $username, 'ban' => $ban, 'admin' => $admin, 'moder' => $moder, 'youtuber' => $youtuber];
+		$returnValue = ['unique_id' => $unique_id, 'avatar' => $avatar, 'time2' => Carbon::now()->getTimestamp(), 'time' => $time, 'messages' => '<span style="color: #4986f5;">User "'.htmlspecialchars($user->username).'" unlocked in chat.</span>', 'username' => $username, 'ban' => $ban, 'admin' => $admin, 'moder' => $moder, 'youtuber' => $youtuber];
 		$returnBan = ['unique_id' => $user->unique_id, 'username' => $banusername, 'ban' => 0];
 		$this->redis->publish(self::BAN_CHANNEL, json_encode($returnBan));
 		$this->redis->rpush(self::CHAT_CHANNEL, json_encode($returnValue));
 		$this->redis->publish(self::NEW_MSG_CHANNEL, json_encode($returnValue));
 		
-		return response()->json(['success' => true, 'msg' => 'User '. $user->username .' unlocked in chat!', 'type' => 'success']);
+		return response()->json(['success' => true, 'msg' => 'User '. htmlspecialchars($user->username) .' unlocked in chat!', 'type' => 'success']);
 	}
 	
 	public function clear() {
@@ -166,8 +166,7 @@ class ChatController extends Controller
 	}
 
     public function add_message(Request $request) {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['message' => 'You send messages too often!', 'status' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 5);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 5)) return response()->json(['message' => 'You send messages too often!', 'status' => 'error']);
         $val = \Validator::make($request->all(), [
             'messages' => 'required|string|max:255'
         ],[
@@ -181,7 +180,9 @@ class ChatController extends Controller
             return response()->json(['message' => $error->first('messages'), 'status' => 'error']);
         }
         
-        // Rendered as raw HTML; use a strict allowlist, never strip_tags().
+        // Chat messages are rendered as raw HTML, so every message must go
+        // through a strict allowlist. Only sticker <img> tags with a safe
+        // class and image src survive; all other markup is escaped.
         $messages = $this->sanitizeChatMessage($request->get('messages'));
         
 		$dep = Payments::where('user_id', $this->user->id)->where('status', 1)->sum('sum');
@@ -233,6 +234,7 @@ class ChatController extends Controller
         }
 		
 		if(substr_count(strtolower($messages), '$bal')) {
+			// balType is interpolated into raw HTML; accept only known values.
 			$balType = $request->get('balType') === 'bonus' ? 'bonus' : 'balance';
 			if(\Cache::has('bal.'.$balType.'.user.' . $this->user->id)) return response()->json(['message' => 'You perform this action too often!', 'status' => 'error']);
         	\Cache::put('bal.'.$balType.'.user.' . $this->user->id, '', 300);
@@ -268,10 +270,15 @@ class ChatController extends Controller
         return response()->json(['message' => 'Message deleted!', 'status' => 'success']);
     }
 
-    /** Escape all text, keeping only strictly validated sticker <img> tags. */
+    /**
+     * Escape all text in a chat message, keeping only strictly validated
+     * sticker <img> tags. Stored messages are rendered with {!! !!} and via
+     * jQuery .html(), so a permissive strip_tags() allowlist is not safe.
+     */
     private function sanitizeChatMessage($raw) {
         $raw = html_entity_decode((string)$raw, ENT_QUOTES, 'UTF-8');
-        $out = ''; $offset = 0;
+        $out = '';
+        $offset = 0;
         if(preg_match_all('/<\s*img\b[^>]*>/i', $raw, $matches, PREG_OFFSET_CAPTURE)) {
             foreach($matches[0] as $tag) {
                 $out .= e(substr($raw, $offset, $tag[1] - $offset));
@@ -282,6 +289,7 @@ class ChatController extends Controller
         return $out . e(substr($raw, $offset));
     }
 
+    /** Rebuild a sticker <img> from an allowlist; drop anything else. */
     private function sanitizeChatImage($tag) {
         if(!preg_match('/\bclass\s*=\s*(["\'])(.*?)\1/i', $tag, $c)) return '';
         $class = trim($c[2]);

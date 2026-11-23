@@ -123,9 +123,13 @@ class Controller extends BaseController
 	}
 
 	/**
-	 * Cryptographically secure replacement for mt_rand()/rand(). Real-money
-	 * game outcomes must be unpredictable; the Mersenne Twister can be
-	 * recovered from observed public results. random_int() uses the OS CSPRNG.
+	 * Cryptographically secure replacement for mt_rand().
+	 *
+	 * Real-money game outcomes must be unpredictable. The Mersenne Twister
+	 * behind mt_rand()/rand()/shuffle() can be reconstructed from a modest
+	 * number of observed outputs (crash multipliers are public), letting an
+	 * attacker predict future rounds. random_int() uses the OS CSPRNG.
+	 * Argument order is normalised to match mt_rand()'s lenient behaviour.
 	 */
 	protected function secureInt($min, $max) {
 		if ($min > $max) { $t = $min; $min = $max; $max = $t; }

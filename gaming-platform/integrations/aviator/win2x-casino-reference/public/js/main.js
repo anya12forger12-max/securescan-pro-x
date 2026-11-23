@@ -230,8 +230,8 @@ $(document).ready(function() {
 				if(data.success) {
 					var html = '';
 						html += '<div class="user-modal__head">';
-						html += '<div class="avatar"><img src="'+ data.info['avatar'] +'" alt=""></div>';
-						html += '<div class="user-block"><div class="user-name"><span class="sanitize-name"><span class="sanitize-text">'+ data.info['username'] +'</span></span></div></div>';
+						html += '<div class="avatar"><img src="'+ escapeHtml(data.info['avatar']) +'" alt=""></div>';
+						html += '<div class="user-block"><div class="user-name"><span class="sanitize-name"><span class="sanitize-text">'+ escapeHtml(data.info['username']) +'</span></span></div></div>';
 						html += '</div>';
 						html += '<div class="card-stats">';
 						html += '<div class="stats-item">';
@@ -634,7 +634,7 @@ $(document).ready(function() {
 				panel += '<svg class="icon"><use xlink:href="/img/symbols.svg#icon-close"></use></svg><span>Delete</span>';
 				panel += '</button>';
 				if(!data.admin) {
-					panel += '<button type="button" class="btn btn-light btnBan" data-name="' + data.username + '" data-id="' + data.unique_id + '">';
+					panel += '<button type="button" class="btn btn-light btnBan" data-name="' + escapeHtml(data.username) + '" data-id="' + data.unique_id + '">';
 					panel += '<svg class="icon">';
 					panel += '<use xlink:href="/img/symbols.svg#icon-ban"></use>';
 					panel += '</svg><span>Ban</span></button>';
@@ -646,7 +646,7 @@ $(document).ready(function() {
 				panel += '<svg class="icon"><use xlink:href="/img/symbols.svg#icon-close"></use></svg><span>Delete</span>';
 				panel += '</button>';
 				if(!data.admin) {
-					panel += '<button type="button" class="btn btn-light btnUnBan" data-name="' + data.username + '" data-id="' + data.unique_id + '">';
+					panel += '<button type="button" class="btn btn-light btnUnBan" data-name="' + escapeHtml(data.username) + '" data-id="' + data.unique_id + '">';
 					panel += '<svg class="icon">';
 					panel += '<use xlink:href="/img/symbols.svg#icon-ban"></use>';
 					panel += '</svg><span>Unban</span>';
@@ -657,15 +657,15 @@ $(document).ready(function() {
         } else {
             var panel = '';
         }
-		var name = data.username;
+		var name = escapeHtml(data.username);
 		var type = data.admin ? 'isAdmin' : (data.moder ? 'isModerator' : '');
         if(data.admin) name = '<span class="admin-badge isAdmin" data-toggle="tooltip" data-placement="top" title="Admin"><span class=""><svg class="icon icon-a"><use xlink:href="/img/symbols.svg#icon-a"></use></svg></span></span> Admin ';
-        if(data.moder) name = '<span class="admin-badge isModerator" data-toggle="tooltip" data-placement="top" title="Moder"><span class=""><svg class="icon icon-m"><use xlink:href="/img/symbols.svg#icon-m"></use></svg></span></span> ' + data.username;
-        if(data.youtuber) name = '<span class="admin-badge isYouTuber" data-toggle="tooltip" data-placement="top" title="YouTuber"><span class=""><svg class="icon icon-y"><use xlink:href="/img/symbols.svg#icon-y"></use></svg></span></span> ' + data.username;
+        if(data.moder) name = '<span class="admin-badge isModerator" data-toggle="tooltip" data-placement="top" title="Moder"><span class=""><svg class="icon icon-m"><use xlink:href="/img/symbols.svg#icon-m"></use></svg></span></span> ' + escapeHtml(data.username);
+        if(data.youtuber) name = '<span class="admin-badge isYouTuber" data-toggle="tooltip" data-placement="top" title="YouTuber"><span class=""><svg class="icon icon-y"><use xlink:href="/img/symbols.svg#icon-y"></use></svg></span></span> ' + escapeHtml(data.username);
 		var messages = data.messages;
 		$('.chat-conversation-inner').append(
 			'<div class="message-block user_' + data.unique_id + '" id="chatm_' + data.time2 + '" >' +
-			'<div class="message-avatar ' + type + '"><img src="' + data.avatar + '" alt=""></div>' +
+			'<div class="message-avatar ' + type + '"><img src="' + escapeHtml(data.avatar) + '" alt=""></div>' +
 			'<div class="message-content">' +
 			'<div>' +
 			'<button class="user-link" type="button" data-id="' + data.unique_id + '">' +

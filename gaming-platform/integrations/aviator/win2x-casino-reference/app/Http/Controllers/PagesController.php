@@ -105,8 +105,7 @@ class PagesController extends Controller
 	}
 	
 	public function freeSpin(Request $r) {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 2);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 2)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
 		$validator = \Validator::make($r->all(), [
             'recapcha' => 'required|captcha',
         ]);
@@ -229,8 +228,7 @@ class PagesController extends Controller
 	}
 	
 	public function promoActivate(Request $r) {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['success' => false, 'msg' => 'Wait before previous action!', 'type' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 5);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 5)) return response()->json(['success' => false, 'msg' => 'Wait before previous action!', 'type' => 'error']);
 		
 		$code = strtolower(htmlspecialchars($r->get('code')));
         if(!$code) return response()->json(['success' => false, 'msg' => 'You don`t entered a code!', 'type' => 'error']);
@@ -290,8 +288,7 @@ class PagesController extends Controller
 	}
 	
 	public function affiliateGet() {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 5);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 5)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
 		if($this->user->ref_money < $this->settings->min_ref_withdraw) return response()->json(['success' => false, 'msg' => 'Minimum getting amount '. $this->settings->min_ref_withdraw .'$!', 'type' => 'error']);
 		
 		DB::beginTransaction();
@@ -316,8 +313,7 @@ class PagesController extends Controller
 	}
 	
 	public function exchange(Request $r) {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 5);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 5)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
 		$sum = floatval($r->get('sum'));
 		
 		if($sum < $this->settings->exchange_min) return ['msg' => 'Minimum exchange amount '.$this->settings->exchange_min.'$!', 'type' => 'error'];
@@ -422,8 +418,7 @@ class PagesController extends Controller
 	}
 	
 	public function unbanMe() {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 2);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 2)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
 		if(!$this->user->banchat) return [
 			'success' => false,
 			'type' => 'error',
@@ -435,7 +430,7 @@ class PagesController extends Controller
 			'msg' => 'You do not have enough money to unlock!'
 		];
 		
-		$this->user->balance -= 50;
+		$this->user->balance -= 0.50;
 		$this->user->banchat = null;
 		$this->user->save();
 		
@@ -588,8 +583,7 @@ class PagesController extends Controller
 	}
 	
 	public function pay(Request $r) {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 5);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 5)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
 		
 		if($r->get('amount') < $this->settings->min_dep) return response()->json(['success' => false, 'msg' => 'Minimum deposit amount '.$this->settings->min_dep.'$!', 'type' => 'error']);
 		if(!$r->get('type')) return response()->json(['success' => false, 'msg' => 'You have not chosen a payment system!', 'type' => 'error']);
@@ -602,7 +596,7 @@ class PagesController extends Controller
 			$depo['user_id'] = $this->user->id;
 			$depo['amount'] = $amount;
 			$depo['usd_amo'] = round($usdamo, 2);
-			$depo['trx'] = str_random(16);
+			$depo['trx'] = \Illuminate\Support\Str::random(16);
 			$depo['try'] = 0;
 			$depo['status'] = 0;
 
@@ -630,7 +624,7 @@ class PagesController extends Controller
 			$depo['user_id'] = $this->user->id;
 			$depo['amount'] = $amount;
 			$depo['usd_amo'] = round($usdamo, 2);
-			$depo['trx'] = str_random(16);
+			$depo['trx'] = \Illuminate\Support\Str::random(16);
 			$depo['try'] = 0;
 			$depo['status'] = 0;
 
@@ -675,8 +669,9 @@ class PagesController extends Controller
 	}
 	
 	public function result_cp(Request $r) {
-		// CoinPayments IPNs are authenticated with an HMAC over the raw body.
-		// Never credit a deposit from unauthenticated request fields.
+		// CoinPayments IPNs are authenticated with an HMAC over the raw request
+		// body using the merchant IPN secret. A deposit must never be credited
+		// from unauthenticated query/form fields.
 		$CP = new coinPayments();
 		$CP->setMerchantId($this->settings->merchant_id);
 		$CP->setSecretKey($this->settings->ipn_secret);
@@ -690,11 +685,14 @@ class PagesController extends Controller
 		}
 
 		$data = Deposit::where('trx', $r->input('custom'))
-			->where('status', 0)->orderBy('id', 'DESC')->first();
+			->where('status', 0)
+			->orderBy('id', 'DESC')
+			->first();
 		if(is_null($data)) {
 			return response('IPN OK', 200);
 		}
 
+		// The notified amount must cover this specific deposit (incl. fee).
 		if(strtoupper((string)$r->input('currency1')) !== 'USD' ||
 		   floatval($r->input('amount1')) + 0.01 < floatval($data->usd_amo)) {
 			return response('Invalid IPN amount', 403);
@@ -715,6 +713,7 @@ class PagesController extends Controller
 			if(!$r->has($key)) return response('Invalid IPN', 403);
 		}
 
+		// Perfect Money V2 hash: constant-time comparison, no global define().
 		$passphrase = strtoupper(md5((string)$this->settings->pm_passphrase));
 		$string = implode(':', [
 			$r->input('PAYMENT_ID'), $r->input('PAYEE_ACCOUNT'),
@@ -726,16 +725,20 @@ class PagesController extends Controller
 		if(!hash_equals(strtoupper(md5($string)), strtoupper((string)$r->input('V2_HASH')))) {
 			return response('Invalid IPN', 403);
 		}
+
 		if(!hash_equals((string)$this->settings->pm_usd_wallet, (string)$r->input('PAYEE_ACCOUNT')) ||
 		   strtoupper((string)$r->input('PAYMENT_UNITS')) !== 'USD') {
 			return response('Invalid IPN', 403);
 		}
 
 		$data = Deposit::where('trx', $r->input('PAYMENT_ID'))
-			->where('status', 0)->orderBy('id', 'DESC')->first();
+			->where('status', 0)
+			->orderBy('id', 'DESC')
+			->first();
 		if(is_null($data)) {
 			return response('IPN OK', 200);
 		}
+
 		if(floatval($r->input('PAYMENT_AMOUNT')) + 0.01 < floatval($data->usd_amo)) {
 			return response('Invalid IPN amount', 403);
 		}
@@ -748,24 +751,26 @@ class PagesController extends Controller
 	}
 
 	public function userDataUpdate($data) { 
-        if($data->status == 0) {
-            $data->status = 1;
-            $data->update();
-    
-            $user = User::where('id', $data->user_id)->first();
-            $user->balance += $data->amount;
-            $user->update();
+        // Two IPNs can load the same status=0 deposit before either commits.
+        // Only the update that actually claims the row may credit the balance;
+        // a stale model's status check is not enough to prevent a double payout.
+        $claimed = Deposit::where('id', $data->id)->where('status', 0)->update(['status' => 1]);
+        if(!$claimed) return;
+        
+        $user = User::where('id', $data->user_id)->first();
+        if(is_null($user)) return;
+        
+        DB::table('users')->where('id', $user->id)->increment('balance', $data->amount);
+        $balance = DB::table('users')->where('id', $user->id)->value('balance');
 			
 			$this->redis->publish('updateBalance', json_encode([
 				'unique_id'    => $user->unique_id,
-				'balance' => round($user->balance, 2)
+				'balance' => round((float)$balance, 2)
 			]));
-        }
     }
 	
 	public function userWithdraw(Request $r) {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 5);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 5)) return response()->json(['msg' => 'Wait before previous action!', 'type' => 'error']);
 		
 		if($this->settings->min_dep_withdraw) {
 			$dep = Deposit::where('user_id', $this->user->id)->where('status', 1)->sum('amount');
@@ -827,10 +832,10 @@ class PagesController extends Controller
 	}
 	
 	public function userWithdrawCancel(Request $r) {
-		if(\Cache::has('action.user.' . $this->user->id)) return response()->json(['success' => false, 'msg' => 'Wait before previous action!', 'type' => 'error']);
-        \Cache::put('action.user.' . $this->user->id, '', 2);
+		if(!\Cache::add('action.user.' . $this->user->id, '', 2)) return response()->json(['success' => false, 'msg' => 'Wait before previous action!', 'type' => 'error']);
 		$id = $r->get('id');
         $withdraw = Withdraw::where('id', $id)->first();
+		if(is_null($withdraw)) return response()->json(['success' => false, 'msg' => 'Withdrawal not found!', 'type' => 'error']);
 		
 		if($withdraw->status > 0) return response()->json(['success' => false, 'msg' => 'You cannot cancel this withdraw!', 'type' => 'error']);
 		if($withdraw->user_id != $this->user->id) return response()->json(['success' => false, 'msg' => 'You cannot cancel another user`s withdraw!', 'type' => 'error']);
