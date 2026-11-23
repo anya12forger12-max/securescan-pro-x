@@ -50,7 +50,7 @@
 						<td>{{$b->sum}}$</td>
 						<td>{{$b->status ? 'Yes' : 'No'}}</td>
 						<td><div style="background: {{$b->bg}}; color: {{$b->color}}; font-weight: 600; text-align: center; padding: 3px 0;">Text</div></td>
-						<td><a class="btn btn-sm btn-clean btn-icon btn-icon-md" title="Edit" data-toggle="modal" href="#edit_{{$b->id}}"><i class="la la-edit"></i></a><a href="/admin/bonus/delete/{{$b->id}}" class="btn btn-sm btn-clean btn-icon btn-icon-md" title="Delete"><i class="la la-trash"></i></a></td>
+						<td><a class="btn btn-sm btn-clean btn-icon btn-icon-md" title="Edit" data-toggle="modal" href="#edit_{{$b->id}}"><i class="la la-edit"></i></a><form method="POST" action="/admin/bonus/delete/{{$b->id}}" style="display:inline" onsubmit="return confirm('Delete this bonus?');">@csrf<button type="submit" class="btn btn-sm btn-clean btn-icon btn-icon-md" title="Delete"><i class="la la-trash"></i></button></form></td>
 					</tr>
 					@endforeach
 				</tbody>

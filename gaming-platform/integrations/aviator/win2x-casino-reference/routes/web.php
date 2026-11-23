@@ -78,16 +78,16 @@ Route::group(['prefix' => '/admin', 'middleware' => ['auth', 'access:admin']], f
 	Route::get('/user/{id}', ['as' => 'admin.user', 'uses' => 'AdminController@user']);
 	Route::get('/settings', ['as' => 'admin.settings', 'uses' => 'AdminController@settings']);
 	Route::get('/bots', ['as' => 'admin.bots', 'uses' => 'AdminController@bots']);
-	Route::get('/bots/delete/{id}', 'AdminController@botsDelete');
+	Route::post('/bots/delete/{id}', 'AdminController@botsDelete');
 	Route::get('/bonus', ['as' => 'admin.bonus', 'uses' => 'AdminController@bonus']);
-	Route::get('/bonus/delete/{id}', 'AdminController@bonusDelete');
+	Route::post('/bonus/delete/{id}', 'AdminController@bonusDelete');
 	Route::get('/promo', ['as' => 'admin.promo', 'uses' => 'AdminController@promo']);
-	Route::get('/promo/delete/{id}', 'AdminController@promoDelete');
+	Route::post('/promo/delete/{id}', 'AdminController@promoDelete');
 	Route::get('/filter', ['as' => 'admin.filter', 'uses' => 'AdminController@filter']);
-	Route::get('/filter/delete/{id}', 'AdminController@filterDelete');
+	Route::post('/filter/delete/{id}', 'AdminController@filterDelete');
 	Route::get('/withdraws', ['as' => 'admin.withdraws', 'uses' => 'AdminController@withdraws']);
-    Route::get('/withdraw/{id}', 'AdminController@withdrawSend');
-    Route::get('/return/{id}', 'AdminController@withdrawReturn');
+    Route::post('/withdraw/{id}', 'AdminController@withdrawSend');
+    Route::post('/return/{id}', 'AdminController@withdrawReturn');
 	
 	Route::post('/setting/save', 'AdminController@settingsSave');
 	Route::post('/ban', 'ChatController@ban');

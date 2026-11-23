@@ -42,7 +42,7 @@
 						<td>{{$withdraw['value']}}$</td>
 						<td>{{$withdraw['system']}}</td>
 						<td>{{$withdraw['wallet']}}</td>
-						<td><div class="row text-center"><div class="col-md-6"><a href="/admin/withdraw/{{$withdraw['id']}}" class="btn btn-success btn-sm">Accept</a></div><div class="col-md-6"><a href="/admin/return/{{$withdraw['id']}}" class="btn btn-danger btn-sm">Return</a></div></div></td>
+						<td><div class="row text-center"><div class="col-md-6"><form method="POST" action="/admin/withdraw/{{$withdraw['id']}}" style="display:inline" onsubmit="return confirm('Send this withdrawal?');">@csrf<button type="submit" class="btn btn-success btn-sm">Accept</button></form></div><div class="col-md-6"><form method="POST" action="/admin/return/{{$withdraw['id']}}" style="display:inline" onsubmit="return confirm('Return this withdrawal to the user balance?');">@csrf<button type="submit" class="btn btn-danger btn-sm">Return</button></form></div></div></td>
 					</tr>
 					@endforeach
 				</tbody>

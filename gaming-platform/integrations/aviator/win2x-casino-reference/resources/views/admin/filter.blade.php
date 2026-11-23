@@ -46,7 +46,7 @@
 					<tr>
 						<td>{{$f->id}}</td>
 						<td>{{$f->word}}</td>
-						<td><a class="btn btn-sm btn-clean btn-icon btn-icon-md" title="Edit" data-toggle="modal" href="#edit_{{$f->id}}"><i class="la la-edit"></i></a><a href="/admin/filter/delete/{{$f->id}}" class="btn btn-sm btn-clean btn-icon btn-icon-md" title="Delete"><i class="la la-trash"></i></a></td>
+						<td><a class="btn btn-sm btn-clean btn-icon btn-icon-md" title="Edit" data-toggle="modal" href="#edit_{{$f->id}}"><i class="la la-edit"></i></a><form method="POST" action="/admin/filter/delete/{{$f->id}}" style="display:inline" onsubmit="return confirm('Delete this filter?');">@csrf<button type="submit" class="btn btn-sm btn-clean btn-icon btn-icon-md" title="Delete"><i class="la la-trash"></i></button></form></td>
 					</tr>
 					@endforeach
 				</tbody>
