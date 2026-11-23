@@ -1,4 +1,8 @@
 .git
+# Vendored reference apps are untrusted, unmaintained and excluded from every
+# image. In particular the Laravel 5.8 dependency tree has known critical CVEs
+# and must never be built or served, even by accident.
+integrations
 .env
 .env.*
 !.env.example

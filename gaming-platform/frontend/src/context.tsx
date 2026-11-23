@@ -666,8 +666,14 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       if (!isCurrent(null, generation)) return;
       identityEstablishedRef.current = true;
       const restored = await refreshSession();
-      if (isCurrent(null, generation) && !restored) {
+      if (!isCurrent(null, generation)) return;
+      if (!restored) {
         toast.error("Sign out failed - please try again");
+      } else {
+        // refreshSession only rotates the in-memory token; it does not
+        // re-establish identityRef, which signOut cleared at the start. Without
+        // this the UI looks signed in but no authenticated event stream starts.
+        setIdentity(restored.token, restored.user);
       }
       return;
     }
@@ -677,7 +683,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     clearLegacyTokens();
     resetState(null, null, generation);
     toast.info("Signed out");
-  }, [invalidateIdentity, isCurrent, refreshSession, resetState, serializeAuth]);
+  }, [invalidateIdentity, isCurrent, refreshSession, resetState, setIdentity, serializeAuth]);
 
   const createSession = useCallback(
     async (kind: GameKind) => {

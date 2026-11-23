@@ -61,6 +61,10 @@ local now = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
 if redis.call('ZSCORE', key, member) then
   redis.call('ZADD', key, now + ttl, member)
+  -- Refresh the key TTL as well: ZADD preserves an existing expiry, so without
+  -- this a long-lived stream's key disappears ~ttl+60s after the first acquire
+  -- even while its heartbeat keeps the member alive, resetting the shared cap.
+  redis.call('PEXPIRE', key, ttl + 60000)
   return 1
 end
 return 0

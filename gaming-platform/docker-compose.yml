@@ -193,7 +193,11 @@ services:
       retries: 6
       start_period: 20s
     ports:
-      - "3000:3000"
+      # Plain HTTP by design: bind only to loopback so a host firewall is not
+      # the only thing keeping browsers off this port. The TLS terminator must
+      # run on this host and proxy to 127.0.0.1:3000; for a remote proxy use a
+      # Compose override that supplies its own network path, never 0.0.0.0.
+      - "127.0.0.1:3000:3000"
 
   auth:
     <<: *app

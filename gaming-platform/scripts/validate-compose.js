@@ -82,9 +82,13 @@ for (const { name, spec, loopback } of published) {
 }
 // Postgres and Redis used to publish loopback ports for local administration;
 // the data tier is now internal-only, leaving one deliberate public surface.
-if (published.length !== 1 || published[0].name !== "gateway" || published[0].spec !== "3000:3000") {
+if (
+  published.length !== 1 ||
+  published[0].name !== "gateway" ||
+  published[0].spec !== "127.0.0.1:3000:3000"
+) {
   errors.push(
-    `expected only gateway 3000:3000 to be published, got ` +
+    `expected only gateway 127.0.0.1:3000:3000 to be published, got ` +
       (published.map(({ name, spec }) => `${name}:${spec}`).join(", ") || "none"),
   );
 }

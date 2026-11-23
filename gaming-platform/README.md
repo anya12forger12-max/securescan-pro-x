@@ -199,13 +199,16 @@ editing an already-applied migration fails the deploy instead of drifting.
 
 ## Deploy with Docker Compose
 
-Requirements: Docker with Compose v2, a public browser origin, and port 3000
-free on the host.
+Requirements: Docker with Compose v2, a public browser origin, and host port
+3000 free on loopback.
 
-**TLS is mandatory in production.** The gateway itself speaks plain HTTP on
-port 3000. Never expose that port directly to browsers: put a TLS-terminating
-reverse proxy / load balancer in front of it, redirect HTTP to HTTPS, set HSTS
-at the terminator, and firewall 3000 so only that proxy can reach it. Use an
+**TLS is mandatory in production.** The gateway itself speaks plain HTTP and
+the Compose port mapping is bound to `127.0.0.1:3000`, so it is never reachable
+from another host by default. Run the TLS-terminating reverse proxy on the same
+host and point it at `http://127.0.0.1:3000`; redirect HTTP to HTTPS, set HSTS
+at the terminator, and keep 3000 firewalled. Do not change the mapping to
+`0.0.0.0` — if the proxy lives on a different machine, put the gateway and proxy
+on a shared Docker network instead of publishing a plain-HTTP port. Use an
 `https://` origin in `CORS_ORIGIN`. The example values in `.env.example` and in
 the local-run section below are **non-production placeholders**; generate real
 secrets with `npm run env:init`.
