@@ -168,7 +168,11 @@ function releaseLocalStreamSlot(key) {
 
 /** Only genuinely unauthenticated auth endpoints are keyed by IP. `/v1/auth/me`
  * carries a player JWT and must not share a NAT's quota with login attempts. */
-const IP_LIMITED_AUTH_PATH = /^\/v1\/auth\/(register|login|refresh|logout)\/?$/;
+// Logout is deliberately not in the IP-limited auth bucket: it only revokes the
+// caller's own token family, and sharing a NAT's login/refresh quota could block
+// sign-out with 429, leaving a valid refresh cookie on a shared device. It still
+// uses the per-user write bucket below.
+const IP_LIMITED_AUTH_PATH = /^\/v1\/auth\/(register|login|refresh)\/?$/;
 
 /** In Compose every peer is reachable by its service name on the shared
  * network; with `npm run start:all` everything listens on loopback. */
@@ -207,7 +211,11 @@ const ROUTES = [
   { prefix: "/v1/internal/audit", service: "admin-risk", port: 3013, methods: ["POST"], privileged: true, permission: "audit.append" },
   // Preserve the previous fallback for any other method on these prefixes.
   { prefix: "/v1/internal/audit", service: "admin-risk", port: 3013, privileged: true, permission: "audit.read" },
-  { prefix: "/v1/internal/rbac", service: "admin-risk", port: 3013, privileged: true, permission: "audit.read" },
+  // Peer-only: this forwards to admin-risk's generic RBAC lookup, which accepts
+  // an arbitrary `userId` in the body. Exposing it to `audit.read` users lets
+  // support/risk enumerate any player's roles; the gateway's own permission
+  // checks call admin-risk directly and do not need this public route.
+  { prefix: "/v1/internal/rbac", service: "admin-risk", port: 3013, privileged: true },
   { prefix: "/v1/events", service: "realtime", port: 3010, requirePlayer: true },
   { prefix: "/internal/events", service: "realtime", port: 3010, privileged: true },
   { prefix: "/v1/wallet", service: "wallet", port: 3011 },
@@ -241,6 +249,10 @@ const SERVICE_TOKEN_ONLY = new Map([
   ["/internal/events", REALTIME_SERVICE_TOKEN],
   ["/internal/wallet", WALLET_SERVICE_TOKEN],
   ["/internal/crash", CRASH_SERVICE_TOKEN],
+  // admin-risk's RBAC lookup is a peer capability: it trusts the caller's
+  // service token and accepts any target userId, so a player JWT must never
+  // unlock it through the proxy.
+  ["/v1/internal/rbac", ADMIN_SERVICE_TOKEN],
 ]);
 
 function tokenMatches(value, expected) {
@@ -319,6 +331,56 @@ async function hasPermission(userId, permission, log) {
     log.warn({ err }, "RBAC check failed");
     return false;
   }
+}
+
+/**
+ * Privileged catalogue mutations create wallet liabilities or alter live
+ * tournaments. The services that own them do not hold an admin-risk capability,
+ * so the gateway writes the hash-chained audit entry using the verified player
+ * subject (admin-risk binds `actor` to x-user-id). A failure is logged but does
+ * not roll back the already-committed mutation: dropping an audit write must not
+ * leave the caller with an ambiguous result about the primary action.
+ */
+async function recordAdminAudit(req, actorId, action, target, metadata) {
+  try {
+    const res = await fetch(`${ADMIN_RISK_URL}/v1/internal/audit`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-service-token": ADMIN_SERVICE_TOKEN,
+        "x-user-id": actorId,
+      },
+      body: JSON.stringify({ actor: actorId, action, target, metadata }),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!res.ok) {
+      req.log.error({ status: res.status, action }, "admin audit append rejected");
+    }
+  } catch (err) {
+    req.log.error({ err, action }, "admin audit append failed");
+  }
+}
+
+/** Return the audit descriptor for a successful privileged mutation, or null. */
+function auditedMutation(method, path, bodyText) {
+  if (method === "POST" && path === "/internal/promotions") {
+    let id = "unknown";
+    try {
+      id = JSON.parse(bodyText)?.data?.promotion?.id ?? "unknown";
+    } catch { /* response was not JSON; still record the action */ }
+    return { action: "promotion.create", target: String(id) };
+  }
+  if (method === "PATCH" && matchesPrefix(path, "/internal/promotions/")) {
+    return { action: "promotion.update", target: path.slice("/internal/promotions/".length) };
+  }
+  if (method === "POST" && path === "/v1/tournaments") {
+    let id = "unknown";
+    try {
+      id = JSON.parse(bodyText)?.data?.tournament?.id ?? "unknown";
+    } catch { /* response was not JSON; still record the action */ }
+    return { action: "tournament.create", target: String(id) };
+  }
+  return null;
 }
 
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
@@ -643,6 +705,16 @@ async function proxy(req, reply) {
     }
 
     const text = await res.text();
+    if (res.ok && decoded?.userId) {
+      const mutation = auditedMutation(req.method, path, text);
+      if (mutation) {
+        await recordAdminAudit(req, decoded.userId, mutation.action, mutation.target, {
+          requestId,
+          method: req.method,
+          path,
+        });
+      }
+    }
     reply.code(res.status);
     if (contentType) reply.header("content-type", contentType);
     if (requestId) reply.header("x-request-id", requestId);

@@ -616,6 +616,8 @@ async function reserveBet(roundId, userId, amount, autoCashout, sessionId) {
   }
 }
 
+const SETTLED_BET_STATUSES = new Set(["active", "cashing_out", "cashed_out", "lost"]);
+
 async function activateReservedBet(bet) {
   // The activation carries the same betting-window guard as the reservation:
   // a bet must never become live after the round has started.
@@ -630,28 +632,63 @@ async function activateReservedBet(bet) {
   );
   if (activated.rowCount) return { bet: activated.rows[0] };
   const fresh = await pool.query(`SELECT * FROM crash_bets WHERE id = $1`, [bet.id]);
-  // A losing/refunded/cancelled row must never be reported as a placed bet;
-  // only a still-pending row can be a safe idempotent retry.
-  if (fresh.rows[0]?.status === "pending") return { bet: fresh.rows[0], retry: true };
-  return { error: [409, ERROR_CODES.CONFLICT, "betting is closed for this round"] };
+  const status = fresh.rows[0]?.status;
+  // A concurrent duplicate already moved the same claim into a live or settled
+  // state. That is an idempotent replay of the winning request, NOT a failed
+  // debit: refunding here would return the stake on a perfectly valid bet and
+  // could stack a refund on top of a cash-out payout.
+  if (SETTLED_BET_STATUSES.has(status)) return { bet: fresh.rows[0], replay: true };
+  // A claim already being refunded must not be activated again; reconciliation
+  // owns its credit. Any other terminal row must not be credited a second time.
+  if (status === "refunding" || status === "refunded" || status === "cancelled") {
+    return { error: [409, ERROR_CODES.CONFLICT, "bet is already settled"], refund: false };
+  }
+  // Still pending: the debit succeeded but the round stopped accepting bets
+  // before activation. This one genuinely owes the player their stake back.
+  return {
+    error: [409, ERROR_CODES.CONFLICT, "betting is closed for this round"],
+    refund: status === "pending",
+  };
 }
 
-async function refundBet(bet, { ensureDebit = true } = {}) {
+/**
+ * Claim a refund under a conditional status write BEFORE touching the wallet.
+ * The new `refunding` state makes the claim visible to recovery, so a process
+ * that dies between the claim and the credit still replays the same idempotent
+ * keys. A caller that lost the claim returns without minting another credit.
+ */
+async function refundBet(bet, { ensureDebit = true, claimed = false } = {}) {
+  let claim = bet;
+  if (!claimed) {
+    const taken = await pool.query(
+      `UPDATE crash_bets SET status = 'refunding', settled_at = now()
+        WHERE id = $1 AND status IN ('pending','active','cancelled')
+        RETURNING *`,
+      [bet.id],
+    );
+    if (!taken.rowCount) {
+      const fresh = await pool.query(`SELECT status FROM crash_bets WHERE id = $1`, [bet.id]);
+      return { alreadyClaimed: true, status: fresh.rows[0]?.status ?? null };
+    }
+    claim = taken.rows[0];
+  }
   try {
     if (ensureDebit) {
       // A pending bet may have been abandoned before the wallet call. Replay
       // the debit with this bet's deterministic key first so a refund can
       // never mint new credits or create a second net-zero tx pair on retry.
-      await walletDebit(bet);
+      await walletDebit(claim);
     }
-    await walletRefund(bet);
+    await walletRefund(claim);
     await pool.query(
       `UPDATE crash_bets SET status = 'refunded', settled_at = now()
-        WHERE id = $1 AND status IN ('pending','active','cancelled')`,
-      [bet.id],
+        WHERE id = $1 AND status = 'refunding'`,
+      [claim.id],
     );
+    return { refunded: true };
   } catch (err) {
-    app.log.error({ err, betId: bet.id }, "crash stake refund failed; bet stays reconcilable");
+    // Keep the refunding claim: boot/periodic recovery replays the same keys.
+    app.log.error({ err, betId: claim.id }, "crash stake refund failed; bet stays reconcilable");
     throw err;
   }
 }
@@ -662,7 +699,7 @@ async function reconcileUnsettled() {
   const pending = await pool.query(
     `SELECT b.*, r.status AS round_status, r.created_at AS round_created_at
        FROM crash_bets b JOIN crash_rounds r ON r.id = b.round_id
-      WHERE b.status = 'pending'`,
+      WHERE b.status IN ('pending','refunding')`,
   );
   for (const bet of pending.rows) {
     try {
@@ -670,9 +707,20 @@ async function reconcileUnsettled() {
         await refundBet(bet);
         continue;
       }
+      // A bet already claimed for refund must stay on that path; re-activating
+      // it after a partial wallet failure would make the refund credit a free
+      // stake. walletRefund uses the same deterministic key, so this is safe.
+      if (bet.status === "refunding") {
+        await refundBet(bet, { claimed: true, ensureDebit: false });
+        continue;
+      }
       await walletDebit(bet);
       const activation = await activateReservedBet(bet);
-      if (activation.error) await refundBet(bet);
+      if (activation.error) {
+        // The activation guard reports whether compensation is actually owed;
+        // an idempotent replay of a live/settled claim must never be refunded.
+        if (activation.refund) await refundBet(bet, { ensureDebit: false });
+      }
     } catch (err) {
       if (definitiveWalletRejection(err) && err.status === 409) {
         // Definitive "insufficient balance": no debit was recorded.
@@ -1130,10 +1178,12 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
 
   const activation = await activateReservedBet(bet);
   if (activation.error) {
-    // Betting closed after the debit (timer or restart). Compensate with an
-    // idempotent refund; the row is marked refunded only after credit lands.
+    // Only a genuinely pending claim after a failed debit needs compensation.
+    // A concurrent duplicate that already activated the same bet is reported
+    // as a successful idempotent replay instead of refunding a live stake.
+    if (!activation.refund) return deny(reply, ...activation.error);
     try {
-      await refundBet(bet);
+      await refundBet(bet, { ensureDebit: false });
     } catch {
       // The error is logged in refundBet; reconciliation will retry.
     }
@@ -1145,7 +1195,7 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
     roundId: round.id,
     status: bet.status,
   });
-  return ok(reply, 201, {
+  return ok(reply, activation.replay ? 200 : 201, {
     bet: {
       id: bet.id,
       amount: Number(bet.amount),

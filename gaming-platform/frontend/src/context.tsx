@@ -656,19 +656,28 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     // the backend also revokes the whole token family for defense in depth.
     try {
       await serializeAuth(() =>
-        apiRequest("/auth/logout", { method: "POST", credentials: "include" }).catch(
-          () => undefined,
-        ),
+        apiRequest("/auth/logout", { method: "POST", credentials: "include" }),
       );
-    } finally {
-      // A new sign-in during logout owns the generation now; never clear its
-      // fresh token or state.
+    } catch {
+      // A blocked, rate-limited or unavailable logout leaves the httpOnly
+      // refresh cookie valid. Silently reporting success would let a reload
+      // restore this session on a shared device. Re-establish the in-memory
+      // identity and tell the user so they can retry instead.
       if (!isCurrent(null, generation)) return;
-      clearLegacyTokens();
-      resetState(null, null, generation);
-      toast.info("Signed out");
+      identityEstablishedRef.current = true;
+      const restored = await refreshSession();
+      if (isCurrent(null, generation) && !restored) {
+        toast.error("Sign out failed - please try again");
+      }
+      return;
     }
-  }, [invalidateIdentity, isCurrent, resetState, serializeAuth]);
+    // A new sign-in during logout owns the generation now; never clear its
+    // fresh token or state.
+    if (!isCurrent(null, generation)) return;
+    clearLegacyTokens();
+    resetState(null, null, generation);
+    toast.info("Signed out");
+  }, [invalidateIdentity, isCurrent, refreshSession, resetState, serializeAuth]);
 
   const createSession = useCallback(
     async (kind: GameKind) => {

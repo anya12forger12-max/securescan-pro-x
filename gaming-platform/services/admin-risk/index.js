@@ -189,8 +189,15 @@ app.post("/v1/internal/audit", async (req, reply) => {
   if (!parsed.success)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
 
+  // The gateway derives this header from a verified player JWT and strips any
+  // caller-supplied identity headers. Bind the audit actor to that identity so
+  // an admin cannot write entries attributed to somebody else; peer services
+  // calling directly without a player JWT may still supply their own actor.
+  const verifiedActor = headerString(req.headers, "x-user-id");
+  const entryData = verifiedActor ? { ...parsed.data, actor: verifiedActor } : parsed.data;
+
   try {
-    const entry = await withTransaction((client) => appendAudit(client, parsed.data));
+    const entry = await withTransaction((client) => appendAudit(client, entryData));
     return ok(reply, 201, { entry }, reqId(req));
   } catch (err) {
     req.log.error({ err }, "audit append failed");

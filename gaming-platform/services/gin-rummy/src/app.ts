@@ -5,7 +5,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { getPool, closePool, createGame, getGame, getGameForUpdate, joinGameWithSessionSeat, isSessionParticipant, setGameStatus, updateGameState, } from "./db.js";
+import { getPool, closePool, createGame, getGame, getGameForUpdate, joinGameWithSessionSeat, isSessionParticipant, isSessionOfType, setGameStatus, updateGameState, } from "./db.js";
 import type { GameRow } from "./db.js";
 import type { GinRummyEnv } from "./env.js";
 
@@ -164,6 +164,12 @@ export async function buildGinRummyService(env: GinRummyEnv) {
     // authenticated user could attach a game to somebody else's session.
     if (!(await isSessionParticipant(pool, parsed.data.session_id, decoded.userId))) {
       return reply.code(403).send({ error: "FORBIDDEN", message: "join the session before creating a game" });
+    }
+    // The shared `game_sessions` table also backs Pictionary, Codenames, etc.
+    // Binding a Gin Rummy game to one of those lets a later join inject a seat
+    // into the other game's active lobby and steal its leaderboard points.
+    if (!(await isSessionOfType(pool, parsed.data.session_id, "gin-rummy"))) {
+      return reply.code(400).send({ error: "VALIDATION_ERROR", message: "session is not a gin-rummy session" });
     }
     const game = await createGame(pool, {
       id: randomUUID(),

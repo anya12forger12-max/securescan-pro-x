@@ -101,6 +101,7 @@ export interface ClueRow {
   spymaster_id: string;
   word: string;
   number: number;
+  team: Team | null;
   created_at: Date;
 }
 
@@ -112,6 +113,7 @@ export interface GuessRow {
   word: string;
   team: Team;
   outcome: GuessOutcome;
+  clue_id: string | null;
   created_at: Date;
 }
 
@@ -252,18 +254,31 @@ export async function setGameStatus(
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function submitClue(pool: PoolType, input: { id: string; game_id: string; spymaster_id: string; word: string; number: number }): Promise<ClueRow> {
-  const result = await pool.query<ClueRow>(`INSERT INTO codenames_clues (id, game_id, spymaster_id, word, number)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, game_id, spymaster_id, word, number, created_at`, [input.id, input.game_id, input.spymaster_id, input.word, input.number]);
+export async function submitClue(pool: PoolType, input: { id: string; game_id: string; spymaster_id: string; word: string; number: number; team: Team }): Promise<ClueRow> {
+  const result = await pool.query<ClueRow>(`INSERT INTO codenames_clues (id, game_id, spymaster_id, word, number, team)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, game_id, spymaster_id, word, number, team, created_at`, [input.id, input.game_id, input.spymaster_id, input.word, input.number, input.team]);
   return result.rows[0]!;
 }
 
 export async function getCluesForGame(pool: PoolType, gameId: string): Promise<ClueRow[]> {
-  const result = await pool.query<ClueRow>(`SELECT id, game_id, spymaster_id, word, number, created_at
+  const result = await pool.query<ClueRow>(`SELECT id, game_id, spymaster_id, word, number, team, created_at
      FROM codenames_clues WHERE game_id = $1
      ORDER BY created_at DESC`, [gameId]);
   return result.rows;
+}
+
+/** The active guessing turn is only valid when the most recent clue belongs to
+ * the team whose turn it is. Historical rows with a NULL team predate the
+ * team-scoped clue migration and are deliberately treated as no clue. */
+export async function getActiveClue(pool: Queryable, gameId: string): Promise<ClueRow | null> {
+  const result = await pool.query<ClueRow>(
+    `SELECT id, game_id, spymaster_id, word, number, team, created_at
+       FROM codenames_clues WHERE game_id = $1
+      ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [gameId],
+  );
+  return result.rows[0] ?? null;
 }
 
 // A correct guess or the assassin also reveals a card and ends the game.
@@ -279,6 +294,7 @@ export async function submitGuess(pool: PoolType, input: {
   outcome: GuessOutcome;
   winner: Team | null;
   next_team: Team;
+  clue_id: string | null;
 }): Promise<GuessRow | null> {
   const client = await pool.connect();
   try {
@@ -294,29 +310,35 @@ export async function submitGuess(pool: PoolType, input: {
       await client.query("ROLLBACK");
       return null;
     }
-    // A clue grants a fixed number of guesses. The count and the insert share
-    // this transaction (and the row lock above), so two concurrent requests
-    // cannot both spend the last allowance. Wrong/neutral guesses already flip
-    // current_team; this closes the unlimited-guesses-per-clue loophole.
-    const clue = await client.query<{ number: number; created_at: Date }>(
-      `SELECT number, created_at FROM codenames_clues
-        WHERE game_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    // A guess is only legal while the most recent clue belongs to the team
+    // whose turn it is, and the allowance is counted against that exact clue.
+    // Without both checks a player could guess with no spymaster clue at all,
+    // or spend an opponent's leftover allowance after a turn flip.
+    const clue = await client.query<{ id: string; team: Team | null; number: number }>(
+      `SELECT id, team, number FROM codenames_clues
+        WHERE game_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
       [input.game_id],
     );
-    if (clue.rowCount) {
-      const used = await client.query<{ count: number }>(
-        `SELECT COUNT(*)::int AS count FROM codenames_guesses
-          WHERE game_id = $1 AND team = $2 AND created_at >= $3`,
-        [input.game_id, input.team, clue.rows[0]!.created_at],
-      );
-      if (Number(used.rows[0]!.count) >= Number(clue.rows[0]!.number)) {
-        await client.query("ROLLBACK");
-        return null;
-      }
+    const active = clue.rows[0];
+    if (!active || active.team !== input.team) {
+      await client.query("ROLLBACK");
+      return null;
     }
-    const result = await client.query<GuessRow>(`INSERT INTO codenames_guesses (id, game_id, user_id, username, word, team, outcome)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, game_id, user_id, username, word, team, outcome, created_at`, [input.id, input.game_id, input.user_id, input.username, input.word, input.team, input.outcome]);
+    if (input.clue_id !== active.id) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const used = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM codenames_guesses WHERE clue_id = $1`,
+      [active.id],
+    );
+    if (Number(used.rows[0]!.count) >= Number(active.number)) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const result = await client.query<GuessRow>(`INSERT INTO codenames_guesses (id, game_id, user_id, username, word, team, outcome, clue_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, game_id, user_id, username, word, team, outcome, clue_id, created_at`, [input.id, input.game_id, input.user_id, input.username, input.word, input.team, input.outcome, active.id]);
     const guess = result.rows[0]!;
     if (input.outcome === "correct" || input.outcome === "assassin") {
       // The assassin belongs to neither team; record it as such rather

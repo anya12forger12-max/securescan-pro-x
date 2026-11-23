@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import type { FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { getPool, closePool, createGame, getGame, setGameStatus, submitClue, getCluesForGame, submitGuess, listGuessesForGame, listRevealedWords, playerTeam, isTeamSpymaster, isSessionParticipant, activateSession } from "./db.js";
+import { getPool, closePool, createGame, getGame, setGameStatus, submitClue, getCluesForGame, getActiveClue, submitGuess, listGuessesForGame, listRevealedWords, playerTeam, isTeamSpymaster, isSessionParticipant, activateSession } from "./db.js";
 import type { GameStatus, Team, GuessOutcome } from "./db.js";
 import type { CodenamesEnv } from "./env.js";
 
@@ -153,6 +153,14 @@ export async function buildCodenamesService(env: CodenamesEnv) {
     if (playerSide !== team) {
       return reply.code(403).send({ error: "FORBIDDEN", message: "it is not your team's turn to guess" });
     }
+    // A guess without an active spymaster clue for this team is not a move.
+    const activeClue = await getActiveClue(pool, gameId);
+    if (!activeClue || activeClue.team !== team) {
+      return reply.code(409).send({
+        error: "NO_ACTIVE_CLUE",
+        message: "the current team's spymaster must give a clue before guessing",
+      });
+    }
     const opposingTeam: Team = team === "red" ? "blue" : "red";
     const ownWords = team === "red" ? game.red_team_words : game.blue_team_words;
     const otherWords = team === "red" ? game.blue_team_words : game.red_team_words;
@@ -182,6 +190,7 @@ export async function buildCodenamesService(env: CodenamesEnv) {
       outcome,
       winner,
       next_team: opposingTeam,
+      clue_id: activeClue.id,
     });
     if (!guess) {
       return reply.code(409).send({
@@ -245,6 +254,7 @@ export async function buildCodenamesService(env: CodenamesEnv) {
       spymaster_id: decoded.userId,
       word: parsed.data.word,
       number: parsed.data.number,
+      team,
     });
     return reply.send({ clue });
   });
