@@ -774,7 +774,7 @@ class PagesController extends Controller
 		$system = htmlspecialchars($r->get('system'));
 		$wallet = htmlspecialchars($r->get('wallet'));
 		$value = htmlspecialchars($r->get('value'));
-		$sum = round(str_replace('/[^.0-9]/', '', $value), 2) ?? null;
+		$sum = round((float) preg_replace('/[^.0-9]/', '', $value), 2);
 		$com = null;
 		$com_sum = null;
 		$min = null;

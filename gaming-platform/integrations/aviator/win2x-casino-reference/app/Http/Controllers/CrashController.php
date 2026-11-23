@@ -91,7 +91,7 @@ class CrashController extends Controller {
             'msg' => 'Maximum bet amount - ' . $this->settings->crash_max_bet
         ];
 
-        if(floatval($r->get('withdraw')) > 10000 && floatval($r->get('withdraw')) < 0) return [
+        if(floatval($r->get('withdraw')) > 10000 || floatval($r->get('withdraw')) < 0) return [
             'success' => false,
             'msg' => 'You have entered an incorrect value for auto-withdraw!'
         ];
