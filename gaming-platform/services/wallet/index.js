@@ -68,9 +68,25 @@ const deny = (reply, status, code, message) =>
  *                                  crash refund shape below
  * A token that is valid but lacks the operation/type gets 403, not 401, so a
  * misconfigured peer is distinguishable from an unauthenticated caller.
+ *
+ * During a mixed-version rollout peers send the full token in the legacy
+ * `x-service-token` header and their narrow token in `x-wallet-scope`; the
+ * scope header wins here while older wallet versions simply ignore it.
  */
+const tokenEquals = (provided, expected) =>
+  typeof provided === "string" &&
+  provided.length > 0 &&
+  typeof expected === "string" &&
+  expected.length > 0 &&
+  serviceTokenOk({ "x-service-token": provided }, expected);
+
+/** `x-wallet-scope` carries the narrow token. When present it is authoritative,
+ * so a peer cannot escalate by also sending the compatibility full token. */
+const scopeToken = (req) => headerString(req.headers, "x-wallet-scope");
 const hasToken = (req, expected) =>
-  typeof expected === "string" && expected.length > 0 && serviceTokenOk(req.headers, expected);
+  tokenEquals(scopeToken(req), expected) ||
+  tokenEquals(headerString(req.headers, "x-service-token"), expected);
+const hasFullToken = (req) => !scopeToken(req) && hasToken(req, env.WALLET_SERVICE_TOKEN);
 
 const walletCredentialPresent = (req) =>
   [
@@ -81,7 +97,7 @@ const walletCredentialPresent = (req) =>
   ].some((token) => hasToken(req, token));
 
 const creditAllowed = (req, input) => {
-  if (hasToken(req, env.WALLET_SERVICE_TOKEN)) return true;
+  if (hasFullToken(req)) return true;
   if (input.type === "bonus") return hasToken(req, env.WALLET_BONUS_SERVICE_TOKEN);
   if (input.type === "win") return hasToken(req, env.WALLET_WIN_SERVICE_TOKEN);
   // Narrow exception agreed with the crash workstream: a failed bet is refunded
@@ -97,7 +113,7 @@ const creditAllowed = (req, input) => {
 };
 
 const debitAllowed = (req) =>
-  hasToken(req, env.WALLET_SERVICE_TOKEN) || hasToken(req, env.WALLET_DEBIT_SERVICE_TOKEN);
+  hasFullToken(req) || hasToken(req, env.WALLET_DEBIT_SERVICE_TOKEN);
 
 async function requestUserId(req) {
   // Only a signed player JWT establishes identity. The gateway strips and

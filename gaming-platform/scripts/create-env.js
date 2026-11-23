@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmod, writeFile } from "node:fs/promises";
+import { chmod, readFile, writeFile } from "node:fs/promises";
 
 const force = process.argv.includes("--force");
 const origin = process.env.CORS_ORIGIN;
@@ -12,8 +12,29 @@ if (!origin || !/^https?:\/\/[^\s]+$/.test(origin)) {
 
 const envPath = new URL("../.env", import.meta.url);
 const secret = (bytes = 32) => randomBytes(bytes).toString("base64url");
-const postgresPassword = secret(24);
-const redisPassword = secret(24);
+
+// `--force` is an upgrade path, not a license to orphan existing data volumes.
+// The stock Postgres/Redis images only honour their passwords when a volume is
+// initialised, so reuse the old data-tier credentials when regenerating .env.
+const previous = {};
+if (force) {
+  try {
+    const text = await readFile(envPath, "utf8");
+    for (const line of text.split("\n")) {
+      const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
+      if (match && !(match[1] in previous)) previous[match[1]] = match[2];
+    }
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+}
+
+const postgresPassword = previous.POSTGRES_PASSWORD || secret(24);
+const databaseUrl = previous.DATABASE_URL
+  || `postgresql://gp:${encodeURIComponent(postgresPassword)}@postgres:5432/gaming_platform`;
+const redisPassword = previous.REDIS_PASSWORD || secret(24);
+const redisUrl = previous.REDIS_URL
+  || `redis://:${encodeURIComponent(redisPassword)}@redis:6379`;
 const jwtSecret = secret(48);
 const serviceToken = secret(48);
 const adminServiceToken = secret(48);
@@ -32,12 +53,12 @@ NODE_ENV=production
 POSTGRES_USER=gp
 POSTGRES_PASSWORD=${postgresPassword}
 POSTGRES_DB=gaming_platform
-DATABASE_URL=postgresql://gp:${encodeURIComponent(postgresPassword)}@postgres:5432/gaming_platform
+DATABASE_URL=${databaseUrl}
 # Per-service Postgres pool size; keep 15 * DB_POOL_MAX below max_connections.
 DB_POOL_MAX=5
 # Redis is password-protected and reachable only on the Compose internal network.
 REDIS_PASSWORD=${redisPassword}
-REDIS_URL=redis://:${encodeURIComponent(redisPassword)}@redis:6379
+REDIS_URL=${redisUrl}
 JWT_ACCESS_SECRET=${jwtSecret}
 SERVICE_TOKEN=${serviceToken}
 # Capability-scoped internal credentials. Never reuse SERVICE_TOKEN for these.
@@ -71,6 +92,9 @@ try {
   await writeFile(envPath, contents, { encoding: "utf8", flag: force ? "w" : "wx" });
   await chmod(envPath, 0o600);
   console.log(`[env:init] wrote ${envPath.pathname}`);
+  if (force && (previous.POSTGRES_PASSWORD || previous.REDIS_PASSWORD)) {
+    console.log("[env:init] kept existing Postgres/Redis credentials for the current volumes");
+  }
   console.log("[env:init] review CORS_ORIGIN and keep .env secret");
 } catch (err) {
   if (err.code === "EEXIST") {

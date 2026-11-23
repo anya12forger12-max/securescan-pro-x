@@ -458,11 +458,15 @@ async function proxy(req, reply) {
     // the upstream body straight to the client and let the socket close decide
     // when the stream is over.
     if (contentType.includes("text/event-stream") && res.body) {
+      // hijack() bypasses Fastify's header serializer, so copy the headers the
+      // hooks already set (rate-limit counters, CORS credentials, request id).
+      const pendingHeaders = reply.getHeaders();
       reply.hijack();
       const rawReply = reply.raw;
       const streamOrigin = corsOrigin(req);
       rawReply.writeHead(res.status, {
         ...BASE_SECURITY_HEADERS,
+        ...pendingHeaders,
         "content-type": contentType,
         "cache-control": "no-cache, no-transform",
         connection: "keep-alive",

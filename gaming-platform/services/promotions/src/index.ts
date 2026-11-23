@@ -13,9 +13,10 @@ import type {
 } from "./app.js";
 /**
  * The recovered env schema predates scoped wallet credentials and still marks
- * WALLET_SERVICE_TOKEN as mandatory. Compose now gives this service only the
- * bonus-scoped token, so extend the schema here: either credential can satisfy
- * local runs, at least one is required, and the scoped token always wins.
+ * WALLET_SERVICE_TOKEN as mandatory. Compose now supplies the full token only
+ * for mixed-version compatibility alongside the bonus-scoped token, so extend
+ * the schema here: either credential can satisfy local runs, at least one is
+ * required, and the scoped token always wins.
  */
 const walletTokenEnvSchema = promotionsEnvSchema
   .extend({
@@ -35,6 +36,15 @@ if (!walletServiceToken) {
   console.error("[promotions] missing wallet capability token");
   process.exit(1);
 }
+// Legacy wallet versions only understand the full x-service-token. An upgraded
+// wallet prefers x-wallet-scope, so the narrow capability still wins there.
+const walletHeaders: Record<string, string> = {
+  "content-type": "application/json",
+  "x-service-token": env.WALLET_SERVICE_TOKEN ?? walletServiceToken,
+  ...(env.WALLET_SERVICE_TOKEN && env.WALLET_SERVICE_TOKEN !== walletServiceToken
+    ? { "x-wallet-scope": walletServiceToken }
+    : {}),
+};
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 const bus = new EventBus(env.REDIS_URL);
 const repo = new PgPromotionsRepository(pool);
@@ -45,7 +55,7 @@ const wallet: WalletClient | null = env.WALLET_URL
         try {
           res = await fetchWithTimeout(`${env.WALLET_URL}/internal/wallet/credit`, {
             method: "POST",
-            headers: { "content-type": "application/json", "x-service-token": walletServiceToken },
+            headers: walletHeaders,
             body: JSON.stringify(input),
           });
         }

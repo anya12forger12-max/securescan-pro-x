@@ -88,9 +88,15 @@ const pruneTimer = setInterval(async () => {
 }, Math.min((env.EVENT_RETENTION_HOURS * 3_600_000) / 2, 3_600_000));
 pruneTimer.unref?.();
 
-/** Every authenticated player sees these events, so payloads must never carry
- * another user's identity, money or game secrets. Unknown fields (e.g. a
- * `marker` used by tests) and the `topic`/`seq` the UI needs are preserved. */
+/** These topics are broadcast verbatim to every authenticated player, so only
+ * their payloads need redaction. Redacting all topics would silently strip
+ * legitimate fields such as `chat.message.username` and `config.updated`. */
+const SENSITIVE_TOPIC_PREFIXES = ["crash."];
+const isSensitiveTopic = (topic) =>
+  typeof topic === "string" && SENSITIVE_TOPIC_PREFIXES.some((prefix) => topic.startsWith(prefix));
+
+/** Crash-stage payloads must never carry another user's identity, money or
+ * game secrets. Unknown fields (e.g. a `marker` used by tests) are preserved. */
 const SENSITIVE_KEYS = new Set([
   "userId",
   "user_id",
@@ -111,9 +117,8 @@ const SENSITIVE_KEYS = new Set([
   "username",
 ]);
 
-/** Recursive, idempotent redaction. Dates must be returned untouched: pg
- * returns published_at as a Date and turning it into {} would lose metadata.
- * Applied on write and on every read so older rows cannot leak either. */
+/** Recursive, idempotent redaction for public-broadcast payloads. Dates are
+ * returned untouched so JSON.stringify can serialize them normally. */
 function sanitizeEventData(value) {
   if (value instanceof Date) return value;
   if (Array.isArray(value)) return value.map(sanitizeEventData);
@@ -126,10 +131,19 @@ function sanitizeEventData(value) {
   return clean;
 }
 
+/** Applied on write and on every read so older crash rows cannot leak either. */
+const sanitizePayload = (topic, payload) =>
+  isSensitiveTopic(topic) ? sanitizeEventData(payload ?? {}) : payload ?? {};
+
+function publicEvent(event) {
+  if (event === null || typeof event !== "object" || Array.isArray(event)) return event;
+  return { ...event, payload: sanitizePayload(event.topic, event.payload) };
+}
+
 /** pg returns bigserial as a string; send the full normalized event so SSE
  * clients can use `seq` directly instead of guessing from the frame id. */
 function formatEvent(event) {
-  const safe = sanitizeEventData(event);
+  const safe = publicEvent(event);
   const normalized = {
     ...safe,
     seq: Number(safe.seq),
@@ -318,7 +332,7 @@ app.post("/internal/events", async (req, reply) => {
   if (!parsed.success)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
 
-  const payload = sanitizeEventData(parsed.data.payload ?? {});
+  const payload = sanitizePayload(parsed.data.topic, parsed.data.payload ?? {});
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -330,7 +344,7 @@ app.post("/internal/events", async (req, reply) => {
     // Notify from the same connection after the INSERT commits (implicit
     // transaction), so listeners never see a seq that is not yet visible.
     await client.query("SELECT pg_notify('realtime_events', $1)", [String(result.rows[0].seq)]);
-    return ok(reply, 201, { event: sanitizeEventData(result.rows[0]) }, reqId(req));
+    return ok(reply, 201, { event: publicEvent(result.rows[0]) }, reqId(req));
   } catch (err) {
     req.log.error({ err }, "event publish failed");
     return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "publish failed");
@@ -351,7 +365,7 @@ app.get("/v1/events", async (req, reply) => {
   return ok(
     reply,
     200,
-    { items: result.rows.map((event) => sanitizeEventData(event)), latest: Number(latest.rows[0].n) },
+    { items: result.rows.map(publicEvent), latest: Number(latest.rows[0].n) },
     reqId(req),
   );
 });

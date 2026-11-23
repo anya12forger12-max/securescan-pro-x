@@ -58,7 +58,6 @@ const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 
 // Deadlines are derived from persisted timestamps, never from process timers
 // alone. A restart must not turn a stale round into a max-multiplier cash-out.
-const CASHOUT_TOLERANCE_MS = 250;
 const BETTING_TOLERANCE_MS = 1000;
 const UNSETTLED_RECONCILE_MS = 2000;
 
@@ -193,6 +192,7 @@ function publicRound(row) {
     startedAt: row.started_at ?? null,
     // The client renders the same exponential curve the server pays.
     doublingSeconds: roundConfig(row).doublingSeconds,
+    maxMultiplier: roundConfig(row).maxMultiplier,
   };
   if (row.status === "finished" || row.status === "cancelled") {
     Object.assign(out, {
@@ -227,14 +227,18 @@ export class WalletAmbiguousError extends Error {
   }
 }
 
-async function walletRequest(path, body, token, attempt = 0) {
+async function walletRequest(path, body, scopedTokenValue, attempt = 0) {
+  // Mixed-version compatibility: the legacy full token keeps an older wallet
+  // working, while an upgraded wallet enforces the narrow x-wallet-scope.
+  const legacyToken = env.WALLET_SERVICE_TOKEN ?? scopedTokenValue;
   const response = await fetchWithTimeout(
     `${env.WALLET_INTERNAL_URL}${path}`,
     {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-service-token": token,
+        "x-service-token": legacyToken,
+        ...(legacyToken !== scopedTokenValue ? { "x-wallet-scope": scopedTokenValue } : {}),
       },
       body: JSON.stringify(body),
     },
@@ -258,7 +262,8 @@ async function walletRequest(path, body, token, attempt = 0) {
       response.status,
       payload?.error?.code,
     );
-    if (response.status >= 500 && attempt < 2) return walletRequest(path, body, token, attempt + 1);
+    if (response.status >= 500 && attempt < 2)
+      return walletRequest(path, body, scopedTokenValue, attempt + 1);
     throw err;
   }
   return payload?.data ?? payload;
@@ -474,7 +479,9 @@ async function activateReservedBet(bet) {
   );
   if (activated.rowCount) return { bet: activated.rows[0] };
   const fresh = await pool.query(`SELECT * FROM crash_bets WHERE id = $1`, [bet.id]);
-  if (fresh.rows[0] && fresh.rows[0].status !== "pending") return { bet: fresh.rows[0] };
+  // A losing/refunded/cancelled row must never be reported as a placed bet;
+  // only a still-pending row can be a safe idempotent retry.
+  if (fresh.rows[0]?.status === "pending") return { bet: fresh.rows[0], retry: true };
   return { error: [409, ERROR_CODES.CONFLICT, "betting is closed for this round"] };
 }
 
@@ -557,12 +564,12 @@ async function finalizeCashout(bet) {
       throw new Error(`cash-out finalisation failed for bet ${bet.id}`);
     return payout;
   }
+  // Broadcast only public fields. Realtime versions before topic-aware
+  // redaction must not be able to leak another player's identity or payout.
   await publish("crash.cashout", {
     id: bet.id,
     roundId: bet.round_id,
-    userId: bet.user_id,
     multiplier,
-    payout,
   });
   return payout;
 }
@@ -589,7 +596,9 @@ async function cashoutBet(bet, requestedMultiplier, { userId } = {}) {
       await client.query("ROLLBACK");
       return { error: [404, ERROR_CODES.NOT_FOUND, "round not found"] };
     }
-    if (round.status !== "running" || roundPastDeadline(round, CASHOUT_TOLERANCE_MS)) {
+    // No post-crash grace: the multiplier is capped at the published crash
+    // point, so even a few hundred ms of tolerance would pay a losing bet.
+    if (round.status !== "running" || roundPastDeadline(round, 0)) {
       await client.query("ROLLBACK");
       return { error: [409, ERROR_CODES.CONFLICT, "round is not running"] };
     }
@@ -709,7 +718,7 @@ async function finishRound(id, scheduleNext = true) {
     serverSeed: round.server_seed,
     seedHash: round.seed_hash,
     valid: proof?.valid ?? false,
-    losers: losers.map((bet) => ({ id: bet.id, userId: bet.user_id })),
+    losers: losers.map((bet) => bet.id),
   });
   if (scheduleNext) later(() => createRound(), env.ROUND_GAP_MS);
 }
@@ -949,9 +958,7 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
   await publish("crash.bet", {
     id: bet.id,
     roundId: round.id,
-    userId,
-    amount: Number(bet.amount),
-    autoCashout: bet.auto_cashout === null ? null : Number(bet.auto_cashout),
+    status: bet.status,
   });
   return ok(reply, 201, {
     bet: {

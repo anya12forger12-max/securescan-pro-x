@@ -327,7 +327,9 @@ services:
       PORT: 3022
       SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
       PROMOTIONS_SERVICE_TOKEN: ${PROMOTIONS_SERVICE_TOKEN:?PROMOTIONS_SERVICE_TOKEN must be set}
-      # Claims only ever credit type=bonus; never hold the full wallet token.
+      # Claims only ever credit type=bonus. The full token is passed only for
+      # legacy wallet compatibility and is ignored when x-wallet-scope is set.
+      WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
       WALLET_BONUS_SERVICE_TOKEN: ${WALLET_BONUS_SERVICE_TOKEN:?WALLET_BONUS_SERVICE_TOKEN must be set}
     expose:
       - "3022"
@@ -343,6 +345,9 @@ services:
       PORT: 3023
       SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN must be at least 32 random characters}
       CRASH_SERVICE_TOKEN: ${CRASH_SERVICE_TOKEN:?CRASH_SERVICE_TOKEN must be set}
+      # Temporary rollout compatibility for an older wallet container; the
+      # upgraded wallet ignores this header when x-wallet-scope is present.
+      WALLET_SERVICE_TOKEN: ${WALLET_SERVICE_TOKEN:?WALLET_SERVICE_TOKEN must be set}
       WALLET_DEBIT_SERVICE_TOKEN: ${WALLET_DEBIT_SERVICE_TOKEN:?WALLET_DEBIT_SERVICE_TOKEN must be set}
       WALLET_WIN_SERVICE_TOKEN: ${WALLET_WIN_SERVICE_TOKEN:?WALLET_WIN_SERVICE_TOKEN must be set}
       REALTIME_SERVICE_TOKEN: ${REALTIME_SERVICE_TOKEN:?REALTIME_SERVICE_TOKEN must be set}

@@ -207,10 +207,12 @@ key, nine internal capability tokens (including the three wallet-scoped ones)
 and the one-time admin bootstrap token, writes a `0600` `.env`, and refuses to
 replace an existing one unless `--force` is passed. Compose fails before
 starting anything if any required secret, `DATABASE_URL`, `REDIS_URL` or
-`CORS_ORIGIN` is blank. After adding the Redis password or the new scoped
-tokens to an older deployment, regenerate `.env` with
-`npm run env:init -- --force` before starting; the old values will fail the new
-fail-closed checks.
+`CORS_ORIGIN` is blank. On an existing deployment, `npm run env:init -- --force`
+keeps the current `POSTGRES_PASSWORD`/`DATABASE_URL` and
+`REDIS_PASSWORD`/`REDIS_URL` from the old `.env` so the reused `pgdata` and
+`redisdata` volumes still authenticate; only application and capability secrets
+are rotated. If an older `.env` predates the Redis password, add a matching
+`REDIS_PASSWORD` and embedded `REDIS_URL` credential manually before upgrading.
 
 Only the gateway is published on `0.0.0.0:3000` (intended to be reachable only
 from the TLS proxy). Postgres, Redis and all fourteen peer services sit on a
@@ -277,7 +279,7 @@ export SERVICE_TOKEN='another-long-random-secret-at-least-32-chars'
 export ADMIN_SERVICE_TOKEN='admin-service-secret-at-least-32-characters'
 # Full wallet capability: gateway/test/admin (also the local fallback for peers).
 export WALLET_SERVICE_TOKEN='wallet-service-secret-at-least-32-characters'
-# Scoped peer tokens; these are the only wallet credentials Compose gives peers.
+# Scoped peer tokens; Compose also passes the full token for legacy rollout compatibility.
 export WALLET_DEBIT_SERVICE_TOKEN='wallet-debit-secret-at-least-32-characters'
 export WALLET_BONUS_SERVICE_TOKEN='wallet-bonus-secret-at-least-32-characters'
 export WALLET_WIN_SERVICE_TOKEN='wallet-win-secret-at-least-32-characters'
@@ -382,12 +384,15 @@ Wallet credentials are scoped further:
 | `WALLET_WIN_SERVICE_TOKEN` | crash | `/internal/wallet/credit` with `type=win` only, plus the exact crash refund shape (`type=adjustment`, `referenceType=crash_refund`, `idempotencyKey` beginning `crash-refund-`) |
 
 A scoped token used outside its operation/type gets `403 FORBIDDEN`; an unknown
-token still gets `401 UNAUTHORIZED`. Peer services never receive
-`WALLET_SERVICE_TOKEN` in Compose, and the gateway keeps injecting the full
-token for existing `/internal/wallet/credit` and `/debit` security tests. The
-promotions service locally accepts the bonus token under its legacy env name
-only after validating that at least one wallet credential is present; in
-Compose it receives only the scoped value.
+token still gets `401 UNAUTHORIZED`. Peers send their narrow token in
+`x-wallet-scope` and, during a mixed-version rollout, also carry the legacy full
+token in `x-service-token` so an older wallet container keeps working. The
+upgraded wallet treats `x-wallet-scope` as authoritative, so the compatibility
+header cannot escalate privileges; once the whole fleet is upgraded the legacy
+header can be dropped. The gateway keeps injecting the full token for existing
+`/internal/wallet/credit` and `/debit` security tests. The promotions service
+locally accepts the bonus token under its legacy env name only after validating
+that at least one wallet credential is present.
 
 Claim the first admin exactly once, through the gateway, with the player token
 of the account that should become admin:

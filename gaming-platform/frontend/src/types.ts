@@ -141,6 +141,8 @@ export interface CrashRound {
   seedHash: string;
   createdAt: string;
   startedAt: string | null;
+  doublingSeconds?: number;
+  maxMultiplier?: number;
   finishedAt?: string | null;
   crashPoint?: number | null;
   multiplier?: number | null;

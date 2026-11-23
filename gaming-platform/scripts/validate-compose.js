@@ -99,6 +99,34 @@ if (!/^\s{2}internal:\s*\n\s{4}internal:\s*true/m.test(compose)) {
 if (!/--requirepass/.test(compose) || !/REDISCLI_AUTH:/.test(compose)) {
   errors.push("Redis must require a password and authenticate its healthcheck");
 }
+// Compose only checks that REDIS_URL is non-empty. An old .env with an
+// anonymous URL passes that check but fails against password-protected Redis,
+// which makes a fail-closed gateway reject every player request.
+let deployEnv = "";
+try {
+  deployEnv = await readFile(join(root, ".env"), "utf8");
+} catch (err) {
+  if (err.code !== "ENOENT") throw err;
+}
+if (deployEnv) {
+  const values = {};
+  for (const line of deployEnv.split("\n")) {
+    const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
+    if (match && !(match[1] in values)) values[match[1]] = match[2];
+  }
+  if (values.REDIS_URL) {
+    try {
+      const url = new URL(values.REDIS_URL);
+      if (url.protocol !== "redis:" || !url.password) {
+        errors.push("REDIS_URL must embed the Redis password (redis://:<password>@redis:6379)");
+      } else if (values.REDIS_PASSWORD && decodeURIComponent(url.password) !== values.REDIS_PASSWORD) {
+        errors.push("REDIS_URL password does not match REDIS_PASSWORD");
+      }
+    } catch {
+      errors.push("REDIS_URL is not a valid URL");
+    }
+  }
+}
 const appAnchor = compose.match(/x-app: &app[\s\S]*?(?=\nservices:)/)?.[0] ?? "";
 for (const [label, pattern] of [
   ["no-new-privileges", /no-new-privileges:true/],

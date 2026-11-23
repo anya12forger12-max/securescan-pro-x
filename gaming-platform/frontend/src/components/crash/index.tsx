@@ -42,17 +42,19 @@ function CrashStage() {
 
   const startedMs = round.startedAt ? new Date(round.startedAt).getTime() : NaN;
   const elapsed = Number.isFinite(startedMs) ? Math.max(0, now - startedMs) : 0;
-  // The round payload may not carry doublingSeconds yet; default to the crash
-  // service's 3s doubling time rather than showing a mismatched multiplier.
-  const doublingRaw = Number(
-    (round as CrashRound & { doublingSeconds?: number | string | null }).doublingSeconds,
-  );
+  // The round payload may not carry these yet; fall back to the crash service
+  // defaults (3s doubling, 100x maximum) rather than showing a wrong curve.
+  const doublingRaw = Number(round.doublingSeconds);
   const doublingSeconds = Number.isFinite(doublingRaw) && doublingRaw > 0 ? doublingRaw : 3;
+  const maxRaw = Number(round.maxMultiplier);
+  const maxMultiplier = Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : 100;
   // Mirror the server payout curve: 2^(elapsed / doublingSeconds), t in seconds,
-  // capped at the authoritative crash point.
+  // capped at the authoritative crash point and the round's configured maximum.
   const t = elapsed / 1000;
   const crashCap = Number(round.crashPoint);
-  const cap = Number.isFinite(crashCap) && crashCap > 0 ? Math.min(crashCap, 100) : 100;
+  const cap = Number.isFinite(crashCap) && crashCap > 0
+    ? Math.min(crashCap, maxMultiplier)
+    : maxMultiplier;
   const multiplierAt = (seconds: number) =>
     Math.max(1, Math.min(Math.pow(2, seconds / doublingSeconds), cap));
   const live = round.status === 'running'
