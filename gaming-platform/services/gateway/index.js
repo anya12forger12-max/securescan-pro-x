@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import jwt from "jsonwebtoken";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
@@ -142,19 +142,25 @@ const rateLimiter = RATE_LIMIT_ENABLED ? createRateLimiter(rateLimitConfig) : nu
  * instead. The cap reuses RATE_LIMIT_STREAM_MAX but now describes concurrency,
  * and is a resource guard independent of RATE_LIMIT_ENABLED. Buckets keep the
  * same verified-user / anonymous-IP split as the normal request limiters.
+ *
+ * Slots are Redis leases shared by every gateway replica, so N replicas cannot
+ * admit N x streamMax sockets against the single realtime hub. When no shared
+ * limiter is configured (local development) a process-local fallback is used.
  */
+const STREAM_LEASE_MS = 120_000;
+const STREAM_HEARTBEAT_MS = 30_000;
 const activeStreams = new Map();
 const streamBucket = (req, userId) =>
   userId ? `user:${userId}` : `ip:anon:${req.ip ?? req.socket?.remoteAddress ?? "unknown"}`;
 
-function acquireStreamSlot(key) {
+function acquireLocalStreamSlot(key) {
   const active = activeStreams.get(key) ?? 0;
   if (active >= rateLimitConfig.streamMax) return false;
   activeStreams.set(key, active + 1);
   return true;
 }
 
-function releaseStreamSlot(key) {
+function releaseLocalStreamSlot(key) {
   const active = activeStreams.get(key) ?? 0;
   if (active <= 1) activeStreams.delete(key);
   else activeStreams.set(key, active - 1);
@@ -529,17 +535,30 @@ async function proxy(req, reply) {
   let releaseStream = () => {};
   if (matchesPrefix(path, "/v1/events/stream")) {
     const key = streamBucket(req, decoded?.userId);
-    if (!acquireStreamSlot(key)) {
+    const member = randomUUID();
+    const acquired = rateLimiter
+      ? await rateLimiter.acquireLease(key, member, rateLimitConfig.streamMax, STREAM_LEASE_MS)
+      : acquireLocalStreamSlot(key);
+    if (!acquired) {
       return reply.code(429).send({
         error: "TOO_MANY_STREAMS",
         message: "concurrent event stream limit reached",
       });
     }
+    // Long-lived streams refresh their lease so a healthy socket never looks
+    // expired to another replica. The timer is unref'd and always cleared on
+    // release, so it cannot keep the process alive or leak after disconnect.
+    const heartbeat = rateLimiter
+      ? setInterval(() => void rateLimiter.touchLease(key, member, STREAM_LEASE_MS), STREAM_HEARTBEAT_MS)
+      : null;
+    heartbeat?.unref?.();
     let released = false;
     releaseStream = () => {
       if (released) return;
       released = true;
-      releaseStreamSlot(key);
+      if (heartbeat) clearInterval(heartbeat);
+      if (rateLimiter) void rateLimiter.releaseLease(key, member);
+      else releaseLocalStreamSlot(key);
     };
     // ServerResponse "close" fires after ordinary responses finish and when a
     // hijacked SSE socket goes away, so one hook covers every exit path.

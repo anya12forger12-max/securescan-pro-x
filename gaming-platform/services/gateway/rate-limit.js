@@ -24,6 +24,48 @@ redis.call('PEXPIRE', key, window)
 return {1, used + 1, limit, now + window}
 `;
 
+/**
+ * Live-socket leases. A sorted set stores one member per open stream with its
+ * expiry as score, so a crashed gateway replica cannot hold a slot forever:
+ * the acquire script evicts expired members before counting. Unlike the
+ * sliding-window request limiter, leases are released explicitly when the
+ * stream closes and refreshed by a heartbeat while it is alive.
+ */
+const ACQUIRE_LEASE = `
+local key = KEYS[1]
+local member = ARGV[1]
+local now = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+local limit = tonumber(ARGV[4])
+redis.call('ZREMRANGEBYSCORE', key, 0, now)
+local used = redis.call('ZCARD', key)
+if used >= limit then
+  return {0, used, limit}
+end
+redis.call('ZADD', key, now + ttl, member)
+redis.call('PEXPIRE', key, ttl + 60000)
+return {1, used + 1, limit}
+`;
+
+const RELEASE_LEASE = `
+local key = KEYS[1]
+local member = ARGV[1]
+redis.call('ZREM', key, member)
+return redis.call('ZCARD', key)
+`;
+
+const TOUCH_LEASE = `
+local key = KEYS[1]
+local member = ARGV[1]
+local now = tonumber(ARGV[2])
+local ttl = tonumber(ARGV[3])
+if redis.call('ZSCORE', key, member) then
+  redis.call('ZADD', key, now + ttl, member)
+  return 1
+end
+return 0
+`;
+
 function positiveInt(value, fallback) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -39,6 +81,7 @@ export function createRateLimiter(options = {}) {
   const failClosed = options.failClosed === true;
   const log = options.log ?? console;
   const buckets = new Map();
+  const leases = new Map();
   let redis = null;
   let redisReady = false;
   let warned = false;
@@ -72,11 +115,16 @@ export function createRateLimiter(options = {}) {
   }
 
   const sweep = setInterval(() => {
-    const cutoff = Date.now() - windowMs;
+    const now = Date.now();
+    const cutoff = now - windowMs;
     for (const [key, times] of buckets) {
       const kept = times.filter((time) => time > cutoff);
       if (kept.length) buckets.set(key, kept);
       else buckets.delete(key);
+    }
+    for (const [key, members] of leases) {
+      for (const [member, expiry] of members) if (expiry <= now) members.delete(member);
+      if (!members.size) leases.delete(key);
     }
   }, Math.min(windowMs, 60_000));
   sweep.unref?.();
@@ -129,6 +177,58 @@ export function createRateLimiter(options = {}) {
     return local(key, now, limit);
   }
 
+  /** Take a shared live-socket slot. `member` must be unique per stream so a
+   * replica that dies mid-stream leaks at most one lease (until its TTL) and a
+   * later release is always a harmless no-op. */
+  async function acquireLease(key, member, limit, ttlMs) {
+    const now = Date.now();
+    if (failClosed && (!redis || !redisReady)) return false;
+    if (redis && redisReady) {
+      try {
+        const [allowed] = await redis.eval(
+          ACQUIRE_LEASE, 1, `lease:${key}`, member, now, ttlMs, limit,
+        );
+        return Number(allowed) === 1;
+      } catch (err) {
+        warnOnce("lease Redis error; using local counters", err);
+        if (failClosed) return false;
+      }
+    }
+    const members = leases.get(key) ?? new Map();
+    for (const [id, expiry] of members) if (expiry <= now) members.delete(id);
+    const allowed = members.size < limit;
+    if (allowed) members.set(member, now + ttlMs);
+    leases.set(key, members);
+    return allowed;
+  }
+
+  async function releaseLease(key, member) {
+    if (redis && redisReady) {
+      try {
+        await redis.eval(RELEASE_LEASE, 1, `lease:${key}`, member);
+      } catch (err) {
+        warnOnce("lease release Redis error", err);
+      }
+    }
+    const members = leases.get(key);
+    if (!members) return;
+    members.delete(member);
+    if (!members.size) leases.delete(key);
+  }
+
+  async function touchLease(key, member, ttlMs) {
+    const now = Date.now();
+    if (redis && redisReady) {
+      try {
+        await redis.eval(TOUCH_LEASE, 1, `lease:${key}`, member, now, ttlMs);
+      } catch (err) {
+        warnOnce("lease touch Redis error", err);
+      }
+    }
+    const members = leases.get(key);
+    if (members?.has(member)) members.set(member, now + ttlMs);
+  }
+
   async function close() {
     clearInterval(sweep);
     if (!redis) return;
@@ -139,5 +239,5 @@ export function createRateLimiter(options = {}) {
     }
   }
 
-  return { check, close };
+  return { check, acquireLease, releaseLease, touchLease, close };
 }

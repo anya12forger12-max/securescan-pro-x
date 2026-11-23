@@ -31,6 +31,39 @@ try {
   )`);
   await client.query(`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum text`);
 
+  // Rolling deploys keep old crash instances alive while migrations apply.
+  // Migration 0010's ALTER TABLE takes ACCESS EXCLUSIVE for its entire
+  // transaction, so no old ticker can slip a second live round between its
+  // cleanup UPDATE and the partial unique index build. Bound the lock wait so
+  // a stuck writer fails the deploy loudly instead of hanging it forever.
+  await client.query(`SET lock_timeout = '10s'`);
+
+  // Defensive: a partial deploy that was rolled back after a concurrent old
+  // instance created a round can leave duplicates with no index to stop them.
+  // Cancel all but the newest so a retried index build cannot fail. The crash
+  // service refunds bets on cancelled rounds in reconcileUnsettled().
+  const crashRoundsPresent = await client.query(
+    `SELECT to_regclass('public.crash_rounds') IS NOT NULL AS present`,
+  );
+  if (crashRoundsPresent.rows[0]?.present) {
+    await client.query("BEGIN");
+    try {
+      await client.query(
+        `UPDATE crash_rounds SET status = 'cancelled', finished_at = now()
+          WHERE status IN ('betting','running')
+            AND id <> (
+              SELECT id FROM crash_rounds
+               WHERE status IN ('betting','running')
+               ORDER BY created_at DESC LIMIT 1
+            )`,
+      );
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    }
+  }
+
   for (const file of files) {
     const sql = await readFile(new URL(file, migrationsDir), "utf8");
     const checksum = createHash("sha256").update(sql).digest("hex");
