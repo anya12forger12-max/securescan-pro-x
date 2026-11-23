@@ -224,65 +224,6 @@ button:disabled {
   }
 }
 
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 30;
-  display: grid;
-  place-items: center;
-  background: rgba(4, 4, 8, 0.78);
-}
-
-.auth-modal {
-  width: min(420px, calc(100vw - 32px));
-  padding: 26px;
-  border-radius: 18px;
-  background: $box-color;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  position: relative;
-  display: grid;
-  gap: 12px;
-
-  h2 {
-    margin: 0;
-  }
-
-  p {
-    margin: 0 0 4px;
-    color: $muted;
-    font-size: 13px;
-  }
-
-  label {
-    display: grid;
-    gap: 6px;
-    font-size: 12px;
-    color: $muted;
-  }
-
-  input {
-    padding: 10px 12px;
-    border-radius: 9px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    background: #10111a;
-    color: $text;
-  }
-}
-
-.modal-close {
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  background: none;
-  border: none;
-  color: $muted;
-  font-size: 22px;
-}
-
-.modal-footnote {
-  color: #6f7488;
-}
-
 @media (max-width: 900px) {
   .game-container {
     grid-template-columns: 1fr;

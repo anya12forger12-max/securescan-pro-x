@@ -1,24 +1,13 @@
 import React from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useGamingContext } from "../context";
-import { config } from "../config";
 
 export default function Header() {
-  const { user, balance, token, signIn, signUp, signOut, loadAudit, audit } = useGamingContext();
-  const [mode, setMode] = React.useState<"login" | "register" | null>(null);
-  const [identifier, setIdentifier] = React.useState("");
-  const [email, setEmail] = React.useState("");
-  const [password, setPassword] = React.useState("");
-  const [busy, setBusy] = React.useState(false);
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setBusy(true);
-    if (mode === "register") await signUp(identifier, email, password);
-    else await signIn(identifier, password);
-    setBusy(false);
-    setMode(null);
-    setPassword("");
-  };
+  const { user, balance, token, signOut, loadAudit, audit } = useGamingContext();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const openAuth = () =>
+    navigate(token ? "/" : "/login", { state: token ? undefined : { from: location.pathname } });
 
   return (
     <header className="app-header">
@@ -35,7 +24,7 @@ export default function Header() {
           <small>Balance</small>
           <strong>{Number(balance || 0).toFixed(2)}</strong>
         </div>
-        {user ? (
+        {user && token ? (
           <>
             <span className="username">{user.username}</span>
             {audit && <span className="badge ok">audit verified</span>}
@@ -47,73 +36,16 @@ export default function Header() {
             </button>
           </>
         ) : (
-          <button className="primary-button" type="button" onClick={() => setMode("login")}>
-            Sign in
-          </button>
+          <>
+            <button className="ghost-button" type="button" onClick={() => navigate("/register", { state: { from: location.pathname } })}>
+              Register
+            </button>
+            <button className="primary-button" type="button" onClick={openAuth}>
+              Sign in
+            </button>
+          </>
         )}
       </div>
-
-      {mode && !token && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Authentication">
-          <form className="auth-modal" onSubmit={(event) => void submit(event)}>
-            <button
-              className="modal-close"
-              type="button"
-              aria-label="Close"
-              onClick={() => setMode(null)}
-            >
-              ×
-            </button>
-            <h2>{mode === "register" ? "Create account" : "Welcome back"}</h2>
-            <p>All requests pass through the platform gateway.</p>
-            <label>
-              {mode === "register" ? "Username" : "Username or email"}
-              <input
-                value={identifier}
-                onChange={(event) => setIdentifier(event.target.value)}
-                autoComplete="username"
-                required
-              />
-            </label>
-            {mode === "register" && (
-              <label>
-                Email
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  autoComplete="email"
-                  required
-                />
-              </label>
-            )}
-            <label>
-              Password
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                autoComplete={mode === "register" ? "new-password" : "current-password"}
-                minLength={mode === "register" ? 12 : 1}
-                required
-              />
-            </label>
-            <button className="primary-button wide" type="submit" disabled={busy}>
-              {busy ? "Please wait…" : mode === "register" ? "Register" : "Sign in"}
-            </button>
-            <button
-              className="link-button"
-              type="button"
-              onClick={() => setMode(mode === "register" ? "login" : "register")}
-            >
-              {mode === "register"
-                ? "Already have an account? Sign in"
-                : "Need an account? Register"}
-            </button>
-            <small className="modal-footnote">Gateway: {config.gateway || "same origin"}</small>
-          </form>
-        </div>
-      )}
     </header>
   );
 }

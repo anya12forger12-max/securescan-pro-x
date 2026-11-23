@@ -1,0 +1,144 @@
+$back-color: #0e0e12;
+$box-color: #171823;
+$accent: #7c5cff;
+$accent-2: #38e8b0;
+$text: #f2f3f7;
+$muted: #9aa0b5;
+$danger: #ff8a8a;
+
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 28px 16px;
+  background: radial-gradient(circle at 50% -10%, #2a2752 0, $back-color 58%);
+}
+
+.auth-shell {
+  width: min(440px, 100%);
+  display: grid;
+  gap: 18px;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: $text;
+  text-decoration: none;
+
+  strong,
+  small {
+    display: block;
+  }
+
+  small {
+    color: $muted;
+    font-size: 11px;
+  }
+}
+
+.auth-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, $accent, #4f36c4);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.auth-card {
+  padding: 28px 26px;
+  border-radius: 18px;
+  background: rgba(23, 24, 35, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  display: grid;
+  gap: 16px;
+
+  h1 {
+    margin: 0;
+    font-size: 24px;
+  }
+
+  form {
+    display: grid;
+    gap: 14px;
+  }
+}
+
+.auth-intro {
+  margin: -6px 0 0;
+  color: $muted;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.auth-field {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: $muted;
+
+  input {
+    padding: 11px 12px;
+    border-radius: 9px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: #10111a;
+    color: $text;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+    &:focus {
+      border-color: $accent;
+      box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.2);
+    }
+
+    &::placeholder {
+      color: #6f7488;
+    }
+  }
+}
+
+.auth-error {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: rgba(255, 138, 138, 0.12);
+  border: 1px solid rgba(255, 138, 138, 0.35);
+  color: $danger;
+  font-size: 12px;
+}
+
+.auth-submit {
+  margin-top: 4px;
+  padding: 11px 14px;
+}
+
+.auth-switch {
+  text-align: center;
+  color: $muted;
+  font-size: 13px;
+
+  a {
+    color: #b7a8ff;
+    font-weight: 600;
+  }
+}
+
+.auth-back {
+  text-align: center;
+  color: $accent-2;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.auth-footnote {
+  margin: 0;
+  text-align: center;
+  color: #6f7488;
+  font-size: 11px;
+}
