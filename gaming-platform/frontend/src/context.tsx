@@ -231,6 +231,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
   // Assigned once the loaders are defined so the event stream can request an
   // authoritative refresh without capturing a stale closure.
   const crashRefreshRef = useRef<() => void>(() => undefined);
+  const crashRefreshTimerRef = useRef<number | undefined>(undefined);
   const dashboardRefreshRef = useRef<() => void>(() => undefined);
 
   // tokenRef is written only by identity transitions and token rotation above;
@@ -433,7 +434,6 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     let controller: AbortController | null = null;
     let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     let retry: number | undefined;
-    let crashRefresh: number | undefined;
 
     // In addition to the identity scope, pin the access token: a refresh
     // rotates state.token and restarts this effect, and the old stream must
@@ -441,9 +441,19 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     const stillCurrent = () =>
       !cancelled && isCurrent(identity, generation) && tokenRef.current === accessToken;
 
+    // Debounce crash refreshes through a ref so the frame loop never captures
+    // a mutable timer variable (and the cleanup can always cancel it).
+    const scheduleCrashRefresh = () => {
+      if (crashRefreshTimerRef.current) return;
+      crashRefreshTimerRef.current = window.setTimeout(() => {
+        crashRefreshTimerRef.current = undefined;
+        if (stillCurrent()) crashRefreshRef.current();
+      }, 200);
+    };
+
     const stop = () => {
       if (retry) window.clearTimeout(retry);
-      if (crashRefresh) window.clearTimeout(crashRefresh);
+      if (crashRefreshTimerRef.current) window.clearTimeout(crashRefreshTimerRef.current);
       void reader?.cancel().catch(() => undefined);
       controller?.abort();
       if (streamAbortRef.current === controller) streamAbortRef.current = null;
@@ -520,12 +530,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
                   }));
                   // Round and bet changes arrive as events; refresh crash
                   // state immediately (debounced) instead of waiting a second.
-                  if (event.topic.startsWith("crash.") && !crashRefresh) {
-                    crashRefresh = window.setTimeout(() => {
-                      crashRefresh = undefined;
-                      if (stillCurrent()) crashRefreshRef.current();
-                    }, 200);
-                  }
+                  if (event.topic.startsWith("crash.")) scheduleCrashRefresh();
                 }
               } catch {
                 // Ignore malformed frames and keep the stream alive.

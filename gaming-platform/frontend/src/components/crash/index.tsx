@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import './crash.scss';
 import { useGamingContext } from '../../context';
-import type { CrashRound } from '../../types';
 
 function CardList({ label, cards }: { label: string; cards: string[] }) {
   return (
