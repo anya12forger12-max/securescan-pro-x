@@ -27,7 +27,7 @@
 		<link href="/dash/css/datatables.bundle.min.css" rel="stylesheet" type="text/css" />
 		
 		<script src="/dash/js/jquery.min.js" type="text/javascript"></script>
-		<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.1.1/socket.io.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.8.4/socket.io.js"></script>
     	<script src="/js/wnoty.js" type="text/javascript"></script>
 		<script src="/dash/js/popper.min.js" type="text/javascript"></script>
 		<script src="/dash/js/bootstrap.min.js" type="text/javascript"></script>

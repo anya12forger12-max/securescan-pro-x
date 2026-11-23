@@ -36,7 +36,7 @@
     {!! NoCaptcha::renderJs() !!}
     <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.3/umd/popper.min.js"></script>
     <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/js/bootstrap.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.1.1/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.8.4/socket.io.js"></script>
     <script type="text/javascript" src="/js/perfect-scrollbar.min.js"></script>
     <script type="text/javascript" src="/js/wnoty.js"></script>
     @if(Auth::user() and $u->is_admin == 1 || $u->is_moder == 1)
