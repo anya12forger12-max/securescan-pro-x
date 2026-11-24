@@ -428,10 +428,10 @@ export async function submitGuess(pool: PoolType, input: {
         const ownWords = input.team === "red" ? locked.rows[0]!.red_team_words : locked.rows[0]!.blue_team_words;
         const remainingOwn = await client.query<{ count: number }>(
           `SELECT COUNT(*)::int AS count
-             FROM unnest($2::text[]) AS word
+             FROM unnest($2::text[]) AS w(word)
             WHERE NOT EXISTS (
               SELECT 1 FROM codenames_revealed r
-               WHERE r.game_id = $1 AND r.word = word
+               WHERE r.game_id = $1 AND r.word = w.word
             )`,
           [input.game_id, ownWords ?? []],
         );
