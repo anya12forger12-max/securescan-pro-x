@@ -863,9 +863,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
         assessment.update(updates)
         assessment["updated_at"] = datetime.now(timezone.utc)
         assessment["version"] = int(assessment.get("version", 1)) + 1
-        self._record_timeline(
-            assessment_id, "assessment.updated", "Assessment updated", None
-        )
+        self._record_timeline(assessment_id, "assessment.updated", "Assessment updated", None)
         return dict(assessment)
 
     async def soft_delete_assessment(self, assessment_id: str) -> None:
@@ -877,9 +875,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
         assessment["is_deleted"] = True
         assessment["updated_at"] = datetime.now(timezone.utc)
         assessment["version"] = int(assessment.get("version", 1)) + 1
-        self._record_timeline(
-            assessment_id, "assessment.deleted", "Assessment deleted", None
-        )
+        self._record_timeline(assessment_id, "assessment.deleted", "Assessment deleted", None)
 
     async def get_timeline(self, assessment_id: str) -> list[dict[str, Any]]:
         """Get the timeline of events for an assessment.

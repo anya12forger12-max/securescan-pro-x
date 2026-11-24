@@ -47,9 +47,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
         peer = request.client.host if request.client else "unknown"
         forwarded = request.headers.get("X-Forwarded-For")
         client_ip = (
-            forwarded.split(",")[0].strip()
-            if forwarded and peer in self._trusted_proxies
-            else peer
+            forwarded.split(",")[0].strip() if forwarded and peer in self._trusted_proxies else peer
         )
         # Set by require_auth for authenticated requests.
         user = getattr(request.state, "user", None)
