@@ -76,19 +76,47 @@ export function loadEnv(schema) {
  * Uniform JSON error envelope for services that use the gateway-style
  * {request_id, success, data} contract.
  */
+const KNOWN_ERROR_CODES = new Set([
+  "UNAUTHORIZED",
+  "FORBIDDEN",
+  "NOT_FOUND",
+  "VALIDATION_ERROR",
+  "CONFLICT",
+  "IDEMPOTENCY_CONFLICT",
+  "SERVICE_UNAVAILABLE",
+  "INTERNAL_ERROR",
+]);
+
+/** Map an error to the shared code contract without flattening 5xx into 500. */
+function errorCode(error, status) {
+  if (typeof error.code === "string" && KNOWN_ERROR_CODES.has(error.code)) return error.code;
+  switch (status) {
+    case 400: return "VALIDATION_ERROR";
+    case 401: return "UNAUTHORIZED";
+    case 403: return "FORBIDDEN";
+    case 404: return "NOT_FOUND";
+    case 409: return "CONFLICT";
+    case 503: return "SERVICE_UNAVAILABLE";
+    default: return status >= 500 ? "INTERNAL_ERROR" : "REQUEST_FAILED";
+  }
+}
+
 export function registerErrorHandler(app) {
   app.setErrorHandler((error, req, reply) => {
     req.log.error({ err: error }, "request failed");
     if (reply.sent) return;
+    // Fastify and upstream failures can legitimately be 401/403/404/503;
+    // rewriting them to 500 hid auth denials and made outages indistinguishable
+    // from bugs in the service itself.
     const status =
-      Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode < 500
+      Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode <= 599
         ? error.statusCode
         : 500;
     reply.code(status).send({
       request_id: String(req.headers["x-request-id"] ?? ""),
       error: {
-        code: status === 400 ? "VALIDATION_ERROR" : status === 500 ? "INTERNAL_ERROR" : "REQUEST_FAILED",
-        message: status === 500 ? "internal error" : error.message,
+        code: errorCode(error, status),
+        message: status >= 500 ? "internal error" : error.message,
       },
     });
   });
@@ -98,8 +126,12 @@ export function registerErrorHandler(app) {
 export async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const signals = [controller.signal, options.signal].filter(Boolean);
+  // The caller's cancellation must survive alongside the timeout; overwriting
+  // `signal` used to make externally aborted requests impossible to cancel.
+  const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    return await fetch(url, { ...options, signal });
   } finally {
     clearTimeout(timer);
   }

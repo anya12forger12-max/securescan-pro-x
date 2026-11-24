@@ -1,8 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { readdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
-const roots = ["packages", "services", "scripts"];
+// Resolve from this script, not the caller's cwd: running `npm run check` from
+// a subdirectory used to report a misleading 0/0 pass.
+const root = fileURLToPath(new URL("..", import.meta.url));
+const roots = ["packages", "services", "scripts"].map((name) => join(root, name));
 const skippedDirectories = new Set(["node_modules", ".git"]);
 const files = [];
 

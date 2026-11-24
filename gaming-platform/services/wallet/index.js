@@ -96,17 +96,46 @@ const walletCredentialPresent = (req) =>
     env.WALLET_WIN_SERVICE_TOKEN,
   ].some((token) => hasToken(req, token));
 
-const creditAllowed = (req, input) => {
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * The win-scoped token may refund a *real* crash stake, not merely submit a
+ * request that happens to look like a refund. Every field in the body is
+ * caller-controlled, so the bet itself is the authority for who is owed what.
+ */
+async function crashRefundAuthorised(input, amount) {
+  const betId = input.idempotencyKey.slice("crash-refund-".length);
+  if (!UUID_RE.test(betId) || input.referenceId !== betId) return false;
+  try {
+    const found = await pool.query(
+      `SELECT user_id, amount, status FROM crash_bets WHERE id = $1`,
+      [betId],
+    );
+    const bet = found.rows[0];
+    if (!bet) return false;
+    return (
+      bet.user_id === input.userId &&
+      Number(bet.amount) === Number(amount) &&
+      input.referenceType === "crash_refund" &&
+      ["refunding", "refunded"].includes(bet.status)
+    );
+  } catch {
+    return false;
+  }
+}
+
+const creditAllowed = async (req, input, amount) => {
   if (hasFullToken(req)) return true;
   if (input.type === "bonus") return hasToken(req, env.WALLET_BONUS_SERVICE_TOKEN);
   if (input.type === "win") return hasToken(req, env.WALLET_WIN_SERVICE_TOKEN);
   // Narrow exception agreed with the crash workstream: a failed bet is refunded
-  // with the win-scoped token, but only for the exact crash-refund shape. All
-  // other adjustment credits still require the full wallet capability.
+  // with the win-scoped token, but only after verifying the referenced bet.
+  // All other adjustment credits still require the full wallet capability.
   if (
     input.type === "adjustment" &&
     input.referenceType === "crash_refund" &&
-    input.idempotencyKey.startsWith("crash-refund-")
+    input.idempotencyKey.startsWith("crash-refund-") &&
+    (await crashRefundAuthorised(input, amount))
   )
     return hasToken(req, env.WALLET_WIN_SERVICE_TOKEN);
   return false;
@@ -151,6 +180,14 @@ const CreditSchema = z.object({
 const TX_COLUMNS = `id, idempotency_key, user_id, amount, type, reference_type,
   reference_id, balance_after, created_at`;
 
+/** A replay must describe the same movement. Otherwise a caller that knows a
+ * key could read another user's balance/amount from the replay response. */
+const replayMatches = (tx, { userId, type, referenceType }, signedAmount) =>
+  tx.user_id === userId &&
+  Number(tx.amount) === Number(signedAmount) &&
+  tx.type === type &&
+  tx.reference_type === referenceType;
+
 app.post("/internal/wallet/credit", async (req, reply) => {
   // Reject unknown credentials before parsing the body; then require the
   // credential to be allowed for the *requested* credit type.
@@ -162,10 +199,10 @@ app.post("/internal/wallet/credit", async (req, reply) => {
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
 
   const input = parsed.data;
-  if (!creditAllowed(req, input))
+  const amount = toMoney(input.amount);
+  if (!(await creditAllowed(req, input, amount)))
     return deny(reply, 403, ERROR_CODES.FORBIDDEN, "token not authorized for this credit type");
 
-  const amount = toMoney(input.amount);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -176,6 +213,8 @@ app.post("/internal/wallet/credit", async (req, reply) => {
     );
     if (existing.rowCount) {
       await client.query("COMMIT");
+      if (!replayMatches(existing.rows[0], input, amount))
+        return deny(reply, 409, ERROR_CODES.CONFLICT, "idempotency key belongs to a different transaction");
       return ok(reply, 200, { transaction: existing.rows[0], replay: true }, reqId(req));
     }
 
@@ -215,8 +254,11 @@ app.post("/internal/wallet/credit", async (req, reply) => {
         `SELECT ${TX_COLUMNS} FROM wallet_transactions WHERE idempotency_key = $1`,
         [input.idempotencyKey],
       );
-      if (replay.rowCount)
+      if (replay.rowCount) {
+        if (!replayMatches(replay.rows[0], input, amount))
+          return deny(reply, 409, ERROR_CODES.CONFLICT, "idempotency key belongs to a different transaction");
         return ok(reply, 200, { transaction: replay.rows[0], replay: true }, reqId(req));
+      }
     }
     req.log.error({ err }, "wallet credit failed");
     return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "credit failed");
@@ -265,6 +307,8 @@ app.post("/internal/wallet/debit", async (req, reply) => {
     );
     if (existing.rowCount) {
       await client.query("COMMIT");
+      if (!replayMatches(existing.rows[0], { ...input, type: "wager" }, -amount))
+        return deny(reply, 409, ERROR_CODES.CONFLICT, "idempotency key belongs to a different transaction");
       return ok(reply, 200, { transaction: existing.rows[0], replay: true }, reqId(req));
     }
 
@@ -306,8 +350,11 @@ app.post("/internal/wallet/debit", async (req, reply) => {
         `SELECT ${TX_COLUMNS} FROM wallet_transactions WHERE idempotency_key = $1`,
         [input.idempotencyKey],
       );
-      if (replay.rowCount)
+      if (replay.rowCount) {
+        if (!replayMatches(replay.rows[0], { ...input, type: "wager" }, -amount))
+          return deny(reply, 409, ERROR_CODES.CONFLICT, "idempotency key belongs to a different transaction");
         return ok(reply, 200, { transaction: replay.rows[0], replay: true }, reqId(req));
+      }
     }
     req.log.error({ err }, "wallet debit failed");
     return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "debit failed");

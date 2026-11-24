@@ -27,9 +27,15 @@ for (const match of compose.matchAll(/^\s+-\s+\.\/([\w./-]+):/gm)) {
   if (!(await exists(source))) errors.push(`missing bind-mount source: ${source}`);
 }
 
-for (const match of compose.matchAll(/command:\s*node\s+(\S+)/g)) {
-  const entry = match[1];
-  if (!(await exists(entry))) errors.push(`missing command entrypoint: ${entry}`);
+// Accept both Compose shell form (`node path`) and exec form (`["node", "path"]`);
+// skipping the latter made a missing entrypoint look like a valid deployment.
+const commandEntry = (text) =>
+  text.match(/command:\s*node\s+(\S+)/)?.[1]
+  ?? text.match(/command:\s*\[\s*["']node["']\s*,\s*["']([^"']+)["']/)?.[1]
+  ?? null;
+for (const match of compose.matchAll(/command:.*/g)) {
+  const entry = commandEntry(match[0]);
+  if (entry && !(await exists(entry))) errors.push(`missing command entrypoint: ${entry}`);
 }
 
 // --- parse the services block into indented chunks ---
@@ -130,6 +136,30 @@ if (deployEnv) {
       errors.push("REDIS_URL is not a valid URL");
     }
   }
+  // `env:init --force` used to keep an old DATABASE_URL while generating a new
+  // POSTGRES_PASSWORD, so every service tried to authenticate with credentials
+  // the Postgres container had never seen. Catch that mismatch statically.
+  if (values.DATABASE_URL) {
+    try {
+      const url = new URL(values.DATABASE_URL);
+      if (url.protocol !== "postgresql:") {
+        errors.push("DATABASE_URL must use the postgresql: scheme");
+      } else {
+        const pairs = [
+          ["POSTGRES_USER", decodeURIComponent(url.username)],
+          ["POSTGRES_PASSWORD", decodeURIComponent(url.password)],
+          ["POSTGRES_DB", decodeURIComponent(url.pathname.slice(1))],
+        ];
+        for (const [name, fromUrl] of pairs) {
+          if (values[name] && values[name] !== fromUrl) {
+            errors.push(`${name} does not match DATABASE_URL (${fromUrl})`);
+          }
+        }
+      }
+    } catch {
+      errors.push("DATABASE_URL is not a valid URL");
+    }
+  }
 }
 const appAnchor = compose.match(/x-app: &app[\s\S]*?(?=\nservices:)/)?.[0] ?? "";
 for (const [label, pattern] of [
@@ -150,7 +180,7 @@ const poolMax = Number(compose.match(/DB_POOL_MAX:\s*\$\{DB_POOL_MAX:-(\d+)\}/)?
 const pgMax = Number(compose.match(/max_connections=(\d+)/)?.[1] ?? 0);
 const appServices = [...blocks.keys()]
   .map((name) => [name, body(name)])
-  .filter(([, text]) => /command:\s*node services\//.test(text));
+  .filter(([, text]) => /command:\s*(?:node services\/|\[\s*["']node["']\s*,\s*["']services\/)/.test(text));
 const dbServices = appServices.filter(([name]) => name !== "gateway" && name !== "migrate");
 if (!poolMax) errors.push("DB_POOL_MAX default is missing");
 if (!pgMax) errors.push("postgres max_connections is not configured");
@@ -167,8 +197,13 @@ if (!/stop_grace_period:/.test(compose)) errors.push("stop_grace_period is requi
 if (!/\/ready/.test(compose.match(/healthcheck:\s*&app-health[\s\S]*?start_period:/)?.[0] ?? "")) {
   errors.push("app healthcheck must probe /ready, not /health");
 }
+// The gateway is the exception: /ready fans out to every peer, so using it as
+// the container liveness probe would restart the edge when one game is slow.
+if (!/127\.0\.0\.1:3000\/health/.test(body("gateway"))) {
+  errors.push("gateway healthcheck must probe its own /health, not aggregate /ready");
+}
 for (const [name, text] of appServices) {
-  const entry = text.match(/command:\s*node\s+(\S+)/)?.[1];
+  const entry = commandEntry(text);
   if (!entry || !(await exists(entry))) continue;
   const source = await readFile(join(root, entry), "utf8");
   if (!/SIGTERM/.test(source)) errors.push(`${name} has no SIGTERM shutdown handler`);

@@ -8,7 +8,13 @@ import Redis from "ioredis";
  */
 export class EventBus {
   constructor(url) {
-    this.redis = new Redis(url, {
+    this.url = url;
+    this.connectPromise = null;
+    this.newClient();
+  }
+
+  newClient() {
+    this.redis = new Redis(this.url, {
       lazyConnect: true,
       maxRetriesPerRequest: 1,
       enableOfflineQueue: false,
@@ -20,8 +26,14 @@ export class EventBus {
   async publish(topic, payload) {
     try {
       if (!this.connected) {
-        await this.redis.connect();
-        this.connected = true;
+        // Concurrent publishes must await the same connection attempt.
+        // ioredis rejects a second connect(), which used to drop one event.
+        this.connectPromise ??= this.redis.connect().then(() => {
+          this.connected = true;
+        }).finally(() => {
+          this.connectPromise = null;
+        });
+        await this.connectPromise;
       }
       await this.redis.publish(
         topic,
@@ -29,16 +41,21 @@ export class EventBus {
       );
       return true;
     } catch (err) {
+      this.connected = false;
       console.warn(`[event-bus] publish to ${topic} failed:`, err.message);
       return false;
     }
   }
 
   async close() {
+    // ioredis does not reliably allow connect() again on a closed client, so
+    // replace it. Otherwise a bus reused after shutdown silently drops events.
     try {
-      if (this.connected) await this.redis.quit();
-    } catch {
       this.redis.disconnect();
+    } catch {
+      // nothing else to clean up
     }
+    this.connectPromise = null;
+    this.newClient();
   }
 }

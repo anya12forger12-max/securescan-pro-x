@@ -441,38 +441,6 @@ app.get("/ready", async (_req, reply) => {
   return { status: "ready", services: checks.length };
 });
 
-/** The SPA needs to know which privileged controls to render. This reports
- * only the caller's own permissions, resolved through the same RBAC service
- * that guards the routes, so hiding a button never loosens the server check. */
-const KNOWN_PERMISSIONS = [
-  "promotions.manage",
-  "tournaments.manage",
-  "audit.read",
-  "audit.append",
-  "risk.review",
-  "roles.manage",
-];
-app.get("/v1/me/permissions", async (req, reply) => {
-  const raw = req.headers.authorization;
-  if (typeof raw !== "string" || !raw.startsWith("Bearer ")) {
-    return reply.code(401).send({ error: "UNAUTHORIZED", message: "a player token is required" });
-  }
-  let decoded;
-  try {
-    decoded = jwt.verify(raw.slice(7), JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
-  } catch {
-    return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid token" });
-  }
-  if (typeof decoded?.userId !== "string") {
-    return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid token" });
-  }
-  const granted = await Promise.all(
-    KNOWN_PERMISSIONS.map(async (permission) =>
-      (await hasPermission(decoded.userId, permission, req.log)) ? permission : null),
-  );
-  return reply.send({ permissions: granted.filter(Boolean) });
-});
-
 /** Rate-limit player traffic before it reaches any downstream service.
  * Keys are derived from a verified JWT subject or, for unauthenticated auth
  * routes, the socket address. A client-supplied x-service-token is never a
@@ -542,6 +510,40 @@ app.addHook("onRequest", async (req, reply) => {
   }
 
   return applyLimit(await rateLimiter.check(key, limit));
+});
+
+/** The SPA needs to know which privileged controls to render. This reports
+ * only the caller's own permissions, resolved through the same RBAC service
+ * that guards the routes, so hiding a button never loosens the server check.
+ * Registered after the rate-limit hook: Fastify snapshots hooks at route
+ * registration, so an earlier route would silently bypass every player limit. */
+const KNOWN_PERMISSIONS = [
+  "promotions.manage",
+  "tournaments.manage",
+  "audit.read",
+  "audit.append",
+  "risk.review",
+  "roles.manage",
+];
+app.get("/v1/me/permissions", async (req, reply) => {
+  const raw = req.headers.authorization;
+  if (typeof raw !== "string" || !raw.startsWith("Bearer ")) {
+    return reply.code(401).send({ error: "UNAUTHORIZED", message: "a player token is required" });
+  }
+  let decoded;
+  try {
+    decoded = jwt.verify(raw.slice(7), JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
+  } catch {
+    return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid token" });
+  }
+  if (typeof decoded?.userId !== "string") {
+    return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid token" });
+  }
+  const granted = await Promise.all(
+    KNOWN_PERMISSIONS.map(async (permission) =>
+      (await hasPermission(decoded.userId, permission, req.log)) ? permission : null),
+  );
+  return reply.send({ permissions: granted.filter(Boolean) });
 });
 
 async function proxy(req, reply) {

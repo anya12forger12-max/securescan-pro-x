@@ -180,14 +180,17 @@ services:
       # Fail closed if Redis is down: never silently drop to local counters.
       RATE_LIMIT_FAIL_CLOSED: ${RATE_LIMIT_FAIL_CLOSED:-true}
       RATE_LIMIT_STREAM_MAX: ${RATE_LIMIT_STREAM_MAX:-20}
-      MAX_STREAMS: ${MAX_STREAMS:-500}
-      EVENT_RETENTION_HOURS: ${EVENT_RETENTION_HOURS:-168}
+      # MAX_STREAMS/EVENT_RETENTION_HOURS belong to realtime only. Injecting
+      # them here suggested a gateway knob that its stream lease code never read.
     healthcheck:
+      # /ready aggregates every downstream service. Probing it here would let a
+      # flaky game service mark the edge unhealthy and restart the only public
+      # entry point; container liveness must depend on the gateway alone.
       test:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:3000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        - "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
       interval: 10s
       timeout: 5s
       retries: 6

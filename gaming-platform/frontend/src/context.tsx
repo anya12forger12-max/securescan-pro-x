@@ -307,6 +307,27 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     return result;
   }, []);
 
+  /** Serialise cookie rotation across tabs as well as within this tab. The
+   * refresh cookie is single-use and shared by every tab of the origin, so two
+   * tabs refreshing simultaneously would otherwise replay the same token; the
+   * second request would be classified as theft and revoke the whole family.
+   * Web Locks are held across the fetch itself, so a waiting tab sends the
+   * cookie that the first tab's response just installed. */
+  const withCrossTabAuthLock = useCallback(async <T,>(action: () => Promise<T>): Promise<T> => {
+    if (typeof navigator !== "undefined" && navigator.locks) {
+      let result!: T;
+      let completed = false;
+      await navigator.locks.request("gp:auth-refresh", async () => {
+        result = await action();
+        completed = true;
+      });
+      // The callback always runs unless the browser denies the lock outright;
+      // in that case fall through to an unlocked attempt below.
+      if (completed) return result;
+    }
+    return action();
+  }, []);
+
   /** Rotate the 15-minute access token with the HttpOnly refresh cookie. One
    * shared promise prevents parallel 401s from racing the single-use cookie.
    * The generation captured at start is rechecked before every write so a
@@ -320,10 +341,12 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     const generation = authGenerationRef.current;
 
     const pending: Promise<AuthData | null> = serializeAuth(() =>
-      apiRequest<AuthData>("/auth/refresh", {
-        method: "POST",
-        credentials: "include",
-      }),
+      withCrossTabAuthLock(() =>
+        apiRequest<AuthData>("/auth/refresh", {
+          method: "POST",
+          credentials: "include",
+        }),
+      ),
     )
       .then((data) => {
         if (!isCurrent(token, generation)) return null;
@@ -355,7 +378,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       });
     refreshPromiseRef.current = pending;
     return pending;
-  }, [invalidateIdentity, isCurrent, resetState, serializeAuth, updateIfCurrent]);
+  }, [invalidateIdentity, isCurrent, resetState, serializeAuth, updateIfCurrent, withCrossTabAuthLock]);
 
   const call = useCallback(
     async <T,>(path: string, init: RequestOptions = {}): Promise<T> => {
@@ -963,7 +986,12 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       const generation = authGenerationRef.current;
       if (!token) return;
       const result = await guard("Guess", () =>
-        call(`/pictionary/rounds/${id}/guess`, { method: "POST", body: { guess } }),
+        call(`/pictionary/rounds/${id}/guess`, {
+          method: "POST",
+          // The service validates round_id in the body as well as the path;
+          // omitting it made every guess from the UI fail with 400.
+          body: { round_id: id, guess },
+        }),
       );
       if (result && isCurrent(token, generation)) await loadGame("pictionary", id);
     },

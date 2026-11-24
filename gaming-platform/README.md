@@ -7,7 +7,7 @@ back to that layout. This project supplies the missing bootstrap layer and the
 peer services those services assume are running, so the platform can be
 installed, migrated and started as one system.
 
-All fifteen application services boot, the thirteen migrations apply cleanly, and the main
+All fifteen application services boot, the sixteen migrations apply cleanly, and the main
 auth / RBAC / wallet / chat / realtime / promotions / Codenames / Gin-rummy /
 crash / audit flows pass end to end through the gateway (a separate 20-flow
 integration run; `npm run smoke` covers the deploy-critical subset). The four
@@ -75,9 +75,11 @@ These are fixed here (each fix is commented inline at the site):
 - **Abuse control at the edge** — the gateway applies Redis-backed sliding-window
   limits: unauthenticated auth endpoints per source IP and all ordinary player
   routes per verified user. Every limited response carries `X-RateLimit-*`
-  headers and a 429 with `Retry-After`. Event streams are sockets, not requests:
-  they are exempt from the request window and counted by a separate live-socket
-  cap that is released when the connection closes. Peer routes stay exempt
+  headers and a 429 with `Retry-After`. Long-lived event streams are counted by
+  a separate live-socket cap that is released when the connection closes.
+  Establishing an authenticated stream is itself a read request and is charged
+  to that user's read quota; anonymous stream attempts use the IP/stream bucket.
+  Peer routes stay exempt
   because they are capability scoped. The CSP `connect-src` allow-list expands
   `CORS_ORIGIN` into exact origins, so an externally built client can reach the
   gateway without a wildcard policy.
@@ -122,8 +124,10 @@ These are fixed here (each fix is commented inline at the site):
 - **Database connection budget** — every service used a private `max: 20` pool,
   allowing roughly 270 connections against Postgres's default ceiling of 100.
   `@gp/config/dbPoolOptions` is now the single source of truth: `DB_POOL_MAX`
-  (default 5) sizes every pool, with idle/connection timeouts, and Compose
-  raises `max_connections` to 200. `npm run validate:compose` proves the budget.
+  sizes every pool, with idle/connection timeouts, and Compose injects it into
+  all services (default 5) and raises `max_connections` to 200. Services run
+  without Compose fall back to a conservative per-service default.
+  `npm run validate:compose` proves the budget.
 - **Graceful shutdown** — all fifteen services now handle SIGTERM/SIGINT by
   calling `app.close()`, which drains requests and runs each service's
   `onClose` pool teardown. Compose allows 25s before a hard kill.
@@ -171,8 +175,11 @@ identity and capability headers.
 
 - `packages/config` — `baseEnvSchema`, `loadEnv`, `registerErrorHandler`,
   `fetchWithTimeout`, and `dbPoolOptions` (the fleet-wide connection budget).
-- `packages/event-bus` — Redis-backed `EventBus.publish`/`close`. Publish
-  failures are logged and swallowed so a committed claim never fails the user.
+- `packages/event-bus` — Redis-backed `EventBus.publish`/`close`, available for
+  services that need fire-and-forget notifications. Publish failures are logged
+  and swallowed so a committed claim never fails the user. The running services
+  currently deliver events through realtime's authenticated HTTP endpoint
+  (`/internal/events`) instead of importing this helper directly.
 - `packages/shared-types` — shared error codes, decimal-safe `toMoney`/
   `moneyMul`, and constant-time `serviceTokenOk`.
 
@@ -192,8 +199,12 @@ identity and capability headers.
 | `0010_crash_state_guards.sql` | idempotent state guards and Gin Rummy win attribution |
 | `0011_gin_rummy_win_type.sql` | neutral `completed` default for unverifiable historical wins |
 | `0012_refresh_token_family.sql` | token families so logout revokes already-rotated refresh siblings |
+| `0013_crash_refund_claim.sql` | `refunding` bet state for deterministic, replayable stake refunds |
+| `0014_codenames_clue_team.sql` | binds each clue's guess allowance to the team that received it |
+| `0015_query_indexes.sql` | hot-path indexes for clue counts, event retention and leaderboards |
+| `0016_pictionary_guess_limit.sql` | index for per-player incorrect-guess allowance checks |
 
-All thirteen are applied by the one-shot `migrate` service before any application
+All sixteen are applied by the one-shot `migrate` service before any application
 starts, on first boot and on every upgrade. Applied files are checksummed, so
 editing an already-applied migration fails the deploy instead of drifting.
 
@@ -226,14 +237,14 @@ and the one-time admin bootstrap token, writes a `0600` `.env`, and refuses to
 replace an existing one unless `--force` is passed. Compose fails before
 starting anything if any required secret, `DATABASE_URL`, `REDIS_URL` or
 `CORS_ORIGIN` is blank. On an existing deployment, `npm run env:init -- --force`
-keeps the current `POSTGRES_PASSWORD`/`DATABASE_URL` and
-`REDIS_PASSWORD`/`REDIS_URL` from the old `.env` so the reused `pgdata` and
+keeps the current Postgres user, password, database and `DATABASE_URL`, plus
+`REDIS_PASSWORD`/`REDIS_URL`, from the old `.env` so the reused `pgdata` and
 `redisdata` volumes still authenticate; only application and capability secrets
 are rotated. If an older `.env` predates the Redis password, add a matching
 `REDIS_PASSWORD` and embedded `REDIS_URL` credential manually before upgrading.
 
-Only the gateway is published on `0.0.0.0:3000` (intended to be reachable only
-from the TLS proxy). Postgres, Redis and all fourteen peer services sit on a
+Only the gateway is published, on `127.0.0.1:3000` (reachable only from the
+TLS proxy on the same host). Postgres, Redis and all fourteen peer services sit on a
 dedicated internal Compose network with no host ports and no route to the
 internet. Redis requires `REDIS_PASSWORD`; `REDIS_URL` embeds the same password
 and is the only way clients (including the gateway rate limiter) connect.
@@ -285,7 +296,7 @@ The generated `.env` uses Compose hostnames, so override peer URLs for local
 runs. `scripts/start-all.js` pins each service's `PORT` itself.
 
 ```bash
-npm ci --omit=dev
+npm ci
 export DATABASE_URL=postgresql://gp:<password>@127.0.0.1:5432/gaming_platform
 # Local Redis may be unauthenticated on loopback; a generated .env instead
 # uses redis://:<REDIS_PASSWORD>@redis:6379 with --requirepass on the server.
@@ -355,9 +366,11 @@ committed; the Dockerfile reproduces both from `frontend/package-lock.json`.
 
 ### Rate limits
 
-Player traffic is counted before proxying. Unauthenticated auth endpoints
-(register, login, refresh, logout) are limited per source IP (10 requests per
-60s by default); every other `/v1/*` request - including `/v1/auth/me` and SSE
+Player traffic is counted before proxying. Anonymous register, login and refresh
+attempts are limited per source IP (10 requests per 60s by default); logout is
+serialised with token rotation and uses the ordinary player bucket so a shared
+NAT cannot lock everyone out of signing out. Every other `/v1/*` request -
+including `/v1/auth/me` and SSE
 stream establishment - is limited per verified JWT subject (120 reads and 30
 writes per 60s). Responses include `X-RateLimit-Limit`,
 `X-RateLimit-Remaining` and `X-RateLimit-Reset`; exceeding a limit returns `429`

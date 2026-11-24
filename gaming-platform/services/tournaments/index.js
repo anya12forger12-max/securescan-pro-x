@@ -67,6 +67,8 @@ async function requestUserId(req) {
 // paid entry remains fail-closed until an escrow path exists.
 const GameTypes = ["crash", "dice", "flip", "jackpot", "wheel",
   "roulette", "slot", "pictionary", "codenames", "gin-rummy"];
+const IdSchema = z.string().uuid();
+const validId = (id) => IdSchema.safeParse(id).success;
 const CreateSchema = z.object({
   gameType: z.enum(GameTypes),
   title: z.string().min(1).max(120),
@@ -126,6 +128,8 @@ app.get("/v1/tournaments", async (req, reply) => {
 
 app.get("/v1/tournaments/:id", async (req, reply) => {
   const { id } = req.params;
+  if (!validId(id))
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "invalid tournament id");
   const result = await pool.query(`SELECT * FROM tournaments WHERE id = $1`, [id]);
   if (!result.rowCount)
     return deny(reply, 404, ERROR_CODES.NOT_FOUND, "tournament not found");
@@ -142,6 +146,8 @@ app.post("/v1/tournaments/:id/join", async (req, reply) => {
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
 
   const { id } = req.params;
+  if (!validId(id))
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "invalid tournament id");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -165,13 +171,15 @@ app.post("/v1/tournaments/:id/join", async (req, reply) => {
       await client.query("ROLLBACK");
       return deny(reply, 409, ERROR_CODES.CONFLICT, "tournament is full");
     }
-    await client.query(
+    const joined = await client.query(
       `INSERT INTO tournament_players (id, tournament_id, user_id)
        VALUES ($1, $2, $3)
        ON CONFLICT (tournament_id, user_id) DO NOTHING`,
       [randomUUID(), id, userId],
     );
     await client.query("COMMIT");
+    if (!joined.rowCount)
+      return deny(reply, 409, ERROR_CODES.CONFLICT, "already joined this tournament");
     return ok(reply, 200, { joined: true }, reqId(req));
   } catch (err) {
     await client.query("ROLLBACK");
