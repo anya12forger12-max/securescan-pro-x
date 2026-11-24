@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.core.dependencies import require_auth
+from app.core.exceptions import ValidationError
 from app.services.scan.engine import InMemoryScanEngine, ScanEngine
 
 if TYPE_CHECKING:
@@ -52,6 +53,10 @@ class FullScanRequest(BaseModel):
     )
 
 
+def _reject(exc: ValidationError) -> NoReturn:
+    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+
+
 def _result_to_dict(result: object) -> dict[str, Any]:
     if hasattr(result, "__dict__"):
         d = {}
@@ -78,11 +83,14 @@ async def run_port_scan(
     user: User = Depends(require_auth),
 ) -> dict[str, Any]:
     engine = _get_scan_engine()
-    result = await engine.run_port_scan(
-        target=request.target,
-        ports=request.ports,
-        timeout=request.timeout,
-    )
+    try:
+        result = await engine.run_port_scan(
+            target=request.target,
+            ports=request.ports,
+            timeout=request.timeout,
+        )
+    except ValidationError as exc:
+        _reject(exc)
     return _result_to_dict(result)
 
 
@@ -92,7 +100,10 @@ async def run_header_check(
     user: User = Depends(require_auth),
 ) -> dict[str, Any]:
     engine = _get_scan_engine()
-    result = await engine.run_header_check(url=request.url)
+    try:
+        result = await engine.run_header_check(url=request.url)
+    except ValidationError as exc:
+        _reject(exc)
     return _result_to_dict(result)
 
 
@@ -112,7 +123,10 @@ async def run_ssl_check(
     user: User = Depends(require_auth),
 ) -> dict[str, Any]:
     engine = _get_scan_engine()
-    result = await engine.run_ssl_check(hostname=request.hostname, port=request.port)
+    try:
+        result = await engine.run_ssl_check(hostname=request.hostname, port=request.port)
+    except ValidationError as exc:
+        _reject(exc)
     return _result_to_dict(result)
 
 
@@ -122,10 +136,13 @@ async def run_full_scan(
     user: User = Depends(require_auth),
 ) -> dict[str, Any]:
     engine = _get_scan_engine()
-    results = await engine.run_full_scan(
-        target=request.target,
-        scan_types=request.scan_types,
-    )
+    try:
+        results = await engine.run_full_scan(
+            target=request.target,
+            scan_types=request.scan_types,
+        )
+    except ValidationError as exc:
+        _reject(exc)
     return {k: _result_to_dict(v) for k, v in results.items()}
 
 

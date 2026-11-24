@@ -64,9 +64,13 @@ export declare function isTeamSpymaster(pool: Queryable, sessionId: string, user
  * WHERE clause makes it atomic: a delayed request cannot reopen a game that
  * another request already moved on. */
 export declare function isSessionParticipant(pool: Queryable, sessionId: string, userId: string): Promise<boolean>;
+/** A game must only ever be attached to a session of this game type. */
+export declare function isSessionOfType(pool: Queryable, sessionId: string, gameType: string): Promise<boolean>;
 /** Starting a game is the moment play begins: close the session's join window
- * so a late seat cannot change team assignment or leaderboard eligibility. */
-export declare function activateSession(pool: Queryable, sessionId: string): Promise<void>;
+ * so a late seat cannot change team assignment or leaderboard eligibility.
+ * The game_type predicate keeps a codenames game from activating a session
+ * that belongs to another game. */
+export declare function activateSession(pool: Queryable, sessionId: string, gameType: string): Promise<void>;
 export declare function setGameStatus(pool: Queryable, id: string, status: GameStatus, expectedStatus?: GameStatus | GameStatus[]): Promise<boolean>;
 export declare function submitClue(pool: PoolType, input: {
     id: string;

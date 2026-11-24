@@ -77,7 +77,7 @@ export async function createRound(pool: PoolType, input: CreateRoundInput): Prom
        RETURNING id, session_id, word, drawer_id, status, started_at, ended_at, winner_id
      ), activated AS (
        UPDATE game_sessions SET status = 'active'
-        WHERE id = $2 AND status = 'waiting'
+        WHERE id = $2 AND status = 'waiting' AND game_type = 'pictionary'
      )
      SELECT * FROM round`, [input.id, input.session_id, input.word, input.drawer_id]);
   return result.rows[0]!;
@@ -104,6 +104,21 @@ export async function isSessionParticipant(pool: PoolType, sessionId: string, us
       WHERE s.id = $1 AND s.status IN ('waiting', 'active') AND p.user_id = $2
       LIMIT 1`,
     [sessionId, userId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** A round must only ever be created for a session of this game type. */
+export async function isSessionOfType(
+  pool: PoolType,
+  sessionId: string,
+  gameType: string,
+): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT 1 FROM game_sessions
+      WHERE id = $1 AND game_type = $2 AND status IN ('waiting', 'active')
+      LIMIT 1`,
+    [sessionId, gameType],
   );
   return (result.rowCount ?? 0) > 0;
 }

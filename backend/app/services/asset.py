@@ -24,12 +24,14 @@ class AssetService(ABC):
         self,
         workspace_id: str,
         data: AssetCreate,
+        owner_id: str = "system",
     ) -> AssetResponse:
         """Create a new asset in a workspace.
 
         Args:
             workspace_id: Parent workspace ID.
             data: Asset creation data.
+            owner_id: Account that owns the asset.
 
         Returns:
             The created asset.
@@ -61,6 +63,7 @@ class AssetService(ABC):
         asset_type: str | None = None,
         offset: int = 0,
         limit: int = 50,
+        owner_id: str | None = None,
     ) -> tuple[list[AssetResponse], int]:
         """List assets in a workspace.
 
@@ -69,6 +72,7 @@ class AssetService(ABC):
             asset_type: Filter by asset type.
             offset: Number to skip.
             limit: Maximum to return.
+            owner_id: Restrict results to one owner.
 
         Returns:
             Tuple of (list of assets, total count).
@@ -120,12 +124,14 @@ class InMemoryAssetService(AssetService):
         self,
         workspace_id: str,
         data: AssetCreate,
+        owner_id: str = "system",
     ) -> AssetResponse:
         """Create a new asset in memory.
 
         Args:
             workspace_id: Parent workspace ID.
             data: Asset creation data.
+            owner_id: Account that owns the asset.
 
         Returns:
             The created asset.
@@ -151,6 +157,7 @@ class InMemoryAssetService(AssetService):
             "asset_type": data.asset_type,
             "identifier": data.identifier,
             "metadata": data.metadata,
+            "owner_id": owner_id,
             "created_at": now,
             "updated_at": now,
         }
@@ -188,6 +195,7 @@ class InMemoryAssetService(AssetService):
         asset_type: str | None = None,
         offset: int = 0,
         limit: int = 50,
+        owner_id: str | None = None,
     ) -> tuple[list[AssetResponse], int]:
         """List assets in a workspace from memory.
 
@@ -196,6 +204,7 @@ class InMemoryAssetService(AssetService):
             asset_type: Filter by asset type.
             offset: Number to skip.
             limit: Maximum to return.
+            owner_id: Restrict results to one owner.
 
         Returns:
             Tuple of (list of assets, total count).
@@ -208,6 +217,8 @@ class InMemoryAssetService(AssetService):
 
         if asset_type is not None:
             all_assets = [a for a in all_assets if a["asset_type"] == asset_type]
+        if owner_id is not None:
+            all_assets = [a for a in all_assets if a.get("owner_id") == owner_id]
 
         total = len(all_assets)
         page = all_assets[offset : offset + limit]

@@ -17,10 +17,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.v1.access import visible_assessments
 from app.api.v1.state import orchestrator as _orchestrator
 from app.api.v1.state import report_service as _report_service
+from app.core.dependencies import require_auth
 from app.core.exceptions import (
     AssessmentInvalidTransitionError,
     AssessmentNotFoundError,
@@ -53,6 +55,7 @@ from app.schemas.assessment import (
     AssessmentResponse as AssessmentDetailResponse,
 )
 from app.services.assessment import InMemoryEvidenceService
+from app.services.auth import User  # noqa: TC001 - FastAPI resolves dependency hints at runtime
 
 router = APIRouter()
 
@@ -75,6 +78,7 @@ _evidence_service = InMemoryEvidenceService()
 async def create_assessment(
     workspace_id: str = Query(..., description="Parent workspace ID"),
     data: AssessmentCreate = ...,  # type: ignore[assignment]
+    user: User = Depends(require_auth),
 ) -> AssessmentResponse:
     """Create a new assessment.
 
@@ -94,6 +98,7 @@ async def create_assessment(
         asset_ids=data.asset_ids,
         priority=data.priority,
         tags=data.tags,
+        owner_id=user.id,
     )
     return AssessmentResponse(**result)
 
@@ -112,6 +117,7 @@ async def list_assessments(
     status: str | None = Query(None, description="Filter by status"),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    user: User = Depends(require_auth),
 ) -> list[AssessmentResponse]:
     """List assessments in a workspace.
 
@@ -125,7 +131,7 @@ async def list_assessments(
         List of assessments.
     """
     assessments = []
-    for a in _orchestrator._assessments.values():
+    for a in visible_assessments(user):
         if (
             (workspace_id is None or a["workspace_id"] == workspace_id)
             and not a.get("is_deleted")
@@ -146,6 +152,7 @@ async def get_dashboard(
         None,
         description="Workspace ID (omit to aggregate across all workspaces)",
     ),
+    user: User = Depends(require_auth),
 ) -> AssessmentDashboardResponse:
     """Get assessment dashboard data.
 
@@ -157,7 +164,7 @@ async def get_dashboard(
     """
     all_items = [
         a
-        for a in _orchestrator._assessments.values()
+        for a in visible_assessments(user)
         if (workspace_id is None or a["workspace_id"] == workspace_id) and not a.get("is_deleted")
     ]
 
@@ -217,6 +224,7 @@ async def search_assessments(
     q: str = Query(..., min_length=1, description="Search query"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    user: User = Depends(require_auth),
 ) -> AssessmentSearchResponse:
     """Search assessments.
 
@@ -232,7 +240,7 @@ async def search_assessments(
     results: list[AssessmentSearchResult] = []
     q_lower = q.lower()
 
-    for a in _orchestrator._assessments.values():
+    for a in visible_assessments(user):
         if (workspace_id is not None and a["workspace_id"] != workspace_id) or a.get("is_deleted"):
             continue
         if q_lower in a["name"].lower() or q_lower in (a.get("description") or "").lower():
@@ -247,8 +255,11 @@ async def search_assessments(
                 )
             )
 
+    visible_ids = {a["id"] for a in visible_assessments(user)}
     for aid, findings in _orchestrator._findings.items():
         assessment = _orchestrator._assessments.get(aid, {})
+        if aid not in visible_ids:
+            continue
         if workspace_id is not None and assessment.get("workspace_id") != workspace_id:
             continue
         for f in findings:

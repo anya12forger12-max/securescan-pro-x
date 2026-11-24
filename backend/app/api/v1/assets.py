@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.v1.state import asset_service as _service
+from app.core.dependencies import require_auth
 from app.core.exceptions import AssetExistsError, AssetNotFoundError
 from app.schemas import (
     AssetCreate,
@@ -11,11 +13,9 @@ from app.schemas import (
     AssetUpdate,
     ErrorResponse,
 )
-from app.services.asset import InMemoryAssetService
+from app.services.auth import User, UserRole
 
 router = APIRouter()
-
-_service = InMemoryAssetService()
 
 
 @router.post(
@@ -32,6 +32,7 @@ _service = InMemoryAssetService()
 async def create_asset(
     workspace_id: str = Query(..., description="Parent workspace ID"),
     data: AssetCreate = ...,  # type: ignore[assignment]
+    user: User = Depends(require_auth),
 ) -> AssetResponse:
     """Create a new asset.
 
@@ -43,7 +44,7 @@ async def create_asset(
         The created asset.
     """
     try:
-        return await _service.create(workspace_id, data)
+        return await _service.create(workspace_id, data, owner_id=user.id)
     except AssetExistsError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
 
@@ -62,6 +63,7 @@ async def list_assets(
     asset_type: str | None = Query(None, description="Filter by type"),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    user: User = Depends(require_auth),
 ) -> list[AssetResponse]:
     """List assets in a workspace.
 
@@ -79,6 +81,7 @@ async def list_assets(
         asset_type=asset_type,
         offset=offset,
         limit=limit,
+        owner_id=None if user.role == UserRole.ADMIN else user.id,
     )
     return assets
 

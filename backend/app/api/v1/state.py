@@ -9,8 +9,12 @@ generation always answered 404).
 from __future__ import annotations
 
 from app.services.assessment import EventBus, InMemoryOrchestrator
+from app.services.asset import InMemoryAssetService
 from app.services.reports import ReportGenerationService
+from app.services.workspace import InMemoryWorkspaceService
 
 event_bus = EventBus()
 orchestrator = InMemoryOrchestrator(event_bus=event_bus)
 report_service = ReportGenerationService()
+workspace_service = InMemoryWorkspaceService()
+asset_service = InMemoryAssetService()

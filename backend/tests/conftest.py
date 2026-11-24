@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import http.server
+import os
 import threading
 from collections.abc import Iterator
 
 import pytest
+
+# Tests intentionally scan loopback fixtures; production keeps the deny-list.
+os.environ.setdefault("SPSX_ALLOW_LOCAL_SCAN_TARGETS", "1")
 
 
 @pytest.fixture(scope="session")

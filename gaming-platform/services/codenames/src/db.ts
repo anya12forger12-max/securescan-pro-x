@@ -223,12 +223,34 @@ export async function isSessionParticipant(pool: Queryable, sessionId: string, u
   return (result.rowCount ?? 0) > 0;
 }
 
+/** A game must only ever be attached to a session of this game type. */
+export async function isSessionOfType(
+  pool: Queryable,
+  sessionId: string,
+  gameType: string,
+): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT 1 FROM game_sessions
+      WHERE id = $1 AND game_type = $2 AND status IN ('waiting', 'active')
+      LIMIT 1`,
+    [sessionId, gameType],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 /** Starting a game is the moment play begins: close the session's join window
- * so a late seat cannot change team assignment or leaderboard eligibility. */
-export async function activateSession(pool: Queryable, sessionId: string): Promise<void> {
+ * so a late seat cannot change team assignment or leaderboard eligibility.
+ * The game_type predicate keeps a codenames game from activating a session
+ * that belongs to another game. */
+export async function activateSession(
+  pool: Queryable,
+  sessionId: string,
+  gameType: string,
+): Promise<void> {
   await pool.query(
-    `UPDATE game_sessions SET status = 'active' WHERE id = $1 AND status = 'waiting'`,
-    [sessionId],
+    `UPDATE game_sessions SET status = 'active'
+      WHERE id = $1 AND status = 'waiting' AND game_type = $2`,
+    [sessionId, gameType],
   );
 }
 

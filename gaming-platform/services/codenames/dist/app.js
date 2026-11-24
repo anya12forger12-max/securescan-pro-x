@@ -3,7 +3,7 @@ import { z } from "zod";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { getPool, closePool, createGame, getGame, setGameStatus, submitClue, getCluesForGame, getActiveClue, submitGuess, listGuessesForGame, listRevealedWords, playerTeam, isTeamSpymaster, isSessionParticipant, activateSession } from "./db.js";
+import { getPool, closePool, createGame, getGame, setGameStatus, submitClue, getCluesForGame, getActiveClue, submitGuess, listGuessesForGame, listRevealedWords, playerTeam, isTeamSpymaster, isSessionParticipant, isSessionOfType, activateSession } from "./db.js";
 /**
  * The request's route path.
  *
@@ -78,6 +78,9 @@ export async function buildCodenamesService(env) {
         // session, so only a seated player may create a game for it.
         if (!(await isSessionParticipant(pool, parsed.data.session_id, decoded.userId))) {
             return reply.code(403).send({ error: "FORBIDDEN", message: "join the session before creating a game" });
+        }
+        if (!(await isSessionOfType(pool, parsed.data.session_id, "codenames"))) {
+            return reply.code(409).send({ error: "CONFLICT", message: "session is not a codenames session" });
         }
         const game = await createGame(pool, {
             id: randomUUID(),
@@ -287,7 +290,7 @@ export async function buildCodenamesService(env) {
         // The game only becomes playable here; the session stays joinable during
         // setup so teams can be assembled, then closes when play starts.
         if (body.data.status === "active" && game.session_id)
-            await activateSession(pool, game.session_id);
+            await activateSession(pool, game.session_id, "codenames");
         return reply.send({ ok: true });
     });
     // ---- health and readiness ----

@@ -22,6 +22,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import app
+from app.core.dependencies import get_auth_service
+from app.services.auth import UserRole
 
 _ip_seq = itertools.count(1)
 
@@ -55,8 +57,12 @@ def _delete(client: TestClient, url: str, **kw):
     return client.delete(url, headers=headers, **kw)
 
 
-def _login(client: TestClient) -> str:
-    """Register and log in a throwaway account; returns the username."""
+def _login(client: TestClient, role: UserRole = UserRole.OPERATOR) -> str:
+    """Register and log in a throwaway account; returns the username.
+
+    Tests exercise the write surface, so the default account is an operator.
+    Registration itself always creates viewers; elevation here is test-only.
+    """
     uid = uuid.uuid4().hex[:12]
     username = f"qa_{uid}"
     r = _post(
@@ -77,6 +83,10 @@ def _login(client: TestClient) -> str:
     assert r.status_code == 200, r.text
     assert "session_token=" in r.headers.get("set-cookie", "")
     assert "session_token" not in r.json()
+    if role is not UserRole.VIEWER:
+        auth = get_auth_service()
+        user_id = auth._users_by_username[username.casefold()]
+        auth._users[user_id].role = role
     return username
 
 
@@ -765,6 +775,92 @@ class TestBackendBugRegressions:
         for _ in range(4):
             assert _post(client, f"/api/v1/assessments/{asm_id}/retry").status_code == 409
         assert _get(client, f"/api/v1/assessments/{asm_id}").json()["status"] == "draft"
+
+
+class TestAuthorizationAndTenantIsolation:
+    """Viewers cannot write and operators cannot cross tenant boundaries."""
+
+    def test_viewer_can_read_but_not_write_or_scan(self, client: TestClient) -> None:
+        _login(client, UserRole.VIEWER)
+
+        assert _get(client, "/api/v1/workspaces").status_code == 200
+        assert (
+            _post(client, "/api/v1/workspaces", {"name": "viewer-cannot-create"}).status_code == 403
+        )
+        assert (
+            _post(
+                client,
+                "/api/v1/scans/port-scan",
+                {"target": "127.0.0.1", "ports": [1]},
+            ).status_code
+            == 403
+        )
+
+    def test_cross_tenant_resources_are_hidden(self, client: TestClient) -> None:
+        _login(client)
+        ws_id = _make_workspace(client)
+        asset_id = _post(
+            client,
+            f"/api/v1/assets?workspace_id={ws_id}",
+            {"name": "asset", "asset_type": "host", "identifier": "example.com"},
+        ).json()["id"]
+        asm_id = _make_assessment(client, ws_id)
+
+        client.cookies.clear()
+        _login(client)
+
+        assert _get(client, f"/api/v1/workspaces/{ws_id}").status_code == 403
+        assert _patch(client, f"/api/v1/workspaces/{ws_id}", {"name": "stolen"}).status_code == 403
+        assert _delete(client, f"/api/v1/workspaces/{ws_id}").status_code == 403
+        assert ws_id not in [w["id"] for w in _get(client, "/api/v1/workspaces").json()]
+
+        assert _get(client, f"/api/v1/assets/{asset_id}").status_code == 403
+        assert _get(client, f"/api/v1/assessments/{asm_id}").status_code == 403
+        assert asm_id not in [a["id"] for a in _get(client, "/api/v1/assessments").json()]
+
+
+class TestScanTargetHardening:
+    """Network targets are rejected unless local scanning is explicitly enabled."""
+
+    def test_private_targets_rejected_by_default(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _login(client)
+        monkeypatch.delenv("SPSX_ALLOW_LOCAL_SCAN_TARGETS", raising=False)
+
+        assert (
+            _post(
+                client,
+                "/api/v1/scans/port-scan",
+                {"target": "127.0.0.1", "ports": [1]},
+            ).status_code
+            == 422
+        )
+        assert (
+            _post(
+                client,
+                "/api/v1/scans/header-check",
+                {"url": "http://127.0.0.1:8000/health"},
+            ).status_code
+            == 422
+        )
+        assert (
+            _post(
+                client,
+                "/api/v1/scans/ssl-check",
+                {"hostname": "127.0.0.1", "port": 443},
+            ).status_code
+            == 422
+        )
+
+    def test_port_list_is_capped(self, client: TestClient) -> None:
+        _login(client)
+        r = _post(
+            client,
+            "/api/v1/scans/port-scan",
+            {"target": "127.0.0.1", "ports": list(range(1, 2000))},
+        )
+        assert r.status_code == 422
 
 
 class TestLifespan:

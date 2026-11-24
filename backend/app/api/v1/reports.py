@@ -11,14 +11,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
+from app.api.v1.access import ensure_owner, require_owned_report, visible_assessments
 from app.api.v1.state import orchestrator as _orchestrator
 from app.api.v1.state import report_service as _report_service
+from app.core.dependencies import require_auth
 from app.core.exceptions import AssessmentNotFoundError
 from app.schemas import ErrorResponse
+from app.services.auth import User  # noqa: TC001 - FastAPI resolves dependency hints at runtime
 
 router = APIRouter()
 
@@ -63,6 +66,7 @@ async def list_reports(
     assessment_id: str | None = Query(None, description="Filter by assessment ID"),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    user: User = Depends(require_auth),
 ) -> list[ReportDetailResponse]:
     """List all reports.
 
@@ -74,7 +78,12 @@ async def list_reports(
     Returns:
         List of report metadata.
     """
-    reports = _report_service.list_reports(assessment_id=assessment_id)
+    visible_ids = {a["id"] for a in visible_assessments(user)}
+    reports = [
+        r
+        for r in _report_service.list_reports(assessment_id=assessment_id)
+        if r["assessment_id"] in visible_ids
+    ]
     page = reports[offset : offset + limit]
     return [ReportDetailResponse(**r) for r in page]
 
@@ -92,6 +101,7 @@ async def list_reports(
 )
 async def generate_report(
     data: GenerateReportRequest,
+    user: User = Depends(require_auth),
 ) -> ReportDetailResponse:
     """Generate a report for an assessment.
 
@@ -112,6 +122,7 @@ async def generate_report(
         assessment = await _orchestrator.get_assessment(data.assessment_id)
     except AssessmentNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    ensure_owner(assessment, user, "assessment")
 
     findings = _orchestrator._findings.get(data.assessment_id, [])
     evidence_items = _orchestrator._evidence.get(data.assessment_id, [])
@@ -139,7 +150,10 @@ async def generate_report(
     summary="Get a report",
     description="Get report metadata by report ID.",
 )
-async def get_report(report_id: str) -> ReportDetailResponse:
+async def get_report(
+    report_id: str,
+    user: User = Depends(require_auth),
+) -> ReportDetailResponse:
     """Get report metadata by ID.
 
     Args:
@@ -151,10 +165,7 @@ async def get_report(report_id: str) -> ReportDetailResponse:
     Raises:
         404: If the report does not exist.
     """
-    metadata = _report_service.get_report(report_id)
-    if metadata is None:
-        raise HTTPException(status_code=404, detail=f"Report '{report_id}' not found")
-
+    metadata = require_owned_report(report_id, user)
     return ReportDetailResponse(**metadata.to_dict())
 
 
@@ -167,7 +178,10 @@ async def get_report(report_id: str) -> ReportDetailResponse:
         404: {"model": ErrorResponse, "description": "Report not found"},
     },
 )
-async def download_report(report_id: str) -> Response:
+async def download_report(
+    report_id: str,
+    user: User = Depends(require_auth),
+) -> Response:
     """Download report content.
 
     Returns the report content with the appropriate content type:
@@ -187,9 +201,7 @@ async def download_report(report_id: str) -> Response:
     Raises:
         404: If the report does not exist.
     """
-    metadata = _report_service.get_report(report_id)
-    if metadata is None:
-        raise HTTPException(status_code=404, detail=f"Report '{report_id}' not found")
+    metadata = require_owned_report(report_id, user)
 
     content = _report_service.get_report_content(report_id)
     if content is None:
@@ -236,7 +248,10 @@ async def download_report(report_id: str) -> Response:
         404: {"model": ErrorResponse, "description": "Report not found"},
     },
 )
-async def verify_report_integrity(report_id: str) -> dict[str, Any]:
+async def verify_report_integrity(
+    report_id: str,
+    user: User = Depends(require_auth),
+) -> dict[str, Any]:
     """Verify report content integrity.
 
     Computes SHA-256 hash of the stored content and compares it with
@@ -251,6 +266,7 @@ async def verify_report_integrity(report_id: str) -> dict[str, Any]:
     Raises:
         404: If the report does not exist.
     """
+    require_owned_report(report_id, user)
     is_valid = _report_service.verify_integrity(report_id)
     if is_valid is None:
         raise HTTPException(status_code=404, detail=f"Report '{report_id}' not found")

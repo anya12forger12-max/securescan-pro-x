@@ -24,11 +24,12 @@ class WorkspaceService(ABC):
     """Interface for workspace management operations."""
 
     @abstractmethod
-    async def create(self, data: WorkspaceCreate) -> WorkspaceResponse:
+    async def create(self, data: WorkspaceCreate, owner_id: str = "system") -> WorkspaceResponse:
         """Create a new workspace.
 
         Args:
             data: Workspace creation data.
+            owner_id: Account that owns the workspace.
 
         Returns:
             The created workspace.
@@ -59,6 +60,7 @@ class WorkspaceService(ABC):
         active_only: bool = True,
         offset: int = 0,
         limit: int = 50,
+        owner_id: str | None = None,
     ) -> tuple[list[WorkspaceResponse], int]:
         """List all workspaces.
 
@@ -66,6 +68,7 @@ class WorkspaceService(ABC):
             active_only: If True, only return active workspaces.
             offset: Number of workspaces to skip.
             limit: Maximum number to return.
+            owner_id: Restrict results to one owner.
 
         Returns:
             Tuple of (list of workspaces, total count).
@@ -116,11 +119,12 @@ class InMemoryWorkspaceService(WorkspaceService):
         self._workspaces: dict[str, dict[str, Any]] = {}
         self._counter: int = 0
 
-    async def create(self, data: WorkspaceCreate) -> WorkspaceResponse:
+    async def create(self, data: WorkspaceCreate, owner_id: str = "system") -> WorkspaceResponse:
         """Create a new workspace in memory.
 
         Args:
             data: Workspace creation data.
+            owner_id: Account that owns the workspace.
 
         Returns:
             The created workspace.
@@ -142,6 +146,7 @@ class InMemoryWorkspaceService(WorkspaceService):
             "name": data.name,
             "description": data.description,
             "is_active": True,
+            "owner_id": owner_id,
             "created_at": now,
             "updated_at": now,
         }
@@ -177,6 +182,7 @@ class InMemoryWorkspaceService(WorkspaceService):
         active_only: bool = True,
         offset: int = 0,
         limit: int = 50,
+        owner_id: str | None = None,
     ) -> tuple[list[WorkspaceResponse], int]:
         """List workspaces from memory.
 
@@ -184,6 +190,7 @@ class InMemoryWorkspaceService(WorkspaceService):
             active_only: If True, only return active workspaces.
             offset: Number to skip.
             limit: Maximum to return.
+            owner_id: Restrict results to one owner.
 
         Returns:
             Tuple of (list of workspaces, total count).
@@ -192,6 +199,8 @@ class InMemoryWorkspaceService(WorkspaceService):
 
         if active_only:
             all_workspaces = [ws for ws in all_workspaces if ws["is_active"]]
+        if owner_id is not None:
+            all_workspaces = [ws for ws in all_workspaces if ws.get("owner_id") == owner_id]
 
         total = len(all_workspaces)
         page = all_workspaces[offset : offset + limit]

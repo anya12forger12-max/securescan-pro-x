@@ -366,6 +366,7 @@ class ReportService(ABC):
         assessment: dict[str, Any] | None = None,
         findings: list[dict[str, Any]] | None = None,
         evidence: list[dict[str, Any]] | None = None,
+        owner_id: str = "system",
     ) -> dict[str, Any]:
         """Generate a report in the specified format.
 
@@ -375,6 +376,7 @@ class ReportService(ABC):
             assessment: Assessment data.
             findings: List of findings.
             evidence: List of evidence items.
+            owner_id: Account that owns the report.
 
         Returns:
             Report metadata including content and path.
@@ -415,6 +417,7 @@ class InMemoryReportService(ReportService):
         assessment: dict[str, Any] | None = None,
         findings: list[dict[str, Any]] | None = None,
         evidence: list[dict[str, Any]] | None = None,
+        owner_id: str = "system",
     ) -> dict[str, Any]:
         """Generate a report.
 
@@ -424,6 +427,7 @@ class InMemoryReportService(ReportService):
             assessment: Assessment data.
             findings: Findings data.
             evidence: Evidence data.
+            owner_id: Account that owns the report.
 
         Returns:
             Report metadata with generated content.
@@ -465,6 +469,7 @@ class InMemoryReportService(ReportService):
             "integrity_hash": content_hash,
             "generated_at": now.isoformat(),
             "generated_by": "report_pipeline",
+            "owner_id": owner_id,
         }
 
         self._reports.setdefault(assessment_id, []).append(report)

@@ -193,6 +193,7 @@ class AssessmentOrchestrator(ABC):
         asset_ids: list[str] | None = None,
         priority: str = "normal",
         tags: list[str] | None = None,
+        owner_id: str = "system",
     ) -> dict[str, Any]:
         """Create a new assessment in draft state.
 
@@ -205,6 +206,7 @@ class AssessmentOrchestrator(ABC):
             asset_ids: Optional list of asset IDs to assess.
             priority: Assessment priority.
             tags: Optional tags.
+            owner_id: Account that owns the assessment.
 
         Returns:
             The created assessment.
@@ -578,6 +580,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
         asset_ids: list[str] | None = None,
         priority: str = "normal",
         tags: list[str] | None = None,
+        owner_id: str = "system",
     ) -> dict[str, Any]:
         """Create a new assessment in draft state.
 
@@ -590,6 +593,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
             asset_ids: Optional asset IDs.
             priority: Assessment priority.
             tags: Optional tags.
+            owner_id: Account that owns the assessment.
 
         Returns:
             Created assessment data.
@@ -603,6 +607,7 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
             "workspace_id": workspace_id,
             "name": name,
             "description": description,
+            "owner_id": owner_id,
             "status": AssessmentStatus.DRAFT.value,
             "priority": priority,
             "version": 1,

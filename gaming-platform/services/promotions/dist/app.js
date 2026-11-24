@@ -45,6 +45,11 @@ function validateNewPromotion(body) {
         return { error: "invalid promotion type" };
     if (!Number.isFinite(Number(bonusAmount)) || Number(bonusAmount) <= 0)
         return { error: "bonusAmount must be positive" };
+    // toMoney() rounds to cents; a positive sub-cent value would otherwise pass
+    // validation and then violate the database's bonus_amount > 0 constraint.
+    const normalizedBonus = toMoney(bonusAmount);
+    if (normalizedBonus === "0.00")
+        return { error: "bonusAmount must be at least 0.01" };
     const maxClaims = Number(b.maxClaims);
     const wageringRequirement = Number(b.wageringRequirement ?? 0);
     if (!Number.isInteger(maxClaims) || maxClaims <= 0)
@@ -64,7 +69,7 @@ function validateNewPromotion(body) {
             title,
             type: type,
             description: str("description") ?? "",
-            bonusAmount: toMoney(bonusAmount),
+            bonusAmount: normalizedBonus,
             wageringRequirement,
             maxClaims,
             startsAt,
@@ -288,7 +293,18 @@ export async function buildPromotionsService(deps) {
         if (existing) {
             return deny(reply, 409, ERROR_CODES.IDEMPOTENCY_CONFLICT, "promotion code already exists");
         }
-        const promotion = await repo.createPromotion(parsed.value);
+        let promotion;
+        try {
+            promotion = await repo.createPromotion(parsed.value);
+        }
+        catch (err) {
+            // The pre-check is intentionally optimistic; the unique constraint is
+            // the real guard when two creates race with the same code.
+            if (err && typeof err === "object" && "code" in err && err.code === "23505") {
+                return deny(reply, 409, ERROR_CODES.IDEMPOTENCY_CONFLICT, "promotion code already exists");
+            }
+            throw err;
+        }
         return reply.code(201).send(success({ promotion }, reqId(req)));
     });
     app.patch("/internal/promotions/:id", async (req, reply) => {
@@ -318,6 +334,14 @@ export async function buildPromotionsService(deps) {
         }
         if (Object.keys(patch).length === 0) {
             return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "no updatable fields supplied");
+        }
+        if (patch.expiresAt !== undefined) {
+            const current = await repo.findById(id);
+            if (!current)
+                return deny(reply, 404, ERROR_CODES.NOT_FOUND, "promotion not found");
+            if (Date.parse(patch.expiresAt) <= Date.parse(current.startsAt)) {
+                return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "expiresAt must be after startsAt");
+            }
         }
         const promotion = await repo.updatePromotion(id, patch);
         if (!promotion)

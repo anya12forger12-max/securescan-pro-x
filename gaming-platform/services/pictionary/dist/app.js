@@ -3,7 +3,7 @@ import { z } from "zod";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { getPool, closePool, createRound, getRound, endRound, submitGuess, MAX_WRONG_GUESSES, getGuessesForRound, getRandomWord, isSessionParticipant, } from "./db.js";
+import { getPool, closePool, createRound, getRound, endRound, submitGuess, MAX_WRONG_GUESSES, getGuessesForRound, getRandomWord, isSessionParticipant, isSessionOfType, } from "./db.js";
 /**
  * The request's route path.
  *
@@ -61,6 +61,9 @@ export async function buildPictionaryService(env) {
         const pool = getPool(env.DATABASE_URL);
         if (!(await isSessionParticipant(pool, parsed.data.session_id, decoded.userId))) {
             return reply.code(403).send({ error: "FORBIDDEN", message: "join the session before creating a round" });
+        }
+        if (!(await isSessionOfType(pool, parsed.data.session_id, "pictionary"))) {
+            return reply.code(409).send({ error: "CONFLICT", message: "session is not a pictionary session" });
         }
         const word = await getRandomWord(pool);
         if (!word?.word) {

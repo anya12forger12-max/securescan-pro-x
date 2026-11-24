@@ -891,11 +891,11 @@ async function cashoutBet(bet, requestedMultiplier, { userId } = {}) {
     // Only a definitive wallet rejection proves no money moved. Ambiguous
     // failures (4xx with an unparseable body, 5xx, transport errors) keep
     // `cashing_out` so boot/periodic replay uses the same key.
-    if (definitiveWalletRejection(err)) {
-      await pool.query(
-        `UPDATE crash_bets SET status = 'active', cashout_at = NULL, payout = NULL,
-           settled_at = NULL WHERE id = $1 AND status = 'cashing_out'`, [claim.id]);
-    }
+    // Keep the committed cashing_out claim, including its payout and
+    // idempotency key. Reverting to `active` here lets finishRound settle the
+    // bet as a loss and destroys the only record needed to replay the win.
+    // Definitive or ambiguous, reconciliation owns this bet now.
+    app.log.error({ err, betId: claim.id }, "cash-out claim kept for reconciliation after wallet rejection");
     throw err;
   }
   return { payout, multiplier };

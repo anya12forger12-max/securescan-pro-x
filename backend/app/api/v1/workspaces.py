@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.v1.state import workspace_service as _service
+from app.core.dependencies import require_auth
 from app.core.exceptions import WorkspaceExistsError, WorkspaceNotFoundError
 from app.schemas import (
     ErrorResponse,
@@ -11,12 +13,9 @@ from app.schemas import (
     WorkspaceResponse,
     WorkspaceUpdate,
 )
-from app.services.workspace import InMemoryWorkspaceService
+from app.services.auth import User, UserRole
 
 router = APIRouter()
-
-# Service instance (will be replaced with DI in production)
-_service = InMemoryWorkspaceService()
 
 
 @router.post(
@@ -30,7 +29,10 @@ _service = InMemoryWorkspaceService()
     summary="Create a workspace",
     description="Create a new assessment workspace.",
 )
-async def create_workspace(data: WorkspaceCreate) -> WorkspaceResponse:
+async def create_workspace(
+    data: WorkspaceCreate,
+    user: User = Depends(require_auth),
+) -> WorkspaceResponse:
     """Create a new workspace.
 
     Args:
@@ -44,7 +46,7 @@ async def create_workspace(data: WorkspaceCreate) -> WorkspaceResponse:
         422: If input validation fails.
     """
     try:
-        return await _service.create(data)
+        return await _service.create(data, owner_id=user.id)
     except WorkspaceExistsError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
 
@@ -59,6 +61,7 @@ async def list_workspaces(
     active_only: bool = Query(True, description="Only return active workspaces"),
     offset: int = Query(0, ge=0, description="Number to skip"),
     limit: int = Query(50, ge=1, le=100, description="Maximum to return"),
+    user: User = Depends(require_auth),
 ) -> list[WorkspaceResponse]:
     """List workspaces.
 
@@ -70,7 +73,12 @@ async def list_workspaces(
     Returns:
         List of workspaces.
     """
-    workspaces, _ = await _service.list(active_only=active_only, offset=offset, limit=limit)
+    workspaces, _ = await _service.list(
+        active_only=active_only,
+        offset=offset,
+        limit=limit,
+        owner_id=None if user.role == UserRole.ADMIN else user.id,
+    )
     return workspaces
 
 

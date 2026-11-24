@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any
 
 from app.core.logging import get_logger
+from app.utils.scan_target import normalize_header_url, normalize_target, validate_ports
 
 logger = get_logger(__name__)
 
@@ -189,8 +190,9 @@ class InMemoryScanEngine(ScanEngine):
         scan_result = ScanResult(scan_type="port_scan", target=target, status=ScanStatus.RUNNING)
         scan_result.started_at = datetime.now(timezone.utc).isoformat()
 
-        if ports is None:
-            ports = list(COMMON_PORTS.keys())
+        target = normalize_target(target)
+        scan_result.target = target
+        ports = list(COMMON_PORTS.keys()) if ports is None else validate_ports(ports)
 
         try:
             tasks = [self._scan_port(target, port, timeout) for port in ports]
@@ -253,6 +255,7 @@ class InMemoryScanEngine(ScanEngine):
     async def run_header_check(self, url: str) -> ScanResult:
         import httpx
 
+        url = normalize_header_url(url)
         scan_result = ScanResult(scan_type="header_check", target=url, status=ScanStatus.RUNNING)
         scan_result.started_at = datetime.now(timezone.utc).isoformat()
 
@@ -298,7 +301,9 @@ class InMemoryScanEngine(ScanEngine):
             if not url.startswith(("http://", "https://")):
                 url = f"https://{url}"
 
-            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
+            # Redirects are not followed: a public target could otherwise
+            # bounce the request into an internal network after validation.
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
                 response = await client.get(url)
                 scan_result.evidence.append(f"HTTP {response.status_code} from {url}")
 
@@ -515,6 +520,7 @@ class InMemoryScanEngine(ScanEngine):
         return score, strength, issues
 
     async def run_ssl_check(self, hostname: str, port: int = 443) -> ScanResult:
+        hostname = normalize_target(hostname)
         scan_result = ScanResult(
             scan_type="ssl_check", target=f"{hostname}:{port}", status=ScanStatus.RUNNING
         )
@@ -653,6 +659,7 @@ class InMemoryScanEngine(ScanEngine):
     async def run_full_scan(
         self, target: str, scan_types: list[str] | None = None
     ) -> dict[str, ScanResult]:
+        target = normalize_target(target)
         if scan_types is None:
             scan_types = ["port_scan", "header_check", "ssl_check"]
 
