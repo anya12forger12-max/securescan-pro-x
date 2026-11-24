@@ -9,13 +9,21 @@ import { z } from "zod";
  *
  * Port 3022 is used because 3014 belongs to tournaments and 3016 to chat; the
  * openapi.yaml server URL and the compose healthcheck must match this value.
+ *
+ * This service receives only the bonus-scoped wallet credential. The full
+ * wallet token is an optional local-run fallback and never reaches a deployed
+ * promotions container, so a compromised process cannot mint other credit
+ * types. Events are published to realtime over its capability-authenticated
+ * internal endpoint; the old Redis EventBus had no subscriber.
  */
 export declare const promotionsEnvSchema: z.ZodObject<{
     NODE_ENV: z.ZodDefault<z.ZodEnum<["development", "test", "production"]>>;
+    WALLET_SERVICE_TOKEN: z.ZodOptional<z.ZodString>;
+    WALLET_BONUS_SERVICE_TOKEN: z.ZodOptional<z.ZodString>;
     PORT: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
     DATABASE_URL: z.ZodString;
     JWT_ACCESS_SECRET: z.ZodString;
-    REDIS_URL: z.ZodString;
+    REDIS_URL: z.ZodOptional<z.ZodString>;
     CORS_ORIGIN: z.ZodDefault<z.ZodString>;
     LOG_LEVEL: z.ZodDefault<z.ZodEnum<{
         error: "error";
@@ -26,10 +34,11 @@ export declare const promotionsEnvSchema: z.ZodObject<{
         trace: "trace";
         silent: "silent";
     }>>;
+    REALTIME_URL: z.ZodDefault<z.ZodString>;
     RESPONSIBLE_GAMING_URL: z.ZodString;
     WALLET_URL: z.ZodString;
     SERVICE_TOKEN: z.ZodString;
-    WALLET_SERVICE_TOKEN: z.ZodString;
+    REALTIME_SERVICE_TOKEN: z.ZodString;
     PROMOTIONS_SERVICE_TOKEN: z.ZodString;
 }, z.core.$strip>;
 export type PromotionsEnv = z.infer<typeof promotionsEnvSchema>;
@@ -101,13 +110,16 @@ export declare const loadEnv: (data: unknown, params?: z.core.ParseContext<z.cor
     PORT: number;
     DATABASE_URL: string;
     JWT_ACCESS_SECRET: string;
-    REDIS_URL: string;
     CORS_ORIGIN: string;
     LOG_LEVEL: "error" | "fatal" | "warn" | "info" | "debug" | "trace" | "silent";
+    REALTIME_URL: string;
     RESPONSIBLE_GAMING_URL: string;
     WALLET_URL: string;
     SERVICE_TOKEN: string;
-    WALLET_SERVICE_TOKEN: string;
+    REALTIME_SERVICE_TOKEN: string;
     PROMOTIONS_SERVICE_TOKEN: string;
+    WALLET_SERVICE_TOKEN?: string | undefined;
+    WALLET_BONUS_SERVICE_TOKEN?: string | undefined;
+    REDIS_URL?: string | undefined;
 };
 //# sourceMappingURL=env.d.ts.map

@@ -490,7 +490,10 @@ async function createRound() {
     bettingMs: env.BETTING_WINDOW_MS,
     doublingSeconds: roundConfig(round).doublingSeconds,
   });
-  later(() => startRound(round.id), env.BETTING_WINDOW_MS);
+  // A reused row may already be `running`. Scheduling startRound unconditionally
+  // would be a no-op and leave the round with no finish timer at all; derive
+  // the next deadline from the persisted status instead.
+  scheduleRoundDeadlines(round);
   return round;
 }
 
@@ -703,15 +706,17 @@ async function reconcileUnsettled() {
   );
   for (const bet of pending.rows) {
     try {
-      if (bettingDeadlinePassed({ status: bet.round_status, created_at: bet.round_created_at })) {
-        await refundBet(bet);
+      // A claim already in `refunding` is owned by the refund path. Calling
+      // refundBet(bet) without `claimed` can never re-claim the row, so a
+      // process that died after the claim but before the wallet credit would
+      // leave this bet stuck forever. Replaying the debit is safe: its
+      // idempotency key is derived from the stored bet, not the request.
+      if (bet.status === "refunding") {
+        await refundBet(bet, { claimed: true });
         continue;
       }
-      // A bet already claimed for refund must stay on that path; re-activating
-      // it after a partial wallet failure would make the refund credit a free
-      // stake. walletRefund uses the same deterministic key, so this is safe.
-      if (bet.status === "refunding") {
-        await refundBet(bet, { claimed: true, ensureDebit: false });
+      if (bettingDeadlinePassed({ status: bet.round_status, created_at: bet.round_created_at })) {
+        await refundBet(bet);
         continue;
       }
       await walletDebit(bet);

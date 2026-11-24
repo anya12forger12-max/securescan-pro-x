@@ -13,8 +13,8 @@ createRoot(document.getElementById("root") as HTMLElement).render(
   <BrowserRouter>
     <Provider>
       <Routes>
-        <Route path="/login" element={<AuthPage mode="login" />} />
-        <Route path="/register" element={<AuthPage mode="register" />} />
+        <Route path="/login" element={<AuthPage key="login" mode="login" />} />
+        <Route path="/register" element={<AuthPage key="register" mode="register" />} />
         <Route path="*" element={<App />} />
       </Routes>
       <ToastContainer position="top-center" theme="dark" />

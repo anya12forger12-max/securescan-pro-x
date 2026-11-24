@@ -36,11 +36,17 @@ export function unwrap<T>(payload: unknown): T {
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { body, token, headers, ...rest } = options;
+  // Older browsers do not implement AbortSignal.timeout; calling it
+  // unconditionally throws before fetch and breaks every API request there.
+  const timeoutCtor = AbortSignal as typeof AbortSignal & {
+    timeout?: (ms: number) => AbortSignal;
+  };
+  const signal = options.signal ?? timeoutCtor.timeout?.(15000);
   const response = await fetch(`${config.api}${path}`, {
     ...rest,
     headers: { ...authHeaders(token), ...(headers as Record<string, string> | undefined) },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: options.signal ?? AbortSignal.timeout(15000),
+    signal,
   });
 
   const text = await response.text();

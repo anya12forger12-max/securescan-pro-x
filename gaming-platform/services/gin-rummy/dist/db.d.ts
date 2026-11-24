@@ -40,6 +40,11 @@ export declare function getGame(pool: Queryable, id: string): Promise<GameRow>;
 export declare function getGameForUpdate(pool: Queryable, id: string): Promise<GameRow>;
 export declare function joinGame(pool: Queryable, id: string, player2_id: string): Promise<GameRow | null>;
 export declare function isSessionParticipant(pool: Queryable, sessionId: string, userId: string): Promise<boolean>;
+/** A Gin Rummy game may only bind to a Gin Rummy session. Other services use
+ * the same `game_sessions` table for their own lobbies; attaching a Gin Rummy
+ * game to one of those lets a joiner mutate an unrelated active game's player
+ * list through `joinGameWithSessionSeat`. */
+export declare function isSessionOfType(pool: Queryable, sessionId: string, gameType: string): Promise<boolean>;
 /** Claim the opponent seat and the matching session seat together. The game
  * UUID is the host's invitation, so a player may join the game directly, but
  * the resulting seat must still be visible to session-scoped verification.

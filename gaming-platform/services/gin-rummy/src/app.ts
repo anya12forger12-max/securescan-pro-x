@@ -97,7 +97,10 @@ function isValidMeld(group: string[]): boolean {
   // Otherwise every card must share a suit and climb one rank at a time.
   if (new Set(parts.map((part) => part!.suit)).size !== 1)
     return false;
-  const order = ranks.map((rank) => RANK_ORDER.indexOf(rank));
+  // A run is a set of consecutive ranks; the client may list the cards in
+  // any order, so sort before checking. Ace stays low-only (A,2,3 but not
+  // Q,K,A) as documented above.
+  const order = ranks.map((rank) => RANK_ORDER.indexOf(rank)).sort((a, b) => a - b);
   return order.every((rank, index) => index === 0 || rank === order[index - 1] + 1);
 }
 

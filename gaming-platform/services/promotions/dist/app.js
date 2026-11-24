@@ -269,8 +269,8 @@ export async function buildPromotionsService(deps) {
     });
     // ---------------------------------------------------------------------------
     // Internal admin catalogue management. Guarded by the service token: the
-    // gateway's admin routes are the only intended caller, and admin-risk owns
-    // the RBAC + hash-chained audit entry for each of these actions.
+    // gateway checks RBAC and appends the hash-chained audit entry for each of
+    // these actions using the verified admin JWT subject.
     // ---------------------------------------------------------------------------
     app.get("/internal/promotions", async (req, reply) => {
         if (!requireService(req, reply))

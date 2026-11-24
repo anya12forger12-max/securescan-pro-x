@@ -42,10 +42,17 @@ try {
   // instance created a round can leave duplicates with no index to stop them.
   // Cancel all but the newest so a retried index build cannot fail. The crash
   // service refunds bets on cancelled rounds in reconcileUnsettled().
+  const guardApplied = await client.query(
+    `SELECT 1 FROM schema_migrations WHERE filename = '0010_crash_state_guards.sql'`,
+  );
   const crashRoundsPresent = await client.query(
     `SELECT to_regclass('public.crash_rounds') IS NOT NULL AS present`,
   );
-  if (crashRoundsPresent.rows[0]?.present) {
+  // Once the guard index exists, the database itself prevents duplicate live
+  // rounds. Running this cleanup on every later migration invocation would
+  // cancel legitimate live rounds whenever an operator reruns `npm run
+  // migrate`, so it is only a repair step for the 0009/0010 upgrade itself.
+  if (!guardApplied.rowCount && crashRoundsPresent.rows[0]?.present) {
     await client.query("BEGIN");
     try {
       await client.query(

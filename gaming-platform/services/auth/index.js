@@ -308,9 +308,12 @@ app.post("/v1/auth/refresh", async (req, reply) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    // Include revoked rows so replaying a rotated token is detectable. The
+    // row lock is still taken on the matching token so two concurrent replays
+    // cannot both race past the family revocation below.
     const found = await client.query(
-      `SELECT id, user_id, family_id FROM auth_refresh_tokens
-       WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()
+      `SELECT id, user_id, family_id, revoked_at FROM auth_refresh_tokens
+       WHERE token_hash = $1 AND expires_at > now()
        FOR UPDATE`,
       [tokenHash],
     );
@@ -319,7 +322,19 @@ app.post("/v1/auth/refresh", async (req, reply) => {
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid or expired refresh token");
     }
 
-    const { id: oldId, user_id: userId, family_id: familyId } = found.rows[0];
+    const { id: oldId, user_id: userId, family_id: familyId, revoked_at: revokedAt } = found.rows[0];
+    if (revokedAt) {
+      // A revoked token was reused: assume theft and revoke every still-live
+      // token in the family, including the one an attacker may have obtained
+      // from a previous rotation.
+      await client.query(
+        `UPDATE auth_refresh_tokens SET revoked_at = now()
+          WHERE family_id = $1 AND revoked_at IS NULL`,
+        [familyId],
+      );
+      await client.query("COMMIT");
+      return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid or expired refresh token");
+    }
     await client.query(`UPDATE auth_refresh_tokens SET revoked_at = now() WHERE id = $1`, [oldId]);
     const refreshToken = await issueRefreshToken(client, userId, familyId);
     const userResult = await client.query(
@@ -355,30 +370,39 @@ app.post("/v1/auth/logout", async (req, reply) => {
   const parsedToken = parsed.success ? parsed.data.refresh_token : undefined;
   const token = requestRefreshToken(req) ?? parsedToken;
   if (token) {
+    const client = await pool.connect();
     try {
-      // Look up the family without filtering on revoked_at: a refresh that
-      // rotated this token a moment ago has already revoked it, but its new
-      // sibling must still be killed by this logout.
-      const found = await pool.query(
-        `SELECT family_id FROM auth_refresh_tokens WHERE token_hash = $1`,
+      // Lock the presented row and revoke in one transaction. Refresh rotates
+      // under the same row lock: without it, rotation can commit a new sibling
+      // after logout read the family but before its UPDATE snapshot starts,
+      // leaving a live token that restores the session after sign-out.
+      await client.query("BEGIN");
+      // Include revoked rows: an already-rotated token still points at the
+      // family whose new sibling this logout must kill.
+      const found = await client.query(
+        `SELECT family_id FROM auth_refresh_tokens WHERE token_hash = $1 FOR UPDATE`,
         [hashRefreshToken(token)],
       );
       if (found.rowCount && found.rows[0].family_id) {
-        await pool.query(
+        await client.query(
           `UPDATE auth_refresh_tokens SET revoked_at = now()
            WHERE family_id = $1 AND revoked_at IS NULL`,
           [found.rows[0].family_id],
         );
       } else {
-        await pool.query(
+        await client.query(
           `UPDATE auth_refresh_tokens SET revoked_at = now()
            WHERE token_hash = $1 AND revoked_at IS NULL`,
           [hashRefreshToken(token)],
         );
       }
+      await client.query("COMMIT");
     } catch (err) {
+      await client.query("ROLLBACK").catch(() => undefined);
       // Logout is idempotent: never leak whether the token existed.
       req.log.error({ err }, "logout revoke failed");
+    } finally {
+      client.release();
     }
   }
   // Always expire the browser credential, even if the body/cookie was absent

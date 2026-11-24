@@ -338,8 +338,13 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
         // into a phantom sign-out that a reload would immediately undo.
         if (err instanceof ApiError && (err.status === 400 || err.status === 401)) {
           identityEstablishedRef.current = false;
-          const cleared = invalidateIdentity(null);
-          resetState(null, null, cleared);
+          // At bootstrap there is no identity to clear. Bumping the generation
+          // here would discard a login queued behind this refresh: guard()
+          // captures the generation before serializeAuth drains the queue.
+          if (token) {
+            const cleared = invalidateIdentity(null);
+            resetState(null, null, cleared);
+          }
         }
         return null;
       })
@@ -478,6 +483,15 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
           stop();
           return;
         }
+        if (response.status === 401) {
+          // The stream bypasses call(), so nothing else would rotate an
+          // expired access token while it is the app's only live request.
+          // Rotate here; a successful rotation changes state.token and this
+          // effect reconnects with the new token. stillCurrent() then goes
+          // false and suppresses the fallback retry below.
+          void refreshSession().then(scheduleRetry, scheduleRetry);
+          return;
+        }
         if (!response.ok || !response.body) throw new Error(`stream failed (${response.status})`);
         updateIfCurrent(identity, generation, { streamReady: true });
         reader = response.body.getReader();
@@ -550,7 +564,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       stop();
       updateIfCurrent(identity, generation, { streamReady: false });
     };
-  }, [state.token, isCurrent, updateIfCurrent]);
+  }, [state.token, isCurrent, refreshSession, updateIfCurrent]);
 
   const loadDashboard = useCallback(async () => {
     const token = identityRef.current;
@@ -1096,9 +1110,14 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
   useEffect(() => {
     if (!state.token) return;
     void loadCrash();
-    const timer = setInterval(() => void loadCrash(), 1000);
+    // While the event stream is live, crash.* frames already schedule a
+    // refresh. Polling every second on top of that sent 120-180 req/min and
+    // exhausted the gateway's 120 req/min per-user read quota, silently
+    // freezing the board. Keep a slow poll only as an offline fallback.
+    if (state.streamReady) return;
+    const timer = setInterval(() => void loadCrash(), 3000);
     return () => clearInterval(timer);
-  }, [state.token, loadCrash]);
+  }, [state.token, state.streamReady, loadCrash]);
 
   const placeCrashBet = useCallback(
     async (amount: number, autoCashout?: number | null) => {

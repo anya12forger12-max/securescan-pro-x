@@ -90,6 +90,14 @@ export async function isSessionParticipant(pool, sessionId, userId) {
       LIMIT 1`, [sessionId, userId]);
     return (result.rowCount ?? 0) > 0;
 }
+/** A Gin Rummy game may only bind to a Gin Rummy session. Other services use
+ * the same `game_sessions` table for their own lobbies; attaching a Gin Rummy
+ * game to one of those lets a joiner mutate an unrelated active game's player
+ * list through `joinGameWithSessionSeat`. */
+export async function isSessionOfType(pool, sessionId, gameType) {
+    const result = await pool.query(`SELECT 1 FROM game_sessions WHERE id = $1 AND game_type = $2 AND status IN ('waiting', 'active') LIMIT 1`, [sessionId, gameType]);
+    return (result.rowCount ?? 0) > 0;
+}
 /** Claim the opponent seat and the matching session seat together. The game
  * UUID is the host's invitation, so a player may join the game directly, but
  * the resulting seat must still be visible to session-scoped verification.
@@ -99,6 +107,18 @@ export async function joinGameWithSessionSeat(pool, game, userId) {
     const client = await pool.connect();
     try {
         await client.query("BEGIN");
+        // Re-check the session under the same transaction as the seat insert. A
+        // Gin Rummy game must never add a player to a session that is already
+        // active (another game in progress) or belongs to a different game type.
+        const session = await client.query(`SELECT status, game_type FROM game_sessions WHERE id = $1 FOR UPDATE`, [game.session_id]);
+        const row = session.rows[0];
+        // A waiting game must belong to a waiting Gin Rummy lobby. Requiring the
+        // `waiting` status here closes the window where a game is created against
+        // an active session and a later join injects a seat into an unrelated game.
+        if (!row || row.game_type !== "gin-rummy" || row.status !== "waiting") {
+            await client.query("ROLLBACK");
+            return null;
+        }
         const updated = await joinGame(client, game.id, userId);
         if (!updated) {
             await client.query("ROLLBACK");
@@ -106,7 +126,7 @@ export async function joinGameWithSessionSeat(pool, game, userId) {
         }
         await client.query(`INSERT INTO game_players (session_id, user_id)
        SELECT $1, $2
-        WHERE EXISTS (SELECT 1 FROM game_sessions WHERE id = $1 AND status IN ('waiting', 'active'))
+        WHERE EXISTS (SELECT 1 FROM game_sessions WHERE id = $1 AND status = 'waiting')
        ON CONFLICT (session_id, user_id) DO NOTHING`, [game.session_id, userId]);
         await client.query(`UPDATE game_sessions SET status = 'active' WHERE id = $1 AND status = 'waiting'`, [game.session_id]);
         await client.query("COMMIT");

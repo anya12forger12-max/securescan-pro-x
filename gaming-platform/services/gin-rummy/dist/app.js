@@ -3,7 +3,7 @@ import { z } from "zod";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { getPool, closePool, createGame, getGame, getGameForUpdate, joinGameWithSessionSeat, isSessionParticipant, setGameStatus, updateGameState, } from "./db.js";
+import { getPool, closePool, createGame, getGame, getGameForUpdate, joinGameWithSessionSeat, isSessionParticipant, isSessionOfType, setGameStatus, updateGameState, } from "./db.js";
 /**
  * The request's route path.
  *
@@ -64,7 +64,10 @@ function isValidMeld(group) {
     // Otherwise every card must share a suit and climb one rank at a time.
     if (new Set(parts.map((part) => part.suit)).size !== 1)
         return false;
-    const order = ranks.map((rank) => RANK_ORDER.indexOf(rank));
+    // A run is a set of consecutive ranks; the client may list the cards in
+    // any order, so sort before checking. Ace stays low-only (A,2,3 but not
+    // Q,K,A) as documented above.
+    const order = ranks.map((rank) => RANK_ORDER.indexOf(rank)).sort((a, b) => a - b);
     return order.every((rank, index) => index === 0 || rank === order[index - 1] + 1);
 }
 const MeldSchema = z.object({
@@ -128,6 +131,12 @@ export async function buildGinRummyService(env) {
         // authenticated user could attach a game to somebody else's session.
         if (!(await isSessionParticipant(pool, parsed.data.session_id, decoded.userId))) {
             return reply.code(403).send({ error: "FORBIDDEN", message: "join the session before creating a game" });
+        }
+        // The shared `game_sessions` table also backs Pictionary, Codenames, etc.
+        // Binding a Gin Rummy game to one of those lets a later join inject a seat
+        // into the other game's active lobby and steal its leaderboard points.
+        if (!(await isSessionOfType(pool, parsed.data.session_id, "gin-rummy"))) {
+            return reply.code(400).send({ error: "VALIDATION_ERROR", message: "session is not a gin-rummy session" });
         }
         const game = await createGame(pool, {
             id: randomUUID(),

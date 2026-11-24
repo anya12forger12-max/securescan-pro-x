@@ -23,6 +23,7 @@ export interface ClueRow {
     spymaster_id: string;
     word: string;
     number: number;
+    team: Team | null;
     created_at: Date;
 }
 export interface GuessRow {
@@ -33,6 +34,7 @@ export interface GuessRow {
     word: string;
     team: Team;
     outcome: GuessOutcome;
+    clue_id: string | null;
     created_at: Date;
 }
 export interface RevealedRow {
@@ -72,8 +74,13 @@ export declare function submitClue(pool: PoolType, input: {
     spymaster_id: string;
     word: string;
     number: number;
+    team: Team;
 }): Promise<ClueRow>;
 export declare function getCluesForGame(pool: PoolType, gameId: string): Promise<ClueRow[]>;
+/** The active guessing turn is only valid when the most recent clue belongs to
+ * the team whose turn it is. Historical rows with a NULL team predate the
+ * team-scoped clue migration and are deliberately treated as no clue. */
+export declare function getActiveClue(pool: Queryable, gameId: string): Promise<ClueRow | null>;
 export declare function submitGuess(pool: PoolType, input: {
     id: string;
     game_id: string;
@@ -84,6 +91,7 @@ export declare function submitGuess(pool: PoolType, input: {
     outcome: GuessOutcome;
     winner: Team | null;
     next_team: Team;
+    clue_id: string | null;
 }): Promise<GuessRow | null>;
 export declare function listGuessesForGame(pool: PoolType, gameId: string): Promise<GuessRow[]>;
 export declare function listRevealedWords(pool: PoolType, gameId: string): Promise<RevealedRow[]>;

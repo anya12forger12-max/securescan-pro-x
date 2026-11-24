@@ -351,8 +351,19 @@ export async function submitGuess(pool: PoolType, input: {
       });
       await setGameStatus(client, input.game_id, "ended", "active");
       await setGameWinner(client, input.game_id, input.winner);
-    } else if (input.outcome === "wrong_team" || input.outcome === "neutral") {
-      await setCurrentTeam(client, input.game_id, input.next_team);
+    } else {
+      // A wrong-team or neutral word always ends the turn. In addition, a clue
+      // grants only a fixed number of guesses: spending the last one ends the
+      // turn too, even for an invalid word. Without that second rule the
+      // spymaster can hand out fresh clues forever and brute-force the board
+      // without ever losing the turn.
+      const after = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM codenames_guesses WHERE clue_id = $1`,
+        [active.id],
+      );
+      const turnOver = input.outcome === "wrong_team" || input.outcome === "neutral"
+        || Number(after.rows[0]!.count) >= Number(active.number);
+      if (turnOver) await setCurrentTeam(client, input.game_id, input.next_team);
     }
     await client.query("COMMIT");
     return guess;

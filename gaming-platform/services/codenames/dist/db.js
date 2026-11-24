@@ -173,16 +173,25 @@ export async function setGameStatus(pool, id, status, expectedStatus) {
     return (result.rowCount ?? 0) > 0;
 }
 export async function submitClue(pool, input) {
-    const result = await pool.query(`INSERT INTO codenames_clues (id, game_id, spymaster_id, word, number)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, game_id, spymaster_id, word, number, created_at`, [input.id, input.game_id, input.spymaster_id, input.word, input.number]);
+    const result = await pool.query(`INSERT INTO codenames_clues (id, game_id, spymaster_id, word, number, team)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, game_id, spymaster_id, word, number, team, created_at`, [input.id, input.game_id, input.spymaster_id, input.word, input.number, input.team]);
     return result.rows[0];
 }
 export async function getCluesForGame(pool, gameId) {
-    const result = await pool.query(`SELECT id, game_id, spymaster_id, word, number, created_at
+    const result = await pool.query(`SELECT id, game_id, spymaster_id, word, number, team, created_at
      FROM codenames_clues WHERE game_id = $1
      ORDER BY created_at DESC`, [gameId]);
     return result.rows;
+}
+/** The active guessing turn is only valid when the most recent clue belongs to
+ * the team whose turn it is. Historical rows with a NULL team predate the
+ * team-scoped clue migration and are deliberately treated as no clue. */
+export async function getActiveClue(pool, gameId) {
+    const result = await pool.query(`SELECT id, game_id, spymaster_id, word, number, team, created_at
+       FROM codenames_clues WHERE game_id = $1
+      ORDER BY created_at DESC, id DESC LIMIT 1`, [gameId]);
+    return result.rows[0] ?? null;
 }
 // A correct guess or the assassin also reveals a card and ends the game.
 // submitGuess owns the whole read-modify-write chain in one transaction so a
@@ -199,23 +208,29 @@ export async function submitGuess(pool, input) {
             await client.query("ROLLBACK");
             return null;
         }
-        // A clue grants a fixed number of guesses. The count and the insert share
-        // this transaction (and the row lock above), so two concurrent requests
-        // cannot both spend the last allowance. Wrong/neutral guesses already flip
-        // current_team; this closes the unlimited-guesses-per-clue loophole.
-        const clue = await client.query(`SELECT number, created_at FROM codenames_clues
-        WHERE game_id = $1 ORDER BY created_at DESC LIMIT 1`, [input.game_id]);
-        if (clue.rowCount) {
-            const used = await client.query(`SELECT COUNT(*)::int AS count FROM codenames_guesses
-          WHERE game_id = $1 AND team = $2 AND created_at >= $3`, [input.game_id, input.team, clue.rows[0].created_at]);
-            if (Number(used.rows[0].count) >= Number(clue.rows[0].number)) {
-                await client.query("ROLLBACK");
-                return null;
-            }
+        // A guess is only legal while the most recent clue belongs to the team
+        // whose turn it is, and the allowance is counted against that exact clue.
+        // Without both checks a player could guess with no spymaster clue at all,
+        // or spend an opponent's leftover allowance after a turn flip.
+        const clue = await client.query(`SELECT id, team, number FROM codenames_clues
+        WHERE game_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`, [input.game_id]);
+        const active = clue.rows[0];
+        if (!active || active.team !== input.team) {
+            await client.query("ROLLBACK");
+            return null;
         }
-        const result = await client.query(`INSERT INTO codenames_guesses (id, game_id, user_id, username, word, team, outcome)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, game_id, user_id, username, word, team, outcome, created_at`, [input.id, input.game_id, input.user_id, input.username, input.word, input.team, input.outcome]);
+        if (input.clue_id !== active.id) {
+            await client.query("ROLLBACK");
+            return null;
+        }
+        const used = await client.query(`SELECT COUNT(*)::int AS count FROM codenames_guesses WHERE clue_id = $1`, [active.id]);
+        if (Number(used.rows[0].count) >= Number(active.number)) {
+            await client.query("ROLLBACK");
+            return null;
+        }
+        const result = await client.query(`INSERT INTO codenames_guesses (id, game_id, user_id, username, word, team, outcome, clue_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, game_id, user_id, username, word, team, outcome, clue_id, created_at`, [input.id, input.game_id, input.user_id, input.username, input.word, input.team, input.outcome, active.id]);
         const guess = result.rows[0];
         if (input.outcome === "correct" || input.outcome === "assassin") {
             // The assassin belongs to neither team; record it as such rather
@@ -229,8 +244,17 @@ export async function submitGuess(pool, input) {
             await setGameStatus(client, input.game_id, "ended", "active");
             await setGameWinner(client, input.game_id, input.winner);
         }
-        else if (input.outcome === "wrong_team" || input.outcome === "neutral") {
-            await setCurrentTeam(client, input.game_id, input.next_team);
+        else {
+            // A wrong-team or neutral word always ends the turn. In addition, a clue
+            // grants only a fixed number of guesses: spending the last one ends the
+            // turn too, even for an invalid word. Without that second rule the
+            // spymaster can hand out fresh clues forever and brute-force the board
+            // without ever losing the turn.
+            const after = await client.query(`SELECT COUNT(*)::int AS count FROM codenames_guesses WHERE clue_id = $1`, [active.id]);
+            const turnOver = input.outcome === "wrong_team" || input.outcome === "neutral"
+                || Number(after.rows[0].count) >= Number(active.number);
+            if (turnOver)
+                await setCurrentTeam(client, input.game_id, input.next_team);
         }
         await client.query("COMMIT");
         return guess;
