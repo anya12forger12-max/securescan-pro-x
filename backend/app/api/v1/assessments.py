@@ -297,6 +297,8 @@ async def get_assessment(assessment_id: str) -> AssessmentResponse:
     """
     try:
         result = await _orchestrator.get_assessment(assessment_id)
+        if result.get("is_deleted"):
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
         return AssessmentResponse(**result)
     except AssessmentNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -323,9 +325,8 @@ async def update_assessment(
         Updated assessment.
     """
     try:
-        assessment = await _orchestrator.get_assessment(assessment_id)
         update_data = data.model_dump(exclude_unset=True)
-        assessment.update(update_data)
+        assessment = await _orchestrator.update_assessment(assessment_id, update_data)
         return AssessmentResponse(**assessment)
     except AssessmentNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -348,8 +349,7 @@ async def delete_assessment(assessment_id: str) -> None:
         404: If assessment does not exist.
     """
     try:
-        assessment = await _orchestrator.get_assessment(assessment_id)
-        assessment["is_deleted"] = True
+        await _orchestrator.soft_delete_assessment(assessment_id)
     except AssessmentNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 

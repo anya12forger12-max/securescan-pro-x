@@ -25,6 +25,7 @@ from app.models.assessment import (
     AssessmentStatus,
 )
 from app.services.assessment.lifecycle import (
+    can_retry,
     get_progress_percent,
     is_active,
     validate_transition,
@@ -317,6 +318,30 @@ class AssessmentOrchestrator(ABC):
 
         Returns:
             Assessment details.
+        """
+        ...
+
+    @abstractmethod
+    async def update_assessment(
+        self, assessment_id: str, updates: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Persist changes to an assessment.
+
+        Args:
+            assessment_id: Assessment ID.
+            updates: Fields to update.
+
+        Returns:
+            Updated assessment.
+        """
+        ...
+
+    @abstractmethod
+    async def soft_delete_assessment(self, assessment_id: str) -> None:
+        """Mark an assessment as deleted in the durable store.
+
+        Args:
+            assessment_id: Assessment ID.
         """
         ...
 
@@ -650,6 +675,17 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
 
         current = AssessmentStatus(assessment["status"])
 
+        # A cancelled/completed/archived assessment must never be silently
+        # restarted by this endpoint; the API documents a 409 for these.
+        if current not in {
+            AssessmentStatus.QUEUED,
+            AssessmentStatus.PAUSED,
+            AssessmentStatus.DRAFT,
+        }:
+            raise AssessmentInvalidTransitionError(
+                f"Cannot start assessment in state '{current.value}'"
+            )
+
         # Transition through the pipeline states
         if current == AssessmentStatus.QUEUED:
             self._transition(assessment_id, AssessmentStatus.PREPARING)
@@ -735,19 +771,27 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
         if assessment is None:
             raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
 
+        current = AssessmentStatus(assessment["status"])
+        if not can_retry(current):
+            raise AssessmentInvalidTransitionError(
+                f"Assessment '{assessment_id}' cannot be retried from state '{current.value}'"
+            )
         if assessment["retry_count"] >= assessment["max_retries"]:
             raise AssessmentInvalidTransitionError(
                 f"Assessment '{assessment_id}' has exceeded maximum retries "
                 f"({assessment['max_retries']})"
             )
 
-        assessment["retry_count"] += 1
-        assessment["error_message"] = None
+        # Validate the transition before spending a retry. A rejected retry
+        # must not burn the budget or clear the previous failure reason.
+        attempt = assessment["retry_count"] + 1
         self._transition(
             assessment_id,
             AssessmentStatus.QUEUED,
-            f"Retry attempt {assessment['retry_count']}",
+            f"Retry attempt {attempt}",
         )
+        assessment["retry_count"] = attempt
+        assessment["error_message"] = None
         return dict(assessment)
 
     async def complete_assessment(self, assessment_id: str) -> dict[str, Any]:
@@ -804,6 +848,38 @@ class InMemoryOrchestrator(AssessmentOrchestrator):
         if assessment is None:
             raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
         return dict(assessment)
+
+    async def update_assessment(
+        self, assessment_id: str, updates: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Persist changes to the stored assessment.
+
+        get_assessment() returns a copy, so callers must not mutate it in place.
+        """
+        assessment = self._assessments.get(assessment_id)
+        if assessment is None:
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
+
+        assessment.update(updates)
+        assessment["updated_at"] = datetime.now(timezone.utc)
+        assessment["version"] = int(assessment.get("version", 1)) + 1
+        self._record_timeline(
+            assessment_id, "assessment.updated", "Assessment updated", None
+        )
+        return dict(assessment)
+
+    async def soft_delete_assessment(self, assessment_id: str) -> None:
+        """Mark the stored assessment as deleted."""
+        assessment = self._assessments.get(assessment_id)
+        if assessment is None:
+            raise AssessmentNotFoundError(f"Assessment '{assessment_id}' not found")
+
+        assessment["is_deleted"] = True
+        assessment["updated_at"] = datetime.now(timezone.utc)
+        assessment["version"] = int(assessment.get("version", 1)) + 1
+        self._record_timeline(
+            assessment_id, "assessment.deleted", "Assessment deleted", None
+        )
 
     async def get_timeline(self, assessment_id: str) -> list[dict[str, Any]]:
         """Get the timeline of events for an assessment.

@@ -68,19 +68,44 @@ def normalize_finding(data: dict[str, Any]) -> NormalizedFinding:
     Raises:
         ValueError: If required fields are missing or invalid.
     """
+    # Validate fields that used to pass through unchecked. The HTTP layer and
+    # response models expect these exact types, so bad input must be rejected
+    # here (as a ValueError -> 422) instead of surfacing as a 500 later.
+    valid_statuses = {"open", "confirmed", "fixed", "false_positive"}
+    status = str(data.get("status", "open")).lower()
+    if status not in valid_statuses:
+        raise ValueError(f"Invalid status '{status}'. Must be one of: {sorted(valid_statuses)}")
+
+    cvss_score = data.get("cvss_score")
+    if cvss_score is not None:
+        try:
+            cvss_score = float(cvss_score)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("cvss_score must be a number") from exc
+        if not 0.0 <= cvss_score <= 10.0:
+            raise ValueError("cvss_score must be between 0.0 and 10.0")
+
+    def _string_list(key: str) -> list[str]:
+        value = data.get(key, [])
+        if value is None:
+            return []
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ValueError(f"{key} must be a list of strings")
+        return value
+
     return NormalizedFinding(
         title=str(data.get("title", "")).strip(),
         summary=str(data.get("summary", data.get("description", ""))).strip(),
         severity=str(data.get("severity", "info")).lower(),
         confidence=float(data.get("confidence", 0.5)),
         category=str(data.get("category", "general")),
-        status=str(data.get("status", "open")),
-        evidence_references=data.get("evidence_references", []),
+        status=status,
+        evidence_references=_string_list("evidence_references"),
         recommendation=data.get("recommendation"),
-        references=data.get("references", []),
-        related_assets=data.get("related_assets", []),
-        cvss_score=data.get("cvss_score"),
-        cwe_ids=data.get("cwe_ids", []),
+        references=_string_list("references"),
+        related_assets=_string_list("related_assets"),
+        cvss_score=cvss_score,
+        cwe_ids=_string_list("cwe_ids"),
         plugin_id=str(data.get("plugin_id", "")),
         plugin_version=str(data.get("plugin_version", "")),
         target_id=data.get("target_id"),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from fastapi import Cookie, Depends, HTTPException, status
+from fastapi import Cookie, Depends, HTTPException, Request, status
 
 from app.services.assessment.evidence import EvidenceService, InMemoryEvidenceService
 from app.services.assessment.knowledge import InMemoryKnowledgeService, KnowledgeService
@@ -155,6 +155,7 @@ async def get_current_user(
 
 
 async def require_auth(
+    request: Request,
     user: User | None = Depends(get_current_user),
 ) -> User:
     if not user:
@@ -162,6 +163,9 @@ async def require_auth(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
         )
+    # Make the authenticated principal available to middleware so audit
+    # records can attribute a request to an account, not just an IP.
+    request.state.user = user
     return user
 
 

@@ -43,6 +43,18 @@ def _post(client: TestClient, url: str, json=None, **kw):
     return client.post(url, json=json, headers=headers, **kw)
 
 
+def _patch(client: TestClient, url: str, json=None, **kw):
+    headers = dict(kw.pop("headers", None) or {})
+    headers.setdefault("X-Forwarded-For", _next_ip())
+    return client.patch(url, json=json, headers=headers, **kw)
+
+
+def _delete(client: TestClient, url: str, **kw):
+    headers = dict(kw.pop("headers", None) or {})
+    headers.setdefault("X-Forwarded-For", _next_ip())
+    return client.delete(url, headers=headers, **kw)
+
+
 def _login(client: TestClient) -> str:
     """Register and log in a throwaway account; returns the username."""
     uid = uuid.uuid4().hex[:12]
@@ -668,6 +680,91 @@ class TestMiddleware:
             headers={"Origin": "http://localhost:5173"},
         )
         assert r.status_code == 201
+
+
+class TestBackendBugRegressions:
+    """Fixes for silent no-ops and validation 500s found in the HTTP surface."""
+
+    def test_patch_assessment_persists(self, client: TestClient) -> None:
+        _login(client)
+        ws_id = _make_workspace(client)
+        asm_id = _make_assessment(client, ws_id)
+
+        r = _patch(client, f"/api/v1/assessments/{asm_id}", {"name": "renamed"})
+        assert r.status_code == 200, r.text
+        assert r.json()["name"] == "renamed"
+        assert _get(client, f"/api/v1/assessments/{asm_id}").json()["name"] == "renamed"
+
+    def test_delete_assessment_hides_it(self, client: TestClient) -> None:
+        _login(client)
+        ws_id = _make_workspace(client)
+        asm_id = _make_assessment(client, ws_id)
+
+        assert _delete(client, f"/api/v1/assessments/{asm_id}").status_code == 204
+        assert _get(client, f"/api/v1/assessments/{asm_id}").status_code == 404
+        listed = _get(client, f"/api/v1/assessments?workspace_id={ws_id}").json()
+        assert asm_id not in [item["id"] for item in listed]
+
+    @pytest.mark.parametrize("url", ["/api/v1/workspaces", "/api/v1/assets", "/api/v1/assessments"])
+    def test_explicit_null_name_is_422(self, client: TestClient, url: str) -> None:
+        _login(client)
+        if url.endswith("assets"):
+            ws_id = _make_workspace(client)
+            payload = {
+                "name": "asset",
+                "asset_type": "host",
+                "identifier": "example.com",
+            }
+            url = f"/api/v1/assets?workspace_id={ws_id}"
+        elif url.endswith("assessments"):
+            ws_id = _make_workspace(client)
+            payload = {"name": "asm"}
+            url = f"/api/v1/assessments?workspace_id={ws_id}"
+        else:
+            payload = {"name": "ws"}
+        created = _post(client, url, payload)
+        assert created.status_code == 201, created.text
+        resource_id = created.json()["id"]
+
+        r = _patch(client, f"{url.split('?')[0]}/{resource_id}", {"name": None})
+        assert r.status_code == 422, r.text
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"title": "x", "cvss_score": "abc"},
+            {"title": "x", "cvss_score": 11.0},
+            {"title": "x", "cwe_ids": "oops"},
+            {"title": "x", "status": "banana"},
+        ],
+    )
+    def test_invalid_finding_fields_are_422(self, client: TestClient, bad: dict) -> None:
+        _login(client)
+        ws_id = _make_workspace(client)
+        asm_id = _make_assessment(client, ws_id)
+
+        r = _post(client, f"/api/v1/assessments/{asm_id}/findings", bad)
+        assert r.status_code == 422, (bad, r.text)
+
+    def test_start_after_cancel_is_409_without_mutation(self, client: TestClient) -> None:
+        _login(client)
+        ws_id = _make_workspace(client)
+        asm_id = _make_assessment(client, ws_id)
+
+        assert _post(client, f"/api/v1/assessments/{asm_id}/cancel").status_code == 200
+        r = _post(client, f"/api/v1/assessments/{asm_id}/start")
+        assert r.status_code == 409, r.text
+        assert _get(client, f"/api/v1/assessments/{asm_id}").json()["status"] == "cancelled"
+
+    def test_failed_retry_is_refused_without_burning_budget(self, client: TestClient) -> None:
+        _login(client)
+        ws_id = _make_workspace(client)
+        asm_id = _make_assessment(client, ws_id)
+
+        # A draft cannot be retried; repeated attempts must not consume retries.
+        for _ in range(4):
+            assert _post(client, f"/api/v1/assessments/{asm_id}/retry").status_code == 409
+        assert _get(client, f"/api/v1/assessments/{asm_id}").json()["status"] == "draft"
 
 
 class TestLifespan:

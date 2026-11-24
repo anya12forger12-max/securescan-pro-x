@@ -5,9 +5,27 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ── Base Schemas ───────────────────────────────────────────────────
+
+
+class NonNullableUpdate(BaseModel):
+    """Reject explicit JSON null for fields whose stored value cannot be null.
+
+    Optional[str] = None is needed to distinguish "not supplied" from
+    "supplied", but an explicit null would be written into the store and then
+    fail response validation with a 500. Clients must get a 422 instead.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_null_fields(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            for field in ("name", "identifier", "priority", "asset_type"):
+                if field in values and values[field] is None:
+                    raise ValueError(f"'{field}' cannot be null")
+        return values
 
 
 class BaseSchema(BaseModel):
@@ -34,7 +52,7 @@ class WorkspaceCreate(BaseModel):
     description: Optional[str] = Field(None, max_length=4096)
 
 
-class WorkspaceUpdate(BaseModel):
+class WorkspaceUpdate(NonNullableUpdate):
     """Schema for updating a workspace."""
 
     name: Optional[str] = Field(None, min_length=1, max_length=255)
@@ -62,7 +80,7 @@ class AssetCreate(BaseModel):
     metadata: Optional[dict[str, Any]] = None
 
 
-class AssetUpdate(BaseModel):
+class AssetUpdate(NonNullableUpdate):
     """Schema for updating an asset."""
 
     name: Optional[str] = Field(None, min_length=1, max_length=255)
@@ -95,7 +113,7 @@ class AssessmentCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-class AssessmentUpdate(BaseModel):
+class AssessmentUpdate(NonNullableUpdate):
     """Schema for updating an assessment."""
 
     name: Optional[str] = Field(None, min_length=1, max_length=255)

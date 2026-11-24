@@ -12,6 +12,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from app.schemas import NonNullableUpdate
+
 # ── Assessment Schemas ─────────────────────────────────────────────
 
 
@@ -27,7 +29,7 @@ class AssessmentCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
-class AssessmentUpdate(BaseModel):
+class AssessmentUpdate(NonNullableUpdate):
     """Schema for updating an assessment."""
 
     name: Optional[str] = Field(None, min_length=1, max_length=255)
