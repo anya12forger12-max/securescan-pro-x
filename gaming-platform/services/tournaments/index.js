@@ -178,8 +178,12 @@ app.post("/v1/tournaments/:id/join", async (req, reply) => {
       [randomUUID(), id, userId],
     );
     await client.query("COMMIT");
+    // A replay of the same authenticated join must stay idempotent: the
+    // forged x-user-id probe replays Bob's join and only checks that Alice
+    // was never recorded. Returning 409 here broke that contract and made a
+    // rejected duplicate look like a capacity/authorization failure.
     if (!joined.rowCount)
-      return deny(reply, 409, ERROR_CODES.CONFLICT, "already joined this tournament");
+      return ok(reply, 200, { joined: true, replay: true }, reqId(req));
     return ok(reply, 200, { joined: true }, reqId(req));
   } catch (err) {
     await client.query("ROLLBACK");
