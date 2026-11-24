@@ -5,7 +5,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { getPool, closePool, createGame, getGame, getGameForUpdate, joinGameWithSessionSeat, isSessionParticipant, isSessionOfType, setGameStatus, updateGameState, } from "./db.js";
+import { getPool, closePool, createGame, getGame, getGameForUpdate, joinGameWithSessionSeat, isSessionParticipant, isSessionOfType, recordOutcome, setGameStatus, updateGameState, } from "./db.js";
 import type { GameRow } from "./db.js";
 import type { GinRummyEnv } from "./env.js";
 
@@ -395,6 +395,7 @@ export async function buildGinRummyService(env: GinRummyEnv) {
         return await rejectMove(client, reply, 409, "GAME_NOT_ACTIVE", "game is not active");
       // Only a hand-validated /meld win may count toward the leaderboard.
       await client.query(`UPDATE gin_rummy_games SET win_type = 'validated' WHERE id = $1`, [id]);
+      await recordOutcome(client, id, "validated", "meld");
       const updated = await getGame(client, id);
       await client.query("COMMIT");
       return reply.send({ game: publicGame(updated, decoded.userId) });
@@ -444,6 +445,7 @@ export async function buildGinRummyService(env: GinRummyEnv) {
       // Ending is a concession: the opponent wins the game but earns no
       // validated leaderboard score.
       await client.query(`UPDATE gin_rummy_games SET win_type = 'concession' WHERE id = $1`, [id]);
+      await recordOutcome(client, id, "concession", "end");
       await client.query("COMMIT");
       return reply.send({ ok: true });
     } catch (err) {

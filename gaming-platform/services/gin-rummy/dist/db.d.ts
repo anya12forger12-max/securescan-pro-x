@@ -55,6 +55,11 @@ export declare function joinGameWithSessionSeat(pool: PoolType, game: GameRow, u
  * UPDATE is the final guard against a racing /end overtaking a validated /meld
  * win; callers must roll back and report a conflict when it returns false. */
 export declare function setGameStatus(pool: Queryable, id: string, status: string, winnerId: string | null, expectedStatus?: string): Promise<boolean>;
+/** Append the authoritative outcome inside the same transaction that ends the
+ * game. `gin_rummy_games.win_type` can be rewritten by backfill migrations;
+ * this row is durable evidence of whether the result was a validated meld or
+ * an explicit concession. `source` records how that evidence was obtained. */
+export declare function recordOutcome(pool: Queryable, id: string, winType: "validated" | "concession", source: "meld" | "end"): Promise<void>;
 export declare function updateGameState(pool: Queryable, id: string, patch: GameStatePatch): Promise<GameRow>;
 export declare function setHasDrawn(pool: Queryable, id: string, value: boolean): Promise<GameRow>;
 export {};

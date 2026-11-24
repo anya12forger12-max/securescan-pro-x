@@ -7,7 +7,7 @@ back to that layout. This project supplies the missing bootstrap layer and the
 peer services those services assume are running, so the platform can be
 installed, migrated and started as one system.
 
-All fifteen application services boot, the sixteen migrations apply cleanly, and the main
+All fifteen application services boot, the seventeen migrations apply cleanly, and the main
 auth / RBAC / wallet / chat / realtime / promotions / Codenames / Gin-rummy /
 crash / audit flows pass end to end through the gateway (a separate 20-flow
 integration run; `npm run smoke` covers the deploy-critical subset). The four
@@ -203,8 +203,9 @@ identity and capability headers.
 | `0014_codenames_clue_team.sql` | binds each clue's guess allowance to the team that received it |
 | `0015_query_indexes.sql` | hot-path indexes for clue counts, event retention and leaderboards |
 | `0016_pictionary_guess_limit.sql` | index for per-player incorrect-guess allowance checks |
+| `0017_gin_rummy_outcomes.sql` | append-only record of validated wins and explicit concessions |
 
-All sixteen are applied by the one-shot `migrate` service before any application
+All seventeen are applied by the one-shot `migrate` service before any application
 starts, on first boot and on every upgrade. Applied files are checksummed, so
 editing an already-applied migration fails the deploy instead of drifting.
 
@@ -503,6 +504,15 @@ curl -X POST -H "Authorization: Bearer $TOKEN2" -H 'content-type: application/js
 curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"melds":[["5H","5D","5C"]]}' http://localhost:3000/v1/gin-rummy/games/<game-id>/meld
 ```
+
+A hand-validated `/meld` writes `win_type = 'validated'`; `/end` writes an
+explicit `concession`. Both also append the outcome to `gin_rummy_outcomes`
+in the same transaction. Migration 0010 could not tell old ordinary wins from
+old concessions, so 0011 deliberately labelled all such historical rows
+`completed` (no leaderboard points); that lost distinction cannot be
+reconstructed later. Migration 0017 backfills the current state of existing
+games and preserves every future outcome separately, so a later backfill can
+no longer silently rewrite an explicit concession.
 
 ### Crash (unified Aviator game)
 

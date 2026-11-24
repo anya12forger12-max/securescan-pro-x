@@ -244,6 +244,27 @@ export async function setGameStatus(
   return (result.rowCount ?? 0) > 0;
 }
 
+/** Append the authoritative outcome inside the same transaction that ends the
+ * game. `gin_rummy_games.win_type` can be rewritten by backfill migrations;
+ * this row is durable evidence of whether the result was a validated meld or
+ * an explicit concession. `source` records how that evidence was obtained. */
+export async function recordOutcome(
+  pool: Queryable,
+  id: string,
+  winType: "validated" | "concession",
+  source: "meld" | "end",
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO gin_rummy_outcomes (game_id, win_type, source)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (game_id) DO UPDATE
+       SET win_type = EXCLUDED.win_type,
+           source = EXCLUDED.source,
+           recorded_at = now()`,
+    [id, winType, source],
+  );
+}
+
 export async function updateGameState(pool: Queryable, id: string, patch: GameStatePatch): Promise<GameRow> {
   const entries = Object.entries(patch) as Array<[string, string[] | string | boolean | null | undefined]>;
   if (entries.length === 0)
