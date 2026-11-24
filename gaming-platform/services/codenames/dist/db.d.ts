@@ -63,7 +63,7 @@ export declare function isTeamSpymaster(pool: Queryable, sessionId: string, user
 /** Conditional status write. The route validates the transition, but only the
  * WHERE clause makes it atomic: a delayed request cannot reopen a game that
  * another request already moved on. */
-export declare function isSessionParticipant(pool: Queryable, sessionId: string, userId: string): Promise<boolean>;
+export declare function isSessionParticipant(pool: Queryable, sessionId: string, userId: string, gameType?: string): Promise<boolean>;
 /** A game must only ever be attached to a session of this game type. */
 export declare function isSessionOfType(pool: Queryable, sessionId: string, gameType: string): Promise<boolean>;
 /** Starting a game is the moment play begins: close the session's join window
@@ -79,7 +79,7 @@ export declare function submitClue(pool: PoolType, input: {
     word: string;
     number: number;
     team: Team;
-}): Promise<ClueRow>;
+}): Promise<ClueRow | null>;
 export declare function getCluesForGame(pool: PoolType, gameId: string): Promise<ClueRow[]>;
 /** The active guessing turn is only valid when the most recent clue belongs to
  * the team whose turn it is. Historical rows with a NULL team predate the

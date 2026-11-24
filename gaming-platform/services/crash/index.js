@@ -680,7 +680,22 @@ async function refundBet(bet, { ensureDebit = true, claimed = false } = {}) {
       // A pending bet may have been abandoned before the wallet call. Replay
       // the debit with this bet's deterministic key first so a refund can
       // never mint new credits or create a second net-zero tx pair on retry.
-      await walletDebit(claim);
+      try {
+        await walletDebit(claim);
+      } catch (debitErr) {
+        // Definitive insufficient-balance means no debit was recorded for this
+        // claim. Minting a refund credit would create money from nothing, so
+        // the bet is closed as a no-debit cancellation instead.
+        if (definitiveWalletRejection(debitErr) && debitErr.status === 409) {
+          await pool.query(
+            `UPDATE crash_bets SET status = 'cancelled', settled_at = now()
+              WHERE id = $1 AND status = 'refunding'`,
+            [claim.id],
+          );
+          return { cancelled: true, reason: "debit-not-recorded" };
+        }
+        throw debitErr;
+      }
     }
     await walletRefund(claim);
     await pool.query(
@@ -731,7 +746,7 @@ async function reconcileUnsettled() {
         // Definitive "insufficient balance": no debit was recorded.
         await pool.query(
           `UPDATE crash_bets SET status = 'cancelled', settled_at = now()
-            WHERE id = $1 AND status = 'pending'`, [bet.id]);
+            WHERE id = $1 AND status IN ('pending','refunding')`, [bet.id]);
       } else {
         app.log.warn({ err, betId: bet.id }, "pending crash bet kept for reconciliation");
       }

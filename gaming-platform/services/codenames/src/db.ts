@@ -212,13 +212,19 @@ export async function isTeamSpymaster(pool: Queryable, sessionId: string, userId
 /** Conditional status write. The route validates the transition, but only the
  * WHERE clause makes it atomic: a delayed request cannot reopen a game that
  * another request already moved on. */
-export async function isSessionParticipant(pool: Queryable, sessionId: string, userId: string): Promise<boolean> {
+export async function isSessionParticipant(
+  pool: Queryable,
+  sessionId: string,
+  userId: string,
+  gameType = "codenames",
+): Promise<boolean> {
   const result = await pool.query(
     `SELECT 1 FROM game_sessions s
        JOIN game_players p ON p.session_id = s.id
-      WHERE s.id = $1 AND s.status IN ('waiting', 'active') AND p.user_id = $2
+      WHERE s.id = $1 AND s.game_type = $2
+        AND s.status IN ('waiting', 'active') AND p.user_id = $3
       LIMIT 1`,
-    [sessionId, userId],
+    [sessionId, gameType, userId],
   );
   return (result.rowCount ?? 0) > 0;
 }
@@ -276,11 +282,51 @@ export async function setGameStatus(
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function submitClue(pool: PoolType, input: { id: string; game_id: string; spymaster_id: string; word: string; number: number; team: Team }): Promise<ClueRow> {
-  const result = await pool.query<ClueRow>(`INSERT INTO codenames_clues (id, game_id, spymaster_id, word, number, team)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, game_id, spymaster_id, word, number, team, created_at`, [input.id, input.game_id, input.spymaster_id, input.word, input.number, input.team]);
-  return result.rows[0]!;
+export async function submitClue(
+  pool: PoolType,
+  input: { id: string; game_id: string; spymaster_id: string; word: string; number: number; team: Team },
+): Promise<ClueRow | null> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const locked = await client.query<{ status: string; current_team: Team | null }>(
+      `SELECT status, current_team FROM codenames_games WHERE id = $1 FOR UPDATE`,
+      [input.game_id],
+    );
+    if (!locked.rowCount || locked.rows[0]!.status !== "active" || locked.rows[0]!.current_team !== input.team) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const active = await client.query<{ id: string; team: Team | null; number: number }>(
+      `SELECT id, team, number FROM codenames_clues
+        WHERE game_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [input.game_id],
+    );
+    const activeClue = active.rows[0];
+    if (activeClue && activeClue.team === input.team) {
+      const used = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM codenames_guesses WHERE clue_id = $1`,
+        [activeClue.id],
+      );
+      if (Number(used.rows[0]!.count) < Number(activeClue.number)) {
+        await client.query("ROLLBACK");
+        return null;
+      }
+    }
+    const result = await client.query<ClueRow>(
+      `INSERT INTO codenames_clues (id, game_id, spymaster_id, word, number, team)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, game_id, spymaster_id, word, number, team, created_at`,
+      [input.id, input.game_id, input.spymaster_id, input.word, input.number, input.team],
+    );
+    await client.query("COMMIT");
+    return result.rows[0]!;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getCluesForGame(pool: PoolType, gameId: string): Promise<ClueRow[]> {
@@ -324,8 +370,12 @@ export async function submitGuess(pool: PoolType, input: {
     // Lock the game row before recording the guess. The status check in the
     // route is outside this transaction; without the lock, two winning guesses
     // could both commit and the last winner update would silently overwrite.
-    const locked = await client.query<{ status: string; winner: string | null }>(
-      `SELECT status, winner FROM codenames_games WHERE id = $1 FOR UPDATE`,
+    const locked = await client.query<{
+      status: string; winner: string | null;
+      red_team_words: string[]; blue_team_words: string[];
+    }>(
+      `SELECT status, winner, red_team_words, blue_team_words
+         FROM codenames_games WHERE id = $1 FOR UPDATE`,
       [input.game_id],
     );
     if (!locked.rowCount || locked.rows[0]!.status !== "active" || locked.rows[0]!.winner) {
@@ -371,8 +421,25 @@ export async function submitGuess(pool: PoolType, input: {
         team: input.outcome === "assassin" ? "assassin" : input.team,
         revealed_by: input.user_id,
       });
-      await setGameStatus(client, input.game_id, "ended", "active");
-      await setGameWinner(client, input.game_id, input.winner);
+      if (input.outcome === "assassin") {
+        await setGameStatus(client, input.game_id, "ended", "active");
+        await setGameWinner(client, input.game_id, input.winner);
+      } else {
+        const ownWords = input.team === "red" ? locked.rows[0]!.red_team_words : locked.rows[0]!.blue_team_words;
+        const remainingOwn = await client.query<{ count: number }>(
+          `SELECT COUNT(*)::int AS count
+             FROM unnest($2::text[]) AS word
+            WHERE NOT EXISTS (
+              SELECT 1 FROM codenames_revealed r
+               WHERE r.game_id = $1 AND r.word = word
+            )`,
+          [input.game_id, ownWords ?? []],
+        );
+        if (Number(remainingOwn.rows[0]!.count) === 0) {
+          await setGameStatus(client, input.game_id, "ended", "active");
+          await setGameWinner(client, input.game_id, input.team);
+        }
+      }
     } else {
       // A wrong-team or neutral word always ends the turn. In addition, a clue
       // grants only a fixed number of guesses: spending the last one ends the

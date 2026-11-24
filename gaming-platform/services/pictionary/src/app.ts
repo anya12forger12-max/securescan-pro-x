@@ -79,11 +79,11 @@ export async function buildPictionaryService(env: PictionaryEnv) {
     const token = authHeader.replace("Bearer ", "");
     const decoded = await app.jwt.verify<JwtClaims>(token);
     const pool = getPool(env.DATABASE_URL);
-    if (!(await isSessionParticipant(pool, parsed.data.session_id, decoded.userId))) {
-      return reply.code(403).send({ error: "FORBIDDEN", message: "join the session before creating a round" });
-    }
     if (!(await isSessionOfType(pool, parsed.data.session_id, "pictionary"))) {
       return reply.code(409).send({ error: "CONFLICT", message: "session is not a pictionary session" });
+    }
+    if (!(await isSessionParticipant(pool, parsed.data.session_id, decoded.userId))) {
+      return reply.code(403).send({ error: "FORBIDDEN", message: "join the session before creating a round" });
     }
     const word = await getRandomWord(pool);
     if (!word?.word) {
@@ -110,6 +110,9 @@ export async function buildPictionaryService(env: PictionaryEnv) {
     const round = await getRound(pool, id);
     if (!round) {
       return reply.code(404).send({ error: "ROUND_NOT_FOUND", message: "round not found" });
+    }
+    if (!(await isSessionOfType(pool, round.session_id, "pictionary"))) {
+      return reply.code(409).send({ error: "CONFLICT", message: "round is not a pictionary round" });
     }
     if (!(await isSessionParticipant(pool, round.session_id, decoded.userId))) {
       return reply.code(403).send({ error: "FORBIDDEN", message: "only session players may view this round" });
@@ -145,6 +148,9 @@ export async function buildPictionaryService(env: PictionaryEnv) {
     const round = await getRound(pool, roundId);
     if (!round) {
       return reply.code(404).send({ error: "ROUND_NOT_FOUND", message: "round not found" });
+    }
+    if (!(await isSessionOfType(pool, round.session_id, "pictionary"))) {
+      return reply.code(409).send({ error: "CONFLICT", message: "round is not a pictionary round" });
     }
     if (round.status !== "drawing") {
       return reply.code(409).send({ error: "ROUND_NOT_DRAWING", message: "round is not in drawing state" });

@@ -97,13 +97,19 @@ export async function endRound(pool: PoolType, id: string, winnerId: string): Pr
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function isSessionParticipant(pool: PoolType, sessionId: string, userId: string): Promise<boolean> {
+export async function isSessionParticipant(
+  pool: PoolType,
+  sessionId: string,
+  userId: string,
+  gameType = "pictionary",
+): Promise<boolean> {
   const result = await pool.query(
     `SELECT 1 FROM game_sessions s
        JOIN game_players p ON p.session_id = s.id
-      WHERE s.id = $1 AND s.status IN ('waiting', 'active') AND p.user_id = $2
+      WHERE s.id = $1 AND s.game_type = $2
+        AND s.status IN ('waiting', 'active') AND p.user_id = $3
       LIMIT 1`,
-    [sessionId, userId],
+    [sessionId, gameType, userId],
   );
   return (result.rowCount ?? 0) > 0;
 }

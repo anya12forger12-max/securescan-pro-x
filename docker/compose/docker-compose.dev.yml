@@ -18,15 +18,14 @@ services:
     command: uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
-    build:
-      context: ../../frontend
-      dockerfile: ../docker/dev/Dockerfile.frontend
+    image: node:22-alpine
+    working_dir: /app
     ports:
-      - "1420:1420"
+      - "127.0.0.1:1420:1420"
     volumes:
       - ../../frontend:/app
       - /app/node_modules
-    command: pnpm dev --host
+    command: sh -c "corepack enable && pnpm install --frozen-lockfile && pnpm dev --host 127.0.0.1 --port 1420"
 
 volumes:
   securescan-data:

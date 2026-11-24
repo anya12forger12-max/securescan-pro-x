@@ -43,7 +43,7 @@ export declare function closePool(): Promise<void>;
 export declare function createRound(pool: PoolType, input: CreateRoundInput): Promise<PictionaryRound>;
 export declare function getRound(pool: PoolType, id: string): Promise<PictionaryRound | undefined>;
 export declare function endRound(pool: PoolType, id: string, winnerId: string): Promise<boolean>;
-export declare function isSessionParticipant(pool: PoolType, sessionId: string, userId: string): Promise<boolean>;
+export declare function isSessionParticipant(pool: PoolType, sessionId: string, userId: string, gameType?: string): Promise<boolean>;
 /** A round must only ever be created for a session of this game type. */
 export declare function isSessionOfType(pool: PoolType, sessionId: string, gameType: string): Promise<boolean>;
 /** A player may miss this many words before the round stops answering guesses.

@@ -176,8 +176,7 @@ export async function buildCodenamesService(env) {
         else {
             outcome = "invalid_word";
         }
-        const endsGame = outcome === "correct" || outcome === "assassin";
-        const winner = endsGame ? (outcome === "assassin" ? opposingTeam : team) : null;
+        const assassinWinner = outcome === "assassin" ? opposingTeam : null;
         const guess = await submitGuess(pool, {
             id: randomUUID(),
             game_id: gameId,
@@ -186,7 +185,7 @@ export async function buildCodenamesService(env) {
             word,
             team,
             outcome,
-            winner,
+            winner: assassinWinner,
             next_team: opposingTeam,
             clue_id: activeClue.id,
         });
@@ -196,6 +195,8 @@ export async function buildCodenamesService(env) {
                 message: "game is closed or this clue's guess allowance is exhausted",
             });
         }
+        const ended = await getGame(pool, gameId);
+        const winner = ended?.status === "ended" ? (ended.winner ?? null) : null;
         return reply.send({ guess, outcome, ...(winner ? { winner } : {}) });
     });
     // ---------- submit clue ----------
@@ -255,6 +256,12 @@ export async function buildCodenamesService(env) {
             number: parsed.data.number,
             team,
         });
+        if (!clue) {
+            return reply.code(409).send({
+                error: "CLUE_NOT_ALLOWED",
+                message: "wait for the current clue's guesses to be used before giving another clue",
+            });
+        }
         return reply.send({ clue });
     });
     // ---------- set game status ----------
