@@ -44,6 +44,10 @@ export declare function createRound(pool: PoolType, input: CreateRoundInput): Pr
 export declare function getRound(pool: PoolType, id: string): Promise<PictionaryRound | undefined>;
 export declare function endRound(pool: PoolType, id: string, winnerId: string): Promise<boolean>;
 export declare function isSessionParticipant(pool: PoolType, sessionId: string, userId: string): Promise<boolean>;
+/** A player may miss this many words before the round stops answering guesses.
+ * Without a cap, the correct/incorrect response turns every guess into an
+ * oracle: a participant can walk through a word list until the round ends. */
+export declare const MAX_WRONG_GUESSES = 5;
 export declare function submitGuess(pool: PoolType, input: SubmitGuessInput): Promise<PictionaryGuess | null>;
 export declare function getGuessesForRound(pool: PoolType, roundId: string): Promise<PictionaryGuess[]>;
 export declare function getRandomWord(pool: PoolType): Promise<PictionaryWord | undefined>;

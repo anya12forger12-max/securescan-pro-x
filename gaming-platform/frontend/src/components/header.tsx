@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useGamingContext } from "../context";
 
 export default function Header() {
-  const { user, balance, token, signOut, loadAudit, audit } = useGamingContext();
+  const { user, balance, token, signOut, loadAudit, audit, permissions } = useGamingContext();
   const navigate = useNavigate();
   const location = useLocation();
   const openAuth = () =>
@@ -28,9 +28,11 @@ export default function Header() {
           <>
             <span className="username">{user.username}</span>
             {audit && <span className="badge ok">audit verified</span>}
-            <button className="ghost-button" type="button" onClick={() => void loadAudit()}>
-              Verify audit
-            </button>
+            {permissions.includes("audit.read") && (
+              <button className="ghost-button" type="button" onClick={() => void loadAudit()}>
+                Verify audit
+              </button>
+            )}
             <button className="ghost-button" type="button" onClick={() => void signOut()}>
               Sign out
             </button>

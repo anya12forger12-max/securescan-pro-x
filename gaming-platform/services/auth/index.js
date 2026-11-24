@@ -68,6 +68,12 @@ const isSecureOrigin = (value) => /^https:\/\//i.test(value);
 const refreshCookieSecure = (req) => {
   const origin = headerString(req.headers, "origin");
   if (origin && CORS_ORIGINS.includes(origin)) return isSecureOrigin(origin);
+  // A TLS-terminating proxy may hide the browser's HTTPS origin. Treat an
+  // explicit forwarded https as decisive; an http value is ignored so this
+  // fallback can only strengthen the cookie, never downgrade a secure login.
+  const forwarded = headerString(req.headers, "x-forwarded-proto")
+    ?.split(",")[0].trim().toLowerCase();
+  if (forwarded === "https") return true;
   return CORS_ORIGINS.length > 0 && CORS_ORIGINS.every(isSecureOrigin);
 };
 
@@ -95,8 +101,15 @@ const deny = (reply, status, code, message) =>
     request_id: String(reply.getHeader("x-request-id") ?? ""),
     error: { code, message },
   });
-const validationError = (reply, parsed) =>
-  deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+const validationError = (reply, parsed) => {
+  const flat = parsed.error.flatten();
+  const details = [
+    ...flat.formErrors,
+    ...Object.entries(flat.fieldErrors).flatMap(([field, errors]) =>
+      errors.map((message) => `${field}: ${message}`)),
+  ];
+  return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, details.join("; ") || "invalid request");
+};
 
 // ---------------------------------------------------------------------------
 // Credentials: scrypt with a fresh 16-byte salt, encoded as

@@ -11,6 +11,7 @@ import {
   getRound,
   endRound,
   submitGuess,
+  MAX_WRONG_GUESSES,
   getGuessesForRound,
   getRandomWord,
   isSessionParticipant,
@@ -162,6 +163,16 @@ export async function buildPictionaryService(env: PictionaryEnv) {
       correct,
     });
     if (!guess) {
+      // submitGuess also refuses a player who has spent the wrong-guess
+      // allowance. Distinguish it from a closed round before answering so the
+      // client gets an actionable error instead of a misleading 409.
+      const current = await getRound(pool, roundId);
+      if (current?.status === "drawing") {
+        return reply.code(429).send({
+          error: "GUESS_LIMIT_REACHED",
+          message: `no more than ${MAX_WRONG_GUESSES} incorrect guesses per player in one round`,
+        });
+      }
       return reply.code(409).send({ error: "ROUND_NOT_DRAWING", message: "round closed before the guess was recorded" });
     }
     // Keep the recorded answer and the round outcome separate. A losing racer

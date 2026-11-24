@@ -52,14 +52,43 @@ export async function isSessionParticipant(pool, sessionId, userId) {
       LIMIT 1`, [sessionId, userId]);
     return (result.rowCount ?? 0) > 0;
 }
+/** A player may miss this many words before the round stops answering guesses.
+ * Without a cap, the correct/incorrect response turns every guess into an
+ * oracle: a participant can walk through a word list until the round ends. */
+export const MAX_WRONG_GUESSES = 5;
 export async function submitGuess(pool, input) {
-    // The status predicate is part of the INSERT so a guess can never be written
-    // to a round that closed between the route's read and this write.
-    const result = await pool.query(`INSERT INTO pictionary_guesses (id, round_id, user_id, username, guess, correct)
-     SELECT $1, $2, $3, $4, $5, $6
-      WHERE EXISTS (SELECT 1 FROM pictionary_rounds WHERE id = $2 AND status = 'drawing')
-     RETURNING id, round_id, user_id, username, guess, correct, created_at`, [input.id, input.round_id, input.user_id, input.username, input.guess, input.correct]);
-    return result.rows[0] ?? null;
+    // Lock the round row so concurrent guesses cannot both pass the allowance
+    // check, and keep the status test inside the same transaction so a guess is
+    // never written after the round closes.
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+        const round = await client.query(`SELECT status FROM pictionary_rounds WHERE id = $1 FOR UPDATE`, [input.round_id]);
+        if (!round.rowCount || round.rows[0].status !== "drawing") {
+            await client.query("ROLLBACK");
+            return null;
+        }
+        if (!input.correct) {
+            const wrong = await client.query(`SELECT COUNT(*)::int AS count FROM pictionary_guesses
+          WHERE round_id = $1 AND user_id = $2 AND correct = false`, [input.round_id, input.user_id]);
+            if (Number(wrong.rows[0].count) >= MAX_WRONG_GUESSES) {
+                await client.query("ROLLBACK");
+                return null;
+            }
+        }
+        const result = await client.query(`INSERT INTO pictionary_guesses (id, round_id, user_id, username, guess, correct)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, round_id, user_id, username, guess, correct, created_at`, [input.id, input.round_id, input.user_id, input.username, input.guess, input.correct]);
+        await client.query("COMMIT");
+        return result.rows[0] ?? null;
+    }
+    catch (err) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        throw err;
+    }
+    finally {
+        client.release();
+    }
 }
 export async function getGuessesForRound(pool, roundId) {
     const result = await pool.query(`SELECT id, round_id, user_id, username, guess, correct, created_at

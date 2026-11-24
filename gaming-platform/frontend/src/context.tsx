@@ -55,6 +55,7 @@ export interface ContextDataType {
   pictionary: PictionaryRound | null;
   crash: CrashState;
   audit: AuditReport | null;
+  permissions: string[];
   ready: boolean;
   streamReady: boolean;
   lastSeq: number;
@@ -125,6 +126,7 @@ const initialState: ContextDataType = {
   pictionary: null,
   crash: { round: null, myBet: null, history: [] },
   audit: null,
+  permissions: [],
   ready: false,
   streamReady: false,
   lastSeq: 0,
@@ -618,18 +620,31 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
   const signUp = useCallback(
     async (username: string, email: string, password: string) => {
       const generation = authGenerationRef.current;
-      const ok = await guard("Register", () =>
-        serializeAuth(async () => {
-          await call("/auth/register", { method: "POST", body: { username, email, password } });
-          return call<AuthData>("/auth/login", {
+      // Keep registration and auto-login separate. If the account commits but
+      // the follow-up login fails, the user must be told the account exists
+      // rather than being sent back to a form that now returns "already
+      // registered" on retry.
+      const registered = await guard("Register", () =>
+        serializeAuth(() =>
+          call("/auth/register", { method: "POST", body: { username, email, password } }),
+        ),
+      );
+      if (!registered || authGenerationRef.current !== generation) return false;
+      const data = await guard("Sign in", () =>
+        serializeAuth(() =>
+          call<AuthData>("/auth/login", {
             method: "POST",
             credentials: "include",
             body: { identifier: username, password },
-          });
-        }),
+          }),
+        ),
       );
-      if (!ok || authGenerationRef.current !== generation) return false;
-      await applyAuth(ok as AuthData);
+      if (authGenerationRef.current !== generation) return false;
+      if (!data) {
+        toast.info("Account created - please sign in");
+        return true;
+      }
+      await applyAuth(data as AuthData);
       toast.success("Account created");
       return true;
     },
@@ -1184,6 +1199,25 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     },
     [call, guard, isCurrent],
   );
+
+  // Privileged controls are hidden for players without the matching grant.
+  // The gateway re-checks RBAC on every request, so this is presentation only.
+  const loadPermissions = useCallback(async () => {
+    const token = identityRef.current;
+    const generation = authGenerationRef.current;
+    if (!token) return;
+    const result = await guard("Permissions", () =>
+      call<{ permissions: string[] }>("/me/permissions"));
+    if (result && isCurrent(token, generation)) {
+      const granted = result as { permissions?: string[] };
+      updateIfCurrent(token, generation, { permissions: granted.permissions ?? [] });
+    }
+  }, [call, guard, isCurrent, updateIfCurrent]);
+
+  useEffect(() => {
+    if (!state.user?.id) return;
+    void loadPermissions();
+  }, [state.user?.id, loadPermissions]);
 
   const loadAudit = useCallback(async () => {
     const token = identityRef.current;

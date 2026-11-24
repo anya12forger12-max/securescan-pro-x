@@ -46,7 +46,11 @@ export default function AuthPage({ mode }: AuthPageProps) {
       ? await signUp(identifier.trim(), email.trim(), password)
       : await signIn(identifier.trim(), password);
     setBusy(false);
-    if (!ok) setError("Unable to sign in with those details. Please try again.");
+    if (!ok) {
+      setError(registering
+        ? "Unable to create your account. Please check the details and try again."
+        : "Unable to sign in with those details. Please try again.");
+    }
   };
 
   return (

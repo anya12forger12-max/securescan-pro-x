@@ -136,12 +136,12 @@ const rateLimitConfig = {
 const rateLimiter = RATE_LIMIT_ENABLED ? createRateLimiter(rateLimitConfig) : null;
 
 /**
- * SSE connections are long-lived: charging each attempt to a sliding-window
- * request counter keeps a slot occupied long after the socket is gone. Streams
- * are therefore exempt from the request limiter and counted by *live sockets*
- * instead. The cap reuses RATE_LIMIT_STREAM_MAX but now describes concurrency,
- * and is a resource guard independent of RATE_LIMIT_ENABLED. Buckets keep the
- * same verified-user / anonymous-IP split as the normal request limiters.
+ * SSE connections are long-lived, so they carry a separate *concurrent* socket
+ * cap in addition to the ordinary per-user read budget for establishing them.
+ * The cap reuses RATE_LIMIT_STREAM_MAX but describes live sockets rather than
+ * requests per minute and is a resource guard independent of RATE_LIMIT_ENABLED.
+ * Buckets keep the same verified-user / anonymous-IP split as the normal
+ * request limiters.
  *
  * Slots are Redis leases shared by every gateway replica, so N replicas cannot
  * admit N x streamMax sockets against the single realtime hub. When no shared
@@ -441,6 +441,38 @@ app.get("/ready", async (_req, reply) => {
   return { status: "ready", services: checks.length };
 });
 
+/** The SPA needs to know which privileged controls to render. This reports
+ * only the caller's own permissions, resolved through the same RBAC service
+ * that guards the routes, so hiding a button never loosens the server check. */
+const KNOWN_PERMISSIONS = [
+  "promotions.manage",
+  "tournaments.manage",
+  "audit.read",
+  "audit.append",
+  "risk.review",
+  "roles.manage",
+];
+app.get("/v1/me/permissions", async (req, reply) => {
+  const raw = req.headers.authorization;
+  if (typeof raw !== "string" || !raw.startsWith("Bearer ")) {
+    return reply.code(401).send({ error: "UNAUTHORIZED", message: "a player token is required" });
+  }
+  let decoded;
+  try {
+    decoded = jwt.verify(raw.slice(7), JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
+  } catch {
+    return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid token" });
+  }
+  if (typeof decoded?.userId !== "string") {
+    return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid token" });
+  }
+  const granted = await Promise.all(
+    KNOWN_PERMISSIONS.map(async (permission) =>
+      (await hasPermission(decoded.userId, permission, req.log)) ? permission : null),
+  );
+  return reply.send({ permissions: granted.filter(Boolean) });
+});
+
 /** Rate-limit player traffic before it reaches any downstream service.
  * Keys are derived from a verified JWT subject or, for unauthenticated auth
  * routes, the socket address. A client-supplied x-service-token is never a
@@ -482,13 +514,17 @@ app.addHook("onRequest", async (req, reply) => {
     return null;
   };
 
-  // A real stream is a long-lived socket, so authenticated GETs are charged to
-  // proxy()'s live-socket cap instead of this sliding-window counter. Every
-  // other attempt still needs a request budget: without it, a caller could
-  // hammer the only public port with free JWT failures or bogus methods.
+  // Anonymous stream attempts are limited by IP; a verified player's stream
+  // establishment is a normal read request and falls through to the per-user
+  // read bucket below. The separate live-socket lease cap in proxy() still
+  // bounds how many long-lived streams one user may hold open. Skipping the
+  // request bucket entirely let a single JWT hammer stream establishment
+  // without ever seeing a 429, even after the socket had been closed.
   if (matchesPrefix(path, "/v1/events/stream")) {
-    if (req.method === "GET" && verifiedUserId()) return;
-    return applyLimit(await rateLimiter.check(`ip:anon:${ip}:stream`, rateLimitConfig.streamMax));
+    const streamUser = verifiedUserId();
+    if (!streamUser || req.method !== "GET") {
+      return applyLimit(await rateLimiter.check(`ip:anon:${ip}:stream`, rateLimitConfig.streamMax));
+    }
   }
 
   let limit;
