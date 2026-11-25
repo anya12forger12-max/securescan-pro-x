@@ -42,14 +42,20 @@ export default function AuthPage({ mode }: AuthPageProps) {
       return;
     }
     setBusy(true);
-    const ok = registering
-      ? await signUp(identifier.trim(), email.trim(), password)
-      : await signIn(identifier.trim(), password);
-    setBusy(false);
-    if (!ok) {
-      setError(registering
-        ? "Unable to create your account. Please check the details and try again."
-        : "Unable to sign in with those details. Please try again.");
+    try {
+      const ok = registering
+        ? await signUp(identifier.trim(), email.trim(), password)
+        : await signIn(identifier.trim(), password);
+      if (!ok) {
+        setError(registering
+          ? "Unable to create your account. Please check the details and try again."
+          : "Unable to sign in with those details. Please try again.");
+      }
+    } catch {
+      setError("The service is unavailable. Please try again.");
+    } finally {
+      // A rejected sign-in must never leave the button permanently disabled.
+      setBusy(false);
     }
   };
 

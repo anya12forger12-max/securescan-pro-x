@@ -117,7 +117,9 @@
   }
 
   select {
-    background: #050510;
+    /* background-color, not the shorthand: the shorthand clears the custom
+       dropdown arrow set by .control-select in index.scss. */
+    background-color: #050510;
     color: #EAFBFF;
     border: 1px solid rgba(0, 245, 255, 0.16);
     border-radius: 8px;

@@ -7,8 +7,8 @@
 
 $back-color: #050510;
 $dark-navy: #0A1025;
-$box-color: #101420;
-$box-light: #141828;
+$box-color: #0A1025;
+$box-light: #050510;
 $electric-cyan: #00F5FF;
 $neon-purple: #A020F0;
 $hot-pink: #FF00A8;
@@ -35,7 +35,7 @@ $muted: #78A0D0;
   display: grid;
   gap: 24px;
   padding: 32px 32px 24px;
-  background: rgba(16, 20, 32, 0.9);
+  background: rgba(10, 16, 37, 0.9);
   border: 1px solid rgba(0, 245, 255, 0.1);
   border-radius: 32px;
   backdrop-filter: blur(20px);
@@ -106,7 +106,7 @@ $muted: #78A0D0;
 .auth-card {
   padding: 32px 28px;
   border-radius: 32px;
-  background: rgba(16, 20, 32, 0.8);
+  background: rgba(10, 16, 37, 0.8);
   border: 1px solid rgba(0, 245, 255, 0.1);
   backdrop-filter: blur(20px);
   position: relative;
@@ -163,7 +163,7 @@ $muted: #78A0D0;
     width: 100%;
     
     &::placeholder {
-      color: rgba(120, 160, 208, 0.4);
+      color: rgba(120, 160, 208, 0.75);
     }
     
     &:focus {
@@ -250,7 +250,7 @@ $muted: #78A0D0;
 .auth-footnote {
   margin: 0;
   text-align: center;
-  color: rgba(120, 160, 208, 0.4);
+  color: rgba(120, 160, 208, 0.75);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
