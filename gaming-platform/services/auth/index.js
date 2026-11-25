@@ -144,13 +144,34 @@ const serializeRefreshCookie = (token, maxAge, secure) =>
     "SameSite=Strict",
     ...(secure ? ["Secure"] : []),
   ].join("; ");
+
+// The browser cannot read the HttpOnly refresh cookie, so without a hint it
+// would POST /v1/auth/refresh on every anonymous page load and get a 400 (plus
+// a console error). This companion cookie carries no credential - only the
+// fact that a session cookie exists - and is cleared with it on logout and on
+// refresh failure.
+const SESSION_HINT_COOKIE = "gp_session";
+const serializeSessionHint = (maxAge, secure) =>
+  [
+    `${SESSION_HINT_COOKIE}=${maxAge > 0 ? "1" : ""}`,
+    `Max-Age=${maxAge}`,
+    "Path=/",
+    "SameSite=Strict",
+    ...(secure ? ["Secure"] : []),
+  ].join("; ");
+const sessionCookies = (token, maxAge, req) => {
+  const secure = refreshCookieSecure(req);
+  return [
+    serializeRefreshCookie(token, maxAge, secure),
+    serializeSessionHint(maxAge, secure),
+  ];
+};
 const setRefreshCookie = (reply, token, req) =>
-  reply.header(
-    "set-cookie",
-    serializeRefreshCookie(token, REFRESH_COOKIE_MAX_AGE, refreshCookieSecure(req)),
-  );
+  reply.header("set-cookie", sessionCookies(token, REFRESH_COOKIE_MAX_AGE, req));
 const clearRefreshCookie = (reply, req) =>
-  reply.header("set-cookie", serializeRefreshCookie("", 0, refreshCookieSecure(req)));
+  reply.header("set-cookie", sessionCookies("", 0, req));
+const clearSessionHint = (reply, req) =>
+  reply.header("set-cookie", serializeSessionHint(0, refreshCookieSecure(req)));
 
 /** Cookie first: a browser must never fall back to an attacker-supplied body
  * token while it has a refresh cookie. Body tokens remain available only to
@@ -295,8 +316,10 @@ app.post("/v1/auth/refresh", async (req, reply) => {
 
   const cookieToken = requestRefreshToken(req);
   const refreshTokenInput = cookieToken ?? parsed.data.refresh_token;
-  if (!refreshTokenInput)
+  if (!refreshTokenInput) {
+    clearSessionHint(reply, req);
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "refresh token required");
+  }
 
   const tokenHash = hashRefreshToken(refreshTokenInput);
   const client = await pool.connect();
@@ -313,6 +336,7 @@ app.post("/v1/auth/refresh", async (req, reply) => {
     );
     if (!found.rowCount) {
       await client.query("ROLLBACK");
+      clearSessionHint(reply, req);
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid or expired refresh token");
     }
 
@@ -327,6 +351,7 @@ app.post("/v1/auth/refresh", async (req, reply) => {
         [familyId],
       );
       await client.query("COMMIT");
+      clearSessionHint(reply, req);
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid or expired refresh token");
     }
     await client.query(`UPDATE auth_refresh_tokens SET revoked_at = now() WHERE id = $1`, [oldId]);
@@ -337,6 +362,7 @@ app.post("/v1/auth/refresh", async (req, reply) => {
     );
     if (!userResult.rowCount) {
       await client.query("ROLLBACK");
+      clearSessionHint(reply, req);
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid or expired refresh token");
     }
     await client.query("COMMIT");

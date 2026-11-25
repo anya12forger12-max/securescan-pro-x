@@ -32,6 +32,16 @@ import type {
  * This provider mirrors that architecture, but replaces its module-level
  * Socket.IO singleton with gateway-authenticated SSE and immutable updates. */
 
+// The refresh credential is HttpOnly, so JavaScript cannot ask whether one
+// exists. Auth sets this non-secret companion cookie with the same lifetime;
+// it lets an anonymous page load skip a refresh that can only fail with 400.
+const SESSION_HINT_COOKIE = "gp_session";
+const hasSessionHint = () =>
+  document.cookie.split(";").some((part) => part.trim() === `${SESSION_HINT_COOKIE}=1`);
+const clearSessionHint = () => {
+  document.cookie = `${SESSION_HINT_COOKIE}=; Max-Age=0; Path=/; SameSite=Strict`;
+};
+
 export interface ContextDataType {
   user: User | null;
   token: string | null;
@@ -363,6 +373,8 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
         // into a phantom sign-out that a reload would immediately undo.
         if (err instanceof ApiError && (err.status === 400 || err.status === 401)) {
           identityEstablishedRef.current = false;
+          // The credential is gone; stop every later page load from retrying.
+          clearSessionHint();
           // At bootstrap there is no identity to clear. Bumping the generation
           // here would discard a login queued behind this refresh: guard()
           // captures the generation before serializeAuth drains the queue.
@@ -439,6 +451,10 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     let cancelled = false;
     const generation = authGenerationRef.current;
     clearLegacyTokens();
+    if (!hasSessionHint()) {
+      update({ ready: true });
+      return;
+    }
     void (async () => {
       try {
         const data = await refreshSession();
@@ -702,6 +718,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     // Drop the in-memory token up front and stop rendering the outgoing user's
     // data while the network request is still in flight.
     clearLegacyTokens();
+    clearSessionHint();
     resetState(null, null, generation);
     // The logout must be the last cookie write. serializeAuth drains any
     // refresh in flight first and queues later logins behind the revocation;
