@@ -144,3 +144,14 @@ before rolling back to an older image. Its postgres/redis ports bind to
 `docker/metadata-action@v5` and `docker/build-push-action@v6` with GitHub
 Actions cache; `docker/login-action@v3` and `push: true` are gated to main
 pushes only. Permissions are `contents: read` and `packages: write`.
+
+## Vercel frontend deployment
+
+`vercel.json` installs and builds from `frontend/` explicitly with
+`npm ci --no-audit --no-fund` and `npm run build`. The repository root has no
+`package.json`, so Vercel's default root-level install cannot work; the custom
+`installCommand` avoids that failure. `npm ci` uses the committed
+`frontend/package-lock.json` instead of mutating it with `npm install`, so the
+deployed bundle matches the lockfile (and the production Docker build) exactly.
+Set `VITE_API_URL` in the Vercel project settings to the HTTPS API base URL;
+the in-repo default points at `localhost` for local development only.
