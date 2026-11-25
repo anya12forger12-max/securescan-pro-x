@@ -1,7 +1,5 @@
 # Docker Compose — Development Environment
 
-version: "3.8"
-
 services:
   backend:
     build:
@@ -14,7 +12,8 @@ services:
       - securescan-data:/root/.securescan
     environment:
       - SECURESCAN_DEBUG=true
-      - SECURESCAN_LOG_LEVEL=debug
+      # Backend settings use "__" for nesting; SECURESCAN_LOG_LEVEL was ignored.
+      - SECURESCAN_LOGGING__LEVEL=debug
     command: uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
