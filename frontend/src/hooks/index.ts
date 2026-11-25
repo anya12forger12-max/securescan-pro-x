@@ -2,6 +2,7 @@
  * Custom Hooks for SecureScan Pro X
  */
 import { useState, useEffect, useCallback } from "react";
+import { storageGet, storageSet } from "../utils/storage";
 
 export function useDebounce<T>(value: T, delay: number): T {
   const [debouncedValue, setDebouncedValue] = useState(value);
@@ -72,7 +73,7 @@ export function useLocalStorage<T>(
 ): [T, (v: T) => void] {
   const [value, setValue] = useState<T>(() => {
     try {
-      const item = localStorage.getItem(key);
+      const item = storageGet(key);
       return item ? JSON.parse(item) : initial;
     } catch {
       return initial;
@@ -81,7 +82,7 @@ export function useLocalStorage<T>(
   const set = useCallback(
     (v: T) => {
       setValue(v);
-      localStorage.setItem(key, JSON.stringify(v));
+      storageSet(key, JSON.stringify(v));
     },
     [key],
   );
