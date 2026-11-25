@@ -73,13 +73,13 @@ export async function buildGameEngineService(env: GameEngineEnv) {
     const token = authHeader.replace("Bearer ", "");
     const decoded = await app.jwt.verify<{ userId: string }>(token);
     const pool = getPool(env.DATABASE_URL);
+    // createSession also inserts the host seat in the same statement, so a
+    // failed response cannot leave an invisible hostless session behind.
     const session = await createSession(pool, {
       id: randomUUID(),
       game_type: parsed.data.game_type,
       host_id: decoded.userId,
     });
-    // Host joins the session
-    await joinSession(pool, session.id, decoded.userId);
     return reply.code(201).send({ session });
   });
 

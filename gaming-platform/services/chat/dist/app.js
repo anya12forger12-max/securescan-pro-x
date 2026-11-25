@@ -3,6 +3,7 @@ import { z } from "zod";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
+import { parseCorsOrigins } from "@gp/config";
 import { getPool, closePool, createMessage, listMessages, createRoom, listRooms } from "./db.js";
 /**
  * The request's route path.
@@ -41,7 +42,7 @@ export async function buildChatService(env) {
             app.log.warn({ err }, `realtime publish of ${topic} failed`);
         }
     };
-    await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
+    await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
     await app.register(jwt, {
         secret: env.JWT_ACCESS_SECRET,
         sign: { expiresIn: Math.floor(900) },

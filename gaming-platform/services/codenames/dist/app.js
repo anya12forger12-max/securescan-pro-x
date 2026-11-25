@@ -3,6 +3,7 @@ import { z } from "zod";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
+import { parseCorsOrigins } from "@gp/config";
 import { getPool, closePool, createGame, getGame, setGameStatus, submitClue, getCluesForGame, getActiveClue, submitGuess, listGuessesForGame, listRevealedWords, playerTeam, isTeamSpymaster, isSessionParticipant, isSessionOfType, activateSession } from "./db.js";
 /**
  * The request's route path.
@@ -33,7 +34,7 @@ const SubmitGuessSchema = z.object({
 });
 export async function buildCodenamesService(env) {
     const app = Fastify({ logger: { level: env.LOG_LEVEL } });
-    await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
+    await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
     await app.register(jwt, {
         secret: env.JWT_ACCESS_SECRET,
         sign: { expiresIn: Math.floor(900) },
@@ -95,10 +96,25 @@ export async function buildCodenamesService(env) {
     // ---------- get game ----------
     app.get("/v1/codenames/games/:id", async (req, reply) => {
         const { id } = req.params;
+        const token = headerBearer(req.headers.authorization);
+        if (!token)
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "missing bearer token" });
+        let decoded;
+        try {
+            decoded = await app.jwt.verify(token);
+        }
+        catch {
+            return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid or expired token" });
+        }
         const pool = getPool(env.DATABASE_URL);
         const game = await getGame(pool, id);
         if (!game) {
             return reply.code(404).send({ error: "GAME_NOT_FOUND", message: "game not found" });
+        }
+        // Clues, guesses and the reveal log are game state for seated players,
+        // not public metadata. A learned game UUID must not be enough to read them.
+        if (!game.session_id || !(await isSessionParticipant(pool, game.session_id, decoded.userId))) {
+            return reply.code(403).send({ error: "FORBIDDEN", message: "only session players may view this game" });
         }
         const clues = await getCluesForGame(pool, id);
         const guesses = await listGuessesForGame(pool, id);

@@ -116,6 +116,21 @@ const rateLimitConfig = {
 };
 const rateLimiter = RATE_LIMIT_ENABLED ? createRateLimiter(rateLimitConfig) : null;
 
+// Anonymous IP limits only mean something if req.ip is the browser, not the
+// host's TLS terminator. The documented deployment uses exactly one loopback
+// proxy hop; allow that hop to supply X-Forwarded-For and no more. Set to 0 for
+// direct development access with no proxy in front of the gateway.
+const TRUST_PROXY_HOPS = (() => {
+  const parsed = Number(process.env.TRUST_PROXY_HOPS ?? 1);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 1;
+})();
+// Bound the establishment of every upstream request. SSE streams are excluded
+// once their headers arrive; their socket lifetime is independent of this cap.
+const UPSTREAM_TIMEOUT_MS = (() => {
+  const parsed = Number(process.env.UPSTREAM_TIMEOUT_MS ?? 30_000);
+  return Number.isFinite(parsed) && parsed >= 1000 ? parsed : 30_000;
+})();
+
 /**
  * SSE connections are long-lived, so they carry a separate *concurrent* socket
  * cap in addition to the ordinary per-user read budget for establishing them.
@@ -385,7 +400,10 @@ function auditedMutation(req, method, path, body) {
   return null;
 }
 
-const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
+const app = Fastify({
+  logger: { level: process.env.LOG_LEVEL ?? "info" },
+  trustProxy: TRUST_PROXY_HOPS,
+});
 
 // The gateway is a transparent proxy. Parsing JSON into an object and then
 // re-serialising it rejects legitimate empty POST bodies and can change number
@@ -718,8 +736,14 @@ async function proxy(req, reply) {
     }
   }
 
+  let upstreamTimer;
   try {
-    const res = await fetch(upstream, init);
+    const controller = new AbortController();
+    upstreamTimer = setTimeout(
+      () => controller.abort(new Error("upstream request timed out")),
+      UPSTREAM_TIMEOUT_MS,
+    );
+    const res = await fetch(upstream, { ...init, signal: controller.signal });
     const contentType = res.headers.get("content-type") ?? "";
     const requestId = res.headers.get("x-request-id");
     // Auth's cookie refresh flow relies on the exact HttpOnly Set-Cookie value
@@ -733,6 +757,10 @@ async function proxy(req, reply) {
     // the upstream body straight to the client and let the socket close decide
     // when the stream is over.
     if (contentType.includes("text/event-stream") && res.body) {
+      // The stream is long-lived; stop the establishment timer once headers
+      // have arrived instead of killing an active SSE socket.
+      clearTimeout(upstreamTimer);
+      upstreamTimer = undefined;
       // hijack() bypasses Fastify's header serializer, so copy the headers the
       // hooks already set (rate-limit counters, CORS credentials, request id).
       const pendingHeaders = reply.getHeaders();
@@ -785,12 +813,15 @@ async function proxy(req, reply) {
     }
 
     const text = await res.text();
+    clearTimeout(upstreamTimer);
+    upstreamTimer = undefined;
     reply.code(res.status);
     if (contentType) reply.header("content-type", contentType);
     if (requestId) reply.header("x-request-id", requestId);
     if (setCookies.length) reply.header("set-cookie", setCookies);
     return reply.send(text);
   } catch (err) {
+    if (upstreamTimer) clearTimeout(upstreamTimer);
     releaseStream();
     req.log.warn({ err, service: target.service }, "upstream request failed");
     // Do not reflect upstream/internal error details back to callers.

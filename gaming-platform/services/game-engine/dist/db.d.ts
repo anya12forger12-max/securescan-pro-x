@@ -25,4 +25,6 @@ export declare function getSession(pool: PoolType, id: string): Promise<GameSess
 export declare function endSession(pool: PoolType, id: string): Promise<boolean>;
 export declare function joinSession(pool: PoolType, sessionId: string, userId: string): Promise<GamePlayer | null>;
 export declare function listSessionPlayers(pool: PoolType, sessionId: string): Promise<GamePlayer[]>;
+/** The host joins on creation, so this covers hosts and invited players. */
+export declare function isSessionParticipant(pool: PoolType, sessionId: string, userId: string): Promise<boolean>;
 //# sourceMappingURL=db.d.ts.map

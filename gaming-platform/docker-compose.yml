@@ -180,6 +180,12 @@ services:
       # Fail closed if Redis is down: never silently drop to local counters.
       RATE_LIMIT_FAIL_CLOSED: ${RATE_LIMIT_FAIL_CLOSED:-true}
       RATE_LIMIT_STREAM_MAX: ${RATE_LIMIT_STREAM_MAX:-20}
+      # The documented TLS terminator is one trusted loopback proxy hop. Set
+      # TRUST_PROXY_HOPS=0 only for direct local development without a proxy.
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
+      # Upstream connection/response-header budget. SSE streams are exempt once
+      # established because their socket lifetime is intentionally long.
+      UPSTREAM_TIMEOUT_MS: ${UPSTREAM_TIMEOUT_MS:-30000}
       # MAX_STREAMS/EVENT_RETENTION_HOURS belong to realtime only. Injecting
       # them here suggested a gateway knob that its stream lease code never read.
     healthcheck:

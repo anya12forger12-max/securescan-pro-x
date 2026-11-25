@@ -3,6 +3,7 @@ import { z } from "zod";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
+import { parseCorsOrigins } from "@gp/config";
 import { getPool, closePool, createRound, getRound, endRound, submitGuess, MAX_WRONG_GUESSES, getGuessesForRound, getRandomWord, isSessionParticipant, isSessionOfType, } from "./db.js";
 /**
  * The request's route path.
@@ -24,7 +25,7 @@ const SubmitGuessSchema = z.object({
 });
 export async function buildPictionaryService(env) {
     const app = Fastify({ logger: { level: env.LOG_LEVEL } });
-    await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
+    await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
     await app.register(jwt, {
         secret: env.JWT_ACCESS_SECRET,
         sign: { expiresIn: Math.floor(900) },
@@ -104,7 +105,10 @@ export async function buildPictionaryService(env) {
         const safeGuesses = guesses.map((guess) => {
             if (round.status === "ended" || guess.user_id === decoded.userId)
                 return guess;
-            const { guess: _hidden, ...safeGuess } = guess;
+            // Both the text and its correctness are secret while the word is still
+            // on the easel: a boolean right/wrong turns every guess into an oracle
+            // for the answer even when the text itself is redacted.
+            const { guess: _hidden, correct: _outcome, ...safeGuess } = guess;
             return safeGuess;
         });
         const { word: _word, ...safeRound } = round;

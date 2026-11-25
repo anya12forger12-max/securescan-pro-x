@@ -147,10 +147,23 @@ function roundConfig(round) {
   };
 }
 
+/**
+ * A running round without a revealed, finite crash point has no provable
+ * outcome. Legacy rows can have NULL here; treating that as 0x would settle
+ * every active bet as a loss. Such rounds must be cancelled and refunded.
+ */
+function roundLacksProof(round) {
+  if (round?.status !== "running") return false;
+  if (!round.started_at || Number.isNaN(Date.parse(round.started_at))) return true;
+  if (!round.server_seed) return true;
+  const crashPoint = Number(round.crash_point);
+  return !Number.isFinite(crashPoint) || crashPoint <= 0;
+}
+
 /** Absolute, DB-derived deadline for a round. Timers are only an optimisation;
  * this timestamp is the authoritative answer after a restart. */
 function roundDeadline(round) {
-  if (round.status === "running" && round.started_at) {
+  if (round.status === "running" && round.started_at && !roundLacksProof(round)) {
     const { doublingSeconds } = roundConfig(round);
     return new Date(round.started_at).getTime()
       + crashDurationMs(Number(round.crash_point), doublingSeconds);
@@ -175,16 +188,17 @@ function roundHasCrashed(round) {
 }
 
 function verifyRound(round) {
-  if (!round.server_seed || !round.crash_point) return null;
+  const crashPoint = Number(round.crash_point);
+  if (!round.server_seed || !Number.isFinite(crashPoint) || crashPoint <= 0) return null;
   const { houseEdge, maxMultiplier } = roundConfig(round);
   const expected = crashPointFor(round.server_seed, round.id, houseEdge, maxMultiplier);
   return {
     serverSeed: round.server_seed,
     seedHash: createHash("sha256").update(round.server_seed).digest("hex"),
-    crashPoint: Number(round.crash_point),
+    crashPoint,
     houseEdge,
     maxMultiplier,
-    valid: Math.abs(expected - Number(round.crash_point)) < 0.001,
+    valid: Math.abs(expected - crashPoint) < 0.001,
   };
 }
 
@@ -212,7 +226,7 @@ function publicRound(row) {
 /** Internal settlement value: capped at the actual crash point. Never expose
  * this on a public route — see publicMultiplier below. */
 function liveMultiplier(row) {
-  if (row.status !== "running" || !row.started_at) return null;
+  if (row.status !== "running" || !row.started_at || roundLacksProof(row)) return null;
   const { doublingSeconds } = roundConfig(row);
   const elapsed = Date.now() - new Date(row.started_at).getTime();
   return Math.round(Math.min(multiplierAt(elapsed, doublingSeconds), Number(row.crash_point)) * 100) / 100;
@@ -932,6 +946,14 @@ async function finishRound(id, scheduleNext = true) {
       return;
     }
     round = locked.rows[0];
+    // A legacy NULL/invalid crash point is not a 0x crash. Never book debited
+    // bets as losses for a round that has no provable outcome.
+    if (roundLacksProof(round)) {
+      await client.query("ROLLBACK");
+      app.log.warn({ roundId: id }, "incomplete crash round cancelled instead of settled");
+      await cancelRound(id, { allowRunning: true });
+      return;
+    }
     // Only truly active bets become losers. `cashing_out` bets have a payout
     // already committed in the ledger and are owned by boot reconciliation.
     const active = await client.query(
@@ -970,11 +992,13 @@ async function finishRound(id, scheduleNext = true) {
   if (scheduleNext) later(() => createRound(), env.ROUND_GAP_MS);
 }
 
-/** Cancel a betting round that outlived its window (e.g. across a restart). */
-async function cancelRound(id) {
+/** Cancel an invalid/stale round and refund its open stakes. Running rounds are
+ * only cancellable when the caller proves the round has no usable outcome. */
+async function cancelRound(id, { allowRunning = false } = {}) {
   const result = await pool.query(
     `UPDATE crash_rounds SET status = 'cancelled', finished_at = now()
-      WHERE id = $1 AND status = 'betting' RETURNING *`, [id]);
+      WHERE id = $1 AND (status = 'betting' OR ($2 AND status = 'running'))
+      RETURNING *`, [id, allowRunning]);
   if (!result.rowCount) return null;
   const round = result.rows[0];
   const open = await pool.query(
@@ -1003,6 +1027,12 @@ async function reconcileStaleRounds() {
       ORDER BY created_at DESC`);
   let kept = null;
   for (const round of live.rows) {
+    if (roundLacksProof(round)) {
+      // No seed/crash point means there is nothing to reveal and no fair loss
+      // to settle. Refund through the same deterministic keys as any cancel.
+      await cancelRound(round.id, { allowRunning: true });
+      continue;
+    }
     const stale = round.status === "running" ? roundHasCrashed(round) : bettingDeadlinePassed(round);
     if (stale) {
       if (round.status === "running") await finishRound(round.id, false);
@@ -1056,7 +1086,7 @@ async function tick() {
     `SELECT * FROM crash_rounds WHERE status = 'running' ORDER BY started_at DESC`,
   );
   for (const round of rounds.rows) {
-    if (roundHasCrashed(round)) continue;
+    if (roundLacksProof(round) || roundHasCrashed(round)) continue;
     const multiplier = liveMultiplier(round);
     if (multiplier === null) continue;
     const crashPoint = Number(round.crash_point);

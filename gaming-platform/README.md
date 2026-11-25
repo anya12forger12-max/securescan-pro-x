@@ -221,9 +221,13 @@ host and point it at `http://127.0.0.1:3000`; redirect HTTP to HTTPS, set HSTS
 at the terminator, and keep 3000 firewalled. Do not change the mapping to
 `0.0.0.0` — if the proxy lives on a different machine, put the gateway and proxy
 on a shared Docker network instead of publishing a plain-HTTP port. Use an
-`https://` origin in `CORS_ORIGIN`. The example values in `.env.example` and in
-the local-run section below are **non-production placeholders**; generate real
-secrets with `npm run env:init`.
+`https://` origin in `CORS_ORIGIN`. Keep `TRUST_PROXY_HOPS=1` so anonymous IP
+rate limits see the browser address behind that single proxy; use `0` only for
+direct local development with no proxy in front of the gateway.
+`UPSTREAM_TIMEOUT_MS` bounds upstream connection/response-header waits without
+cutting off established event streams. The example values in `.env.example` and
+in the local-run section below are **non-production placeholders**; generate
+real secrets with `npm run env:init`.
 
 ```bash
 cd coffee/gaming-platform
