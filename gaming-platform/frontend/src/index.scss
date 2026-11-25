@@ -91,9 +91,11 @@ body {
   100% { background-position: -40px -40px, 50% 50%, 100% 100%; }
 }
 
+/* Stay inside the cyberpunk palette: a slow cyan glow breath, never a
+   rainbow hue cycle (which read as noisy and distracted from gameplay). */
 @keyframes neon-pulse {
-  0%, 100% { opacity: 1; filter: hue-rotate(0deg); }
-  50% { opacity: 0.8; filter: hue-rotate(180deg); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(0, 245, 255, 0.25); }
+  50% { opacity: 0.85; box-shadow: 0 0 16px rgba(0, 245, 255, 0.5); }
 }
 
 @keyframes flicker {
