@@ -167,6 +167,15 @@ jobs:
       - name: TypeScript typecheck
         working-directory: gaming-platform
         run: npm run typecheck
+      - name: Install frontend dependencies
+        working-directory: gaming-platform
+        run: npm --prefix frontend ci --no-audit --no-fund
+      - name: Frontend typecheck
+        working-directory: gaming-platform
+        run: npm run frontend:typecheck
+      - name: Frontend build
+        working-directory: gaming-platform
+        run: npm run frontend:build
       - name: Compose validation
         working-directory: gaming-platform
         run: npm run validate:compose
