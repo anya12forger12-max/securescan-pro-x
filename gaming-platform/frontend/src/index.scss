@@ -467,6 +467,25 @@ body {
   min-height: 76vh;
 }
 
+/* Below tablet width the fixed sidebar leaves the play area only a few
+   pixels wide. Stack the panels and tighten the shell so phones stay usable. */
+@media (max-width: 900px) {
+  .main-container {
+    padding: 14px 12px 28px;
+  }
+
+  .app-header {
+    flex-wrap: wrap;
+    padding: 14px;
+  }
+
+  .game-container {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    margin-top: 16px;
+  }
+}
+
 /* Info board styling */
 .info-board {
   background: rgba(16, 20, 32, 0.8);
