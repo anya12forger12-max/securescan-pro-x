@@ -102,6 +102,7 @@ function PasswordInput({
           className="form-input form-input--with-icon"
           type={show ? "text" : "password"}
           aria-invalid={!!error}
+          aria-describedby={error ? `${inputId}-error` : undefined}
           {...props}
         />
         <button
@@ -114,7 +115,7 @@ function PasswordInput({
         </button>
       </div>
       {error && (
-        <p className="form-error" role="alert">
+        <p id={`${inputId}-error`} className="form-error" role="alert">
           {error}
         </p>
       )}
