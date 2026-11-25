@@ -355,30 +355,47 @@ async function recordAdminAudit(req, actorId, action, target, metadata) {
     });
     if (!res.ok) {
       req.log.error({ status: res.status, action }, "admin audit append rejected");
+      return false;
     }
+    return true;
   } catch (err) {
     req.log.error({ err, action }, "admin audit append failed");
+    return false;
   }
 }
 
-/** Return the audit descriptor for a successful privileged mutation, or null. */
-function auditedMutation(method, path, bodyText) {
-  if (method === "POST" && path === "/internal/promotions") {
-    let id = "unknown";
-    try {
-      id = JSON.parse(bodyText)?.data?.promotion?.id ?? "unknown";
-    } catch { /* response was not JSON; still record the action */ }
-    return { action: "promotion.create", target: String(id) };
+/**
+ * Write-ahead audit descriptor for a privileged mutation. The entry is
+ * appended before the upstream mutation is sent; the upstream call is made only
+ * after the append succeeds. A create still has no response-side id yet, so its
+ * target carries the immutable request id and the descriptor's metadata carries
+ * the operator-provided resource identity (for example a promotion code).
+ */
+function auditedMutation(req, method, path, body) {
+  const requestId = String(req.headers["x-request-id"] ?? "");
+  const auditPath = String(path ?? "");
+  const resourceId = (value) =>
+    typeof value === "string" && value.trim().length > 0 ? value.trim() : `request:${requestId}`;
+
+  if (method === "POST" && auditPath === "/internal/promotions") {
+    const bodyValue = body ?? {};
+    const source = bodyValue.data?.promotion ?? bodyValue;
+    return {
+      action: "promotion.create",
+      target: `promotion:${resourceId(source.code)}`,
+      metadata: { phase: "intent", method, path: auditPath, requestId, code: source.code ?? null },
+    };
   }
-  if (method === "PATCH" && matchesPrefix(path, "/internal/promotions/")) {
-    return { action: "promotion.update", target: path.slice("/internal/promotions/".length) };
+  if (method === "PATCH" && matchesPrefix(auditPath, "/internal/promotions/")) {
+    return { action: "promotion.update", target: auditPath.slice("/internal/promotions/".length) };
   }
-  if (method === "POST" && path === "/v1/tournaments") {
-    let id = "unknown";
-    try {
-      id = JSON.parse(bodyText)?.data?.tournament?.id ?? "unknown";
-    } catch { /* response was not JSON; still record the action */ }
-    return { action: "tournament.create", target: String(id) };
+  if (method === "POST" && auditPath === "/v1/tournaments") {
+    const source = body?.tournament ?? body;
+    return {
+      action: "tournament.create",
+      target: `tournament:${resourceId(source.title)}`,
+      metadata: { phase: "intent", method, path: auditPath, requestId, title: source.title ?? null },
+    };
   }
   return null;
 }
@@ -676,6 +693,14 @@ async function proxy(req, reply) {
     delete headers["content-type"];
   }
 
+  const mutation = auditedMutation(req, req.method, path, req.body);
+  if (mutation) {
+    const audited = await recordAdminAudit(req, decoded.userId, mutation.action, mutation.target, mutation.metadata);
+    if (!audited) {
+      return reply.code(503).send({ error: { code: "SERVICE_UNAVAILABLE", message: "admin audit append failed" } });
+    }
+  }
+
   try {
     const res = await fetch(upstream, init);
     const contentType = res.headers.get("content-type") ?? "";
@@ -743,16 +768,6 @@ async function proxy(req, reply) {
     }
 
     const text = await res.text();
-    if (res.ok && decoded?.userId) {
-      const mutation = auditedMutation(req.method, path, text);
-      if (mutation) {
-        await recordAdminAudit(req, decoded.userId, mutation.action, mutation.target, {
-          requestId,
-          method: req.method,
-          path,
-        });
-      }
-    }
     reply.code(res.status);
     if (contentType) reply.header("content-type", contentType);
     if (requestId) reply.header("x-request-id", requestId);

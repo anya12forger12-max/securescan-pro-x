@@ -180,13 +180,15 @@ const CreditSchema = z.object({
 const TX_COLUMNS = `id, idempotency_key, user_id, amount, type, reference_type,
   reference_id, balance_after, created_at`;
 
-/** A replay must describe the same movement. Otherwise a caller that knows a
- * key could read another user's balance/amount from the replay response. */
-const replayMatches = (tx, { userId, type, referenceType }, signedAmount) =>
+/** A replay must describe the same movement, not just the same key: a caller
+ * that knows a key must not be able to replay it against a different amount,
+ * type or resource, or read another user's balance/amount from the response. */
+const replayMatches = (tx, { userId, type, referenceType, referenceId }, signedAmount) =>
   tx.user_id === userId &&
   Number(tx.amount) === Number(signedAmount) &&
   tx.type === type &&
-  tx.reference_type === referenceType;
+  tx.reference_type === referenceType &&
+  (tx.reference_id ?? null) === (referenceId ?? null);
 
 app.post("/internal/wallet/credit", async (req, reply) => {
   // Reject unknown credentials before parsing the body; then require the
