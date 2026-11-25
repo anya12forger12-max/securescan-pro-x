@@ -46,6 +46,36 @@ export interface GamePlayer {
   joined_at: string;
 }
 
+export interface CodenamesClue {
+  id: string;
+  game_id: string;
+  spymaster_id: string;
+  word: string;
+  number: number;
+  team: string | null;
+  created_at: string;
+}
+
+export interface CodenamesGuess {
+  id: string;
+  game_id: string;
+  user_id: string;
+  username: string;
+  word: string;
+  team: string;
+  outcome: "correct" | "wrong_team" | "neutral" | "assassin" | "invalid_word";
+  clue_id: string | null;
+  created_at: string;
+}
+
+export interface CodenamesReveal {
+  game_id: string;
+  word: string;
+  team: string;
+  revealed_by: string;
+  revealed_at: string;
+}
+
 export interface CodenamesGame {
   id: string;
   session_id: string;
@@ -53,6 +83,9 @@ export interface CodenamesGame {
   turn?: string;
   winner?: string | null;
   created_at?: string;
+  clues?: CodenamesClue[];
+  guesses?: CodenamesGuess[];
+  revealed?: CodenamesReveal[];
 }
 
 export interface GinRummyGame {
@@ -70,6 +103,18 @@ export interface GinRummyGame {
   melds?: string[][];
 }
 
+export interface PictionaryGuess {
+  id: string;
+  round_id: string;
+  user_id: string;
+  username?: string;
+  // The service removes both fields from other players' guesses while the
+  // word is still hidden, so they are optional on the client too.
+  guess?: string;
+  correct?: boolean;
+  created_at?: string;
+}
+
 export interface PictionaryRound {
   id: string;
   session_id: string;
@@ -78,7 +123,7 @@ export interface PictionaryRound {
   winner_id?: string | null;
   length?: number;
   masked_word?: string;
-  guesses?: Array<{ user_id: string; guess: string; correct: boolean }>;
+  guesses?: PictionaryGuess[];
 }
 
 export interface ChatRoom {

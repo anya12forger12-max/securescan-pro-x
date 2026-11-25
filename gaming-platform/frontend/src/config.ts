@@ -14,4 +14,7 @@ export const config = {
   // can delete credentials written by earlier builds during session bootstrap.
   legacyTokenKey: "gp.access.token",
   legacyRefreshKey: "gp.refresh.token",
+  // Non-sensitive UI bookkeeping only: the last session/game a user opened.
+  // Tokens and refresh cookies are never written to web storage.
+  lastGameKey: "gp.last.game",
 } as const;

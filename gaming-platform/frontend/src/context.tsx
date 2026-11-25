@@ -32,16 +32,6 @@ import type {
  * This provider mirrors that architecture, but replaces its module-level
  * Socket.IO singleton with gateway-authenticated SSE and immutable updates. */
 
-// The refresh credential is HttpOnly, so JavaScript cannot ask whether one
-// exists. Auth sets this non-secret companion cookie with the same lifetime;
-// it lets an anonymous page load skip a refresh that can only fail with 400.
-const SESSION_HINT_COOKIE = "gp_session";
-const hasSessionHint = () =>
-  document.cookie.split(";").some((part) => part.trim() === `${SESSION_HINT_COOKIE}=1`);
-const clearSessionHint = () => {
-  document.cookie = `${SESSION_HINT_COOKIE}=; Max-Age=0; Path=/; SameSite=Strict`;
-};
-
 export interface ContextDataType {
   user: User | null;
   token: string | null;
@@ -63,6 +53,9 @@ export interface ContextDataType {
   codenames: CodenamesGame | null;
   ginRummy: GinRummyGame | null;
   pictionary: PictionaryRound | null;
+  // Only the drawer's browser receives the secret word from the create
+  // response; reads deliberately never return it.
+  pictionaryWord: string | null;
   crash: CrashState;
   audit: AuditReport | null;
   permissions: string[];
@@ -80,6 +73,7 @@ export interface ContextType extends ContextDataType {
   createSession(gameKind: GameKind): Promise<GameSession | null>;
   joinSession(id: string): Promise<void>;
   loadGame(kind: GameKind, id: string): Promise<void>;
+  forgetLastGame(): void;
   createCodenames(sessionId: string): Promise<void>;
   startCodenames(id: string): Promise<void>;
   guessCodenames(id: string, word: string): Promise<void>;
@@ -134,6 +128,7 @@ const initialState: ContextDataType = {
   codenames: null,
   ginRummy: null,
   pictionary: null,
+  pictionaryWord: null,
   crash: { round: null, myBet: null, history: [] },
   audit: null,
   permissions: [],
@@ -156,6 +151,55 @@ function clearLegacyTokens() {
   } catch {
     // Storage may be unavailable (privacy mode / blocked cookies); in-memory
     // auth still works, so never fail a session over cleanup.
+  }
+}
+
+interface LastGameState {
+  sessionId?: string;
+  gameId?: string;
+  gameKind?: GameKind;
+  secretWord?: string;
+}
+
+function readAllLastGames(): Record<string, LastGameState> {
+  return JSON.parse(localStorage.getItem(config.lastGameKey) ?? "{}") as Record<
+    string,
+    LastGameState
+  >;
+}
+
+/** Non-sensitive UI bookkeeping, partitioned by user id. No token is ever
+ * written here: the refresh cookie and in-memory access token remain the only
+ * credentials. */
+function readLastGame(userId: string | null | undefined): LastGameState {
+  if (!userId) return {};
+  try {
+    return readAllLastGames()[userId] ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLastGame(userId: string | null | undefined, patch: LastGameState) {
+  if (!userId) return;
+  try {
+    const all = readAllLastGames();
+    all[userId] = { ...(all[userId] ?? {}), ...patch };
+    localStorage.setItem(config.lastGameKey, JSON.stringify(all));
+  } catch {
+    // A blocked storage backend only disables session restoration; the live
+    // game state in React still works, so never fail an action over this.
+  }
+}
+
+function forgetLastGame(userId: string | null | undefined) {
+  if (!userId) return;
+  try {
+    const all = readAllLastGames();
+    delete all[userId];
+    localStorage.setItem(config.lastGameKey, JSON.stringify(all));
+  } catch {
+    // Same as above: losing the shortcut is harmless when storage is blocked.
   }
 }
 
@@ -245,6 +289,10 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
   const crashRefreshRef = useRef<() => void>(() => undefined);
   const crashRefreshTimerRef = useRef<number | undefined>(undefined);
   const dashboardRefreshRef = useRef<() => void>(() => undefined);
+  // Assigned after loadGame exists so the restore effect can use the latest
+  // loader without re-running whenever unrelated state (e.g. crash history)
+  // changes its identity.
+  const restoreGameRef = useRef<(kind: GameKind, id: string) => Promise<void>>(async () => undefined);
 
   // tokenRef is written only by identity transitions and token rotation above;
   // it is deliberately not mirrored from state.token, because a state commit
@@ -373,8 +421,6 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
         // into a phantom sign-out that a reload would immediately undo.
         if (err instanceof ApiError && (err.status === 400 || err.status === 401)) {
           identityEstablishedRef.current = false;
-          // The credential is gone; stop every later page load from retrying.
-          clearSessionHint();
           // At bootstrap there is no identity to clear. Bumping the generation
           // here would discard a login queued behind this refresh: guard()
           // captures the generation before serializeAuth drains the queue.
@@ -451,10 +497,6 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     let cancelled = false;
     const generation = authGenerationRef.current;
     clearLegacyTokens();
-    if (!hasSessionHint()) {
-      update({ ready: true });
-      return;
-    }
     void (async () => {
       try {
         const data = await refreshSession();
@@ -718,7 +760,6 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     // Drop the in-memory token up front and stop rendering the outgoing user's
     // data while the network request is still in flight.
     clearLegacyTokens();
-    clearSessionHint();
     resetState(null, null, generation);
     // The logout must be the last cookie write. serializeAuth drains any
     // refresh in flight first and queues later logins behind the revocation;
@@ -770,10 +811,11 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
         session: result.session,
         sessions: [result.session, ...state.sessions],
       });
+      saveLastGame(state.user?.id, { sessionId: result.session.id, gameId: undefined });
       toast.success("Session created");
       return result.session;
     },
-    [call, guard, state.sessions, updateIfCurrent],
+    [call, guard, state.sessions, state.user?.id, updateIfCurrent],
   );
 
   const joinSession = useCallback(
@@ -797,9 +839,10 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
           session: sessionData.session,
           players: sessionData.players,
         });
+        saveLastGame(state.user?.id, { sessionId: sessionData.session.id });
       }
     },
-    [call, guard, isCurrent, updateIfCurrent],
+    [call, guard, isCurrent, state.user?.id, updateIfCurrent],
   );
 
   const loadGame = useCallback(
@@ -817,7 +860,16 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       const result = await guard("Load game", () => call<Record<string, unknown>>(paths[kind]));
       if (!result || !isCurrent(token, generation)) return;
       const data = result as Record<string, unknown>;
-      if (kind === "codenames") patch.codenames = normalizeCodenames(data.game as CodenamesGame);
+      if (kind === "codenames") {
+        // `clues`, `guesses` and `revealed` are siblings of `game` in the
+        // service response. Dropping them used to leave an empty board.
+        patch.codenames = {
+          ...normalizeCodenames(data.game as CodenamesGame),
+          clues: (data.clues ?? []) as CodenamesGame["clues"],
+          guesses: (data.guesses ?? []) as CodenamesGame["guesses"],
+          revealed: (data.revealed ?? []) as CodenamesGame["revealed"],
+        };
+      }
       if (kind === "gin-rummy")
         patch.ginRummy = normalizeGinRummy(data.game as GinRummyGame, state.user?.id);
       if (kind === "pictionary") {
@@ -834,9 +886,49 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
         patch.crash = { round, myBet: (data.myBet as CrashBet) ?? null, history: state.crash.history };
       }
       updateIfCurrent(token, generation, patch);
+      saveLastGame(state.user?.id, { gameId: id, gameKind: kind });
     },
     [call, guard, isCurrent, state.crash.history, state.user?.id, updateIfCurrent],
   );
+
+  useEffect(() => {
+    restoreGameRef.current = loadGame;
+  }, [loadGame]);
+
+  // Restore the last board this user opened. Only non-sensitive ids are read
+  // back from storage, and every one is revalidated through the gateway before
+  // it is trusted, so a stale id simply clears the saved shortcut.
+  useEffect(() => {
+    const userId = state.user?.id;
+    const saved = readLastGame(userId);
+    if (!userId || !saved.gameId || !saved.gameKind) return;
+    let cancelled = false;
+    void (async () => {
+      if (saved.sessionId) {
+        const sessionData = await call<{ session: GameSession; players: GamePlayer[] }>(
+          `/game/sessions/${saved.sessionId}`,
+        ).catch(() => null);
+        if (cancelled || !sessionData) return;
+        updateIfCurrent(identityRef.current, authGenerationRef.current, (prev) => ({
+          session: sessionData.session,
+          players: sessionData.players,
+          sessions: [sessionData.session, ...prev.sessions.filter((item) => item.id !== sessionData.session.id)],
+        }));
+      }
+      await restoreGameRef.current(saved.gameKind as GameKind, saved.gameId as string);
+      if (cancelled) return;
+      if (saved.gameKind === "pictionary" && saved.secretWord) {
+        updateIfCurrent(identityRef.current, authGenerationRef.current, {
+          pictionaryWord: saved.secretWord,
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [call, state.user?.id, updateIfCurrent]);
+
+  const forgetCurrentGame = useCallback(() => forgetLastGame(state.user?.id), [state.user?.id]);
 
   const createCodenames = useCallback(
     async (sessionId: string) => {
@@ -855,9 +947,14 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
           codenames: normalizeCodenames(result.game),
           gameId: result.game.id,
         });
+        saveLastGame(state.user?.id, {
+          sessionId,
+          gameId: result.game.id,
+          gameKind: "codenames",
+        });
       }
     },
-    [call, guard, updateIfCurrent],
+    [call, guard, state.user?.id, updateIfCurrent],
   );
 
   const startCodenames = useCallback(
@@ -879,9 +976,15 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       const generation = authGenerationRef.current;
       if (!token) return;
       const result = await guard("Guess", () =>
-        call(`/codenames/games/${id}/guess`, { method: "POST", body: { word } }),
+        call<{ outcome?: string }>(`/codenames/games/${id}/guess`, {
+          method: "POST",
+          body: { word },
+        }),
       );
-      if (result && isCurrent(token, generation)) await loadGame("codenames", id);
+      if (!result || !isCurrent(token, generation)) return;
+      const outcome = (result as { outcome?: string }).outcome;
+      if (outcome) toast.info(`Guess: ${outcome.replace(/_/g, " ")}`);
+      await loadGame("codenames", id);
     },
     [call, guard, isCurrent, loadGame],
   );
@@ -919,6 +1022,11 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
           ginRummy: normalizeGinRummy(result.game, state.user?.id),
           gameId: result.game.id,
         });
+        saveLastGame(state.user?.id, {
+          sessionId,
+          gameId: result.game.id,
+          gameKind: "gin-rummy",
+        });
       }
     },
     [call, guard, state.user?.id, updateIfCurrent],
@@ -937,6 +1045,11 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
           gameKind: "gin-rummy",
           ginRummy: normalizeGinRummy(result.game, state.user?.id),
           gameId: result.game.id,
+        });
+        saveLastGame(state.user?.id, {
+          sessionId: result.game.session_id,
+          gameId: result.game.id,
+          gameKind: "gin-rummy",
         });
       }
     },
@@ -981,20 +1094,28 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       const generation = authGenerationRef.current;
       if (!token) return;
       const result = (await guard("Create Pictionary round", () =>
-        call<{ round: PictionaryRound }>("/pictionary/rounds", {
+        call<{ round: PictionaryRound; word: string }>("/pictionary/rounds", {
           method: "POST",
           body: { session_id: sessionId },
         }),
-      )) as { round: PictionaryRound } | null;
+      )) as { round: PictionaryRound; word?: string } | null;
       if (result) {
+        const secretWord = result.word ?? null;
         updateIfCurrent(token, generation, {
           gameKind: "pictionary",
           pictionary: result.round,
+          pictionaryWord: secretWord,
           gameId: result.round.id,
+        });
+        saveLastGame(state.user?.id, {
+          sessionId,
+          gameId: result.round.id,
+          gameKind: "pictionary",
+          secretWord: secretWord ?? undefined,
         });
       }
     },
-    [call, guard, updateIfCurrent],
+    [call, guard, state.user?.id, updateIfCurrent],
   );
 
   const guessPictionary = useCallback(
@@ -1003,16 +1124,27 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       const generation = authGenerationRef.current;
       if (!token) return;
       const result = await guard("Guess", () =>
-        call(`/pictionary/rounds/${id}/guess`, {
+        call<{ word?: string; won?: boolean }>(`/pictionary/rounds/${id}/guess`, {
           method: "POST",
           // The service validates round_id in the body as well as the path;
           // omitting it made every guess from the UI fail with 400.
           body: { round_id: id, guess },
         }),
       );
-      if (result && isCurrent(token, generation)) await loadGame("pictionary", id);
+      if (!result || !isCurrent(token, generation)) return;
+      // A winning guess reveals the word; keep it so the round can still be
+      // rendered correctly after a reload.
+      const revealedWord = (result as { word?: string }).word;
+      if (revealedWord)
+        updateIfCurrent(token, generation, { pictionaryWord: revealedWord });
+      saveLastGame(state.user?.id, {
+        gameId: id,
+        gameKind: "pictionary",
+        ...(revealedWord ? { secretWord: revealedWord } : {}),
+      });
+      await loadGame("pictionary", id);
     },
-    [call, guard, isCurrent, loadGame],
+    [call, guard, isCurrent, loadGame, state.user?.id, updateIfCurrent],
   );
 
   const loadRooms = useCallback(async () => {
@@ -1284,6 +1416,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       createSession,
       joinSession,
       loadGame,
+      forgetLastGame: forgetCurrentGame,
       createCodenames,
       startCodenames,
       guessCodenames,
@@ -1320,6 +1453,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       createSession,
       joinSession,
       loadGame,
+      forgetCurrentGame,
       createCodenames,
       startCodenames,
       guessCodenames,

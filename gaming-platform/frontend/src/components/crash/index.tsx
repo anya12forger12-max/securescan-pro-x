@@ -125,7 +125,15 @@ function CrashStage() {
 }
 
 function Stage() {
-  const { gameKind, codenames, ginRummy, pictionary, user, session } = useGamingContext();
+  const {
+    gameKind,
+    codenames,
+    ginRummy,
+    pictionary,
+    pictionaryWord,
+    user,
+    session,
+  } = useGamingContext();
 
   if (gameKind === 'crash') return <CrashStage />;
 
@@ -140,6 +148,8 @@ function Stage() {
   }
 
   if (gameKind === 'codenames' && codenames) {
+    const latestClue = codenames.clues?.[0];
+    const lastGuess = codenames.guesses?.[codenames.guesses.length - 1];
     return (
       <div className="stage-game">
         <div className="stage-title">
@@ -151,6 +161,26 @@ function Stage() {
           <div><small>Turn</small><strong>{codenames.turn ?? '—'}</strong></div>
           <div><small>Game ID</small><code>{codenames.id.slice(0, 8)}</code></div>
         </div>
+        {latestClue && (
+          <p className="hint">
+            <strong>Latest clue:</strong> {latestClue.word} · {latestClue.number}
+            {latestClue.team ? ` · ${latestClue.team}` : ''}
+          </p>
+        )}
+        {codenames.revealed && codenames.revealed.length > 0 && (
+          <div className="revealed-list" aria-label="Revealed words">
+            {codenames.revealed.map((item) => (
+              <span key={`${item.word}-${item.revealed_at}`} className={item.team}>
+                {item.word}
+              </span>
+            ))}
+          </div>
+        )}
+        {lastGuess && (
+          <p className="hint">
+            Last guess: {lastGuess.word} · {lastGuess.outcome.replace(/_/g, ' ')}
+          </p>
+        )}
         <p className="hint">The board is secret. Submit a word from the board; the server reveals it and derives your team.</p>
       </div>
     );
@@ -175,6 +205,12 @@ function Stage() {
   }
 
   if (gameKind === 'pictionary' && pictionary) {
+    const isDrawer = pictionary.drawer_id === user?.id;
+    // The service reveals the word only to the drawer on create and to the
+    // player who wins the round. Show it in either case; everyone else keeps
+    // seeing the masked placeholder.
+    const canSeeWord = Boolean(pictionaryWord) && (isDrawer || Boolean(pictionary.winner_id));
+    const shownWord = canSeeWord ? pictionaryWord : pictionary.masked_word ?? '•••••';
     return (
       <div className="stage-game">
         <div className="stage-title">
@@ -183,15 +219,30 @@ function Stage() {
           {pictionary.winner_id && <strong>Winner: {pictionary.winner_id.slice(0, 8)}</strong>}
         </div>
         <div className="word-placeholder" aria-label="Drawing area">
-          <span>{pictionary.masked_word ?? '•••••'}</span>
-          <small>draw on paper or your preferred canvas; submit guesses below</small>
+          <span>{shownWord}</span>
+          <small>
+            {isDrawer && canSeeWord
+              ? 'Your word — draw it without saying it'
+              : canSeeWord
+                ? 'Word revealed — round complete'
+                : 'draw on paper or your preferred canvas; submit guesses below'}
+          </small>
         </div>
         <div className="guess-list">
-          {(pictionary.guesses ?? []).slice(-5).map((guess, index) => (
-            <span key={`${guess.user_id}-${index}`} className={guess.correct ? 'correct' : ''}>
-              {guess.guess}
-            </span>
-          ))}
+          {(pictionary.guesses ?? []).slice(-5).map((guess, index) => {
+            // While the word is hidden the service omits both the text and
+            // its correctness for other players. Render that explicitly
+            // instead of an empty chip that looks like a rendering failure.
+            const hidden = typeof guess.guess !== 'string' || typeof guess.correct !== 'boolean';
+            return (
+              <span
+                key={`${guess.user_id}-${index}`}
+                className={hidden ? 'hidden' : guess.correct ? 'correct' : ''}
+              >
+                {hidden ? `${guess.username ?? 'player'}: hidden` : guess.guess}
+              </span>
+            );
+          })}
         </div>
       </div>
     );

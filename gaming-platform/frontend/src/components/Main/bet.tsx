@@ -24,6 +24,7 @@ export default function Bet() {
     createPictionary,
     guessPictionary,
     loadGame,
+    forgetLastGame,
     crash,
     placeCrashBet,
     cashOutCrash,
@@ -33,7 +34,8 @@ export default function Bet() {
   const [kind, setKind] = React.useState<GameKind>(gameKind);
   const [sessionId, setSessionId] = React.useState('');
   const [gameId, setGameId] = React.useState('');
-  const [word, setWord] = React.useState('');
+  const [guessWord, setGuessWord] = React.useState('');
+  const [clueWord, setClueWord] = React.useState('');
   const [clueNumber, setClueNumber] = React.useState(2);
   const [card, setCard] = React.useState('');
   const [melds, setMelds] = React.useState('');
@@ -51,15 +53,40 @@ export default function Bet() {
     if (created) setSessionId(created.id);
   };
 
+  const changeKind = (next: GameKind) => {
+    if (next === kind) return;
+    // A game id belongs to one game type. Keeping it while switching types used
+    // to send Codenames ids to the Pictionary endpoint (and vice versa).
+    setKind(next);
+    setSessionId('');
+    setGameId('');
+    setGuessWord('');
+    setClueWord('');
+    setCard('');
+    setMelds('');
+    setLabReport(null);
+    forgetLastGame();
+    update({
+      gameKind: next,
+      gameId: '',
+      session: null,
+      players: [],
+      codenames: null,
+      ginRummy: null,
+      pictionary: null,
+      pictionaryWord: null,
+    });
+  };
+
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!activeGameId) return;
+    if (!activeGameId || !guessWord.trim()) return;
     if (kind === 'codenames') {
-      if (word) void guessCodenames(activeGameId, word);
-      setWord('');
+      void guessCodenames(activeGameId, guessWord.trim());
+      setGuessWord('');
     } else if (kind === 'pictionary') {
-      if (word) void guessPictionary(activeGameId, word);
-      setWord('');
+      void guessPictionary(activeGameId, guessWord.trim());
+      setGuessWord('');
     }
   };
 
@@ -71,11 +98,7 @@ export default function Bet() {
           className="control-select"
           aria-label="Game type"
           value={kind}
-          onChange={(event) => {
-            const next = event.target.value as GameKind;
-            setKind(next);
-            update({ gameKind: next });
-          }}
+          onChange={(event) => changeKind(event.target.value as GameKind)}
         >
           <option value="codenames">Codenames</option>
           <option value="gin-rummy">Gin-rummy</option>
@@ -97,8 +120,14 @@ export default function Bet() {
         <button className="primary-button" type="button" onClick={() => void makeSession()}>
           Create session
         </button>
-        <button className="ghost-button" type="button" disabled={!sessionId} onClick={() => void joinSession(sessionId)}>
-          Join session
+        <button
+          className="ghost-button"
+          type="button"
+          disabled={!sessionId || sessionId === session?.id}
+          title={sessionId === session?.id ? 'You are already in this session' : undefined}
+          onClick={() => void joinSession(sessionId)}
+        >
+          {sessionId === session?.id ? 'Joined' : 'Join session'}
         </button>
       </div>
 
@@ -227,9 +256,10 @@ export default function Bet() {
           </button>
           <form className="inline-form" onSubmit={submit}>
             <input
-              value={word}
-              onChange={(event) => setWord(event.target.value)}
+              value={guessWord}
+              onChange={(event) => setGuessWord(event.target.value)}
               placeholder="Guess a word"
+              aria-label="Codenames guess"
               className="control-input"
             />
             <button type="submit" disabled={!activeGameId} className="primary-button">
@@ -238,9 +268,10 @@ export default function Bet() {
           </form>
           <div className="inline-form">
             <input
-              value={word}
-              onChange={(event) => setWord(event.target.value)}
+              value={clueWord}
+              onChange={(event) => setClueWord(event.target.value)}
               placeholder="Clue word"
+              aria-label="Clue word"
               className="control-input"
             />
             <input
@@ -252,7 +283,14 @@ export default function Bet() {
               aria-label="Clue number"
               className="control-input"
             />
-            <button type="button" disabled={!activeGameId} onClick={() => void clueCodenames(activeGameId, word, clueNumber)}>
+            <button
+              type="button"
+              disabled={!activeGameId || !clueWord.trim()}
+              onClick={() => {
+                void clueCodenames(activeGameId, clueWord.trim(), clueNumber);
+                setClueWord('');
+              }}
+            >
               Clue
             </button>
           </div>
@@ -271,8 +309,14 @@ export default function Bet() {
             Draw discard
           </button>
           <div className="inline-form">
-            <input value={card} onChange={(event) => setCard(event.target.value)} placeholder="10H" className="control-input" />
-            <button type="button" disabled={!activeGameId} onClick={() => void discardGinRummy(activeGameId, card)}>
+            <input
+              value={card}
+              onChange={(event) => setCard(event.target.value)}
+              placeholder="10H"
+              aria-label="Card to discard"
+              className="control-input"
+            />
+            <button type="button" disabled={!activeGameId || !card.trim()} onClick={() => void discardGinRummy(activeGameId, card)}>
               Discard
             </button>
           </div>
@@ -281,6 +325,7 @@ export default function Bet() {
               value={melds}
               onChange={(event) => setMelds(event.target.value)}
               placeholder="7H,8H,9H | 2S,2D,2C"
+              aria-label="Melds, separated by |"
               className="control-input"
             />
             <button
@@ -304,8 +349,8 @@ export default function Bet() {
         <div className="control-actions">
           <form className="inline-form" onSubmit={submit}>
             <input
-              value={word}
-              onChange={(event) => setWord(event.target.value)}
+              value={guessWord}
+              onChange={(event) => setGuessWord(event.target.value)}
               placeholder="Your guess"
               className="control-input"
             />
