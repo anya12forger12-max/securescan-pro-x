@@ -68,12 +68,9 @@ const isSecureOrigin = (value) => /^https:\/\//i.test(value);
 const refreshCookieSecure = (req) => {
   const origin = headerString(req.headers, "origin");
   if (origin && CORS_ORIGINS.includes(origin)) return isSecureOrigin(origin);
-  // A TLS-terminating proxy may hide the browser's HTTPS origin. Treat an
-  // explicit forwarded https as decisive; an http value is ignored so this
-  // fallback can only strengthen the cookie, never downgrade a secure login.
-  const forwarded = headerString(req.headers, "x-forwarded-proto")
-    ?.split(",")[0].trim().toLowerCase();
-  if (forwarded === "https") return true;
+  // The trusted reverse proxy owns protocol metadata; a caller must not be able
+  // to force a Secure cookie by sending X-Forwarded-Proto themselves. Without an
+  // Origin, fall back to the globally configured allow-list.
   return CORS_ORIGINS.length > 0 && CORS_ORIGINS.every(isSecureOrigin);
 };
 
@@ -184,7 +181,7 @@ function requestRefreshToken(req) {
       const separator = part.indexOf("=");
       if (separator < 0 || part.slice(0, separator).trim() !== REFRESH_COOKIE) continue;
       const raw = part.slice(separator + 1).trim();
-      if (!raw) return null;
+      if (!raw) return "";
       try {
         return decodeURIComponent(raw);
       } catch {
