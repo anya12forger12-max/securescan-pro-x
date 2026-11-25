@@ -89,7 +89,7 @@ function CrashStage() {
       </div>
 
       <svg className="crash-curve" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-        <polyline points={points} fill="none" stroke={round.status === 'finished' ? '#ff6b7a' : '#38e8b0'} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        <polyline points={points} fill="none" stroke={round.status === 'finished' ? '#FF00A8' : '#39FF14'} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
       </svg>
 
       <div className="game-facts">
