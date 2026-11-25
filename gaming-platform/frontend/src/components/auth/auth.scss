@@ -99,8 +99,7 @@ $muted: #78A0D0;
   background: linear-gradient(135deg, $electric-cyan, $neon-purple);
   font-weight: 900;
   letter-spacing: 0.05em;
-  box-shadow: 0 0 12px #00F5FF, 0 0 20% #00F5FF, inset 0 0 100px rgba(0,0,0,0.5);
-  box-shadow: 0 0 30px rgba(0, 245, 255, 0.3);
+  box-shadow: 0 0 12px rgba(0, 245, 255, 0.55), 0 0 30px rgba(0, 245, 255, 0.3);
 }
 
 /* Auth card */
