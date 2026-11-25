@@ -41,9 +41,9 @@ class AdminController extends Controller {
 		$jackpot_easy = Jackpot::where('room', 'easy')->orderBy('id', 'desc')->first();
 		$jackpot_medium = Jackpot::where('room', 'medium')->orderBy('id', 'desc')->first();
 		$jackpot_hard = Jackpot::where('room', 'hard')->orderBy('id', 'desc')->first();
-        view()->share('chances_easy', $this->getChancesOfGame($jackpot_easy->id));
-        view()->share('chances_medium', $this->getChancesOfGame($jackpot_medium->id));
-        view()->share('chances_hard', $this->getChancesOfGame($jackpot_hard->id));
+        view()->share('chances_easy', $jackpot_easy ? $this->getChancesOfGame($jackpot_easy->id) : []);
+        view()->share('chances_medium', $jackpot_medium ? $this->getChancesOfGame($jackpot_medium->id) : []);
+        view()->share('chances_hard', $jackpot_hard ? $this->getChancesOfGame($jackpot_hard->id) : []);
     }
 	
 	public function index() {
@@ -383,6 +383,7 @@ class AdminController extends Controller {
         $withdraws = [];
         foreach($list as $itm) {
             $user = User::where('id', $itm->user_id)->first();
+            if(!$user) continue;
             $withdraws[] = [
                 'id' => $itm->id,
                 'user_id' => $user->id,
@@ -399,6 +400,7 @@ class AdminController extends Controller {
         $finished = [];
         foreach($list2 as $itm) {
             $user = User::where('id', $itm->user_id)->first();
+            if(!$user) continue;
             $finished[] = [
                 'id' => $itm->id,
                 'user_id' => $user->id,
@@ -415,29 +417,43 @@ class AdminController extends Controller {
     }
 	
 	public function withdrawSend($id) {
-        $withdraw = Withdraw::where('id', $id)->first();
-		if($withdraw->status > 0) return redirect()->route('admin.withdraws')->with('error', 'This withdraw has already been processed or canceled');
-		
+        // Claim the row before calling the payment provider. A read-then-check
+        // lets two concurrent submissions (or an operator retry) send the same
+        // withdrawal twice. Status 3 means "processing" and is reverted on
+        // failure so the request can be retried safely.
+        $claimed = DB::table('withdraw')->where('id', $id)->where('status', 0)->update(['status' => 3]);
+        if(!$claimed) return redirect()->route('admin.withdraws')->with('error', 'This withdraw has already been processed or canceled');
+        $withdraw = Withdraw::find($id);
+        if(!$withdraw) {
+            DB::table('withdraw')->where('id', $id)->where('status', 3)->update(['status' => 0]);
+            return redirect()->route('admin.withdraws')->with('error', 'Withdraw not found!');
+        }
+        $fail = function($msg) use ($id) {
+            DB::table('withdraw')->where('id', $id)->where('status', 3)->update(['status' => 0]);
+            return redirect()->route('admin.withdraws')->with('error', $msg);
+        };
+        $done = function() use ($id) {
+            DB::table('withdraw')->where('id', $id)->where('status', 3)->update(['status' => 1]);
+        };
+
 		if($withdraw->system == 'perfectmoney') {
 			$descripion = 'Withdraw from '.$this->settings->domain. ' number: '.$withdraw->id;
 			$url = file_get_contents('https://perfectmoney.is/acct/confirm.asp?AccountID=' . urlencode(trim($this->settings->pm_uid)) . '&PassPhrase=' . urlencode(trim($this->settings->pm_pass)) . '&Payer_Account=' . urlencode(trim($this->settings->pm_usd_wallet)) . '&Payee_Account=' . urlencode(trim($withdraw->wallet)) . '&Amount=' . $withdraw->value . '&Memo=' . urlencode(trim($descripion)) . '&PAYMENT_ID=' . urlencode(trim($withdraw->id)), false, stream_context_create($this->ssl_fix));
 			
-			if(!$url) return redirect()->route('admin.withdraws')->with('error', 'Connection error');
-			if(!preg_match_all("/<input name='(.*)' type='hidden' value='(.*)'>/", $url, $result, PREG_SET_ORDER)) return redirect()->route('admin.withdraws')->with('error', 'Invalid output');
+			if(!$url) return $fail('Connection error');
+			if(!preg_match_all("/<input name='(.*)' type='hidden' value='(.*)'>/", $url, $result, PREG_SET_ORDER)) return $fail('Invalid output');
 			
 			$data = [];
 			foreach($result as $item) {
 				if($item[1] == 'ERROR') {
-					return redirect()->route('admin.withdraws')->with('error', $item[2]);
+					return $fail($item[2]);
 				} else {
 					$data['data'][$item[1]] = $item[2];
 				}
 			}
 
 			$data['status'] = 'success';
-			
-			$withdraw->status = 1;
-			$withdraw->save();
+			$done();
 		} else {
 			$req = array(
 				'amount' => $withdraw->value,
@@ -450,10 +466,9 @@ class AdminController extends Controller {
 			$res = parent::api_call('create_withdrawal', $req);
 			
 			if($res['error'] == 'ok') {
-				$withdraw->status = 1;
-				$withdraw->save();
+				$done();
 			} else {
-				return redirect()->route('admin.withdraws')->with('success', $res['error']);
+				return $fail($res['error']);
 			}
 		}
 		
@@ -461,21 +476,35 @@ class AdminController extends Controller {
 	}
     
     public function withdrawReturn($id) {
-        $withdraw = Withdraw::where('id', $id)->first();
-		if($withdraw->status > 0) return redirect()->route('admin.withdraws')->with('error', 'This withdraw has already been processed or canceled');
-        $user = User::where('id', $withdraw->user_id)->first();
-        
-        $user->balance += $withdraw->value;
-        $user->requery += $withdraw->value;
-        $user->save();
-        $withdraw->status = 2;
-        $withdraw->save();
+        // Claim atomically: two concurrent returns must not both credit the
+        // same withdrawal to the user's balance.
+        $claimed = DB::table('withdraw')->where('id', $id)->where('status', 0)->update(['status' => 2]);
+        if(!$claimed) return redirect()->route('admin.withdraws')->with('error', 'This withdraw has already been processed or canceled');
+        $withdraw = Withdraw::find($id);
+        $user = $withdraw ? User::find($withdraw->user_id) : null;
+        if(!$user) {
+            DB::table('withdraw')->where('id', $id)->where('status', 2)->update(['status' => 0]);
+            return redirect()->route('admin.withdraws')->with('error', 'User not found!');
+        }
+
+        DB::beginTransaction();
+        try {
+            $fresh = User::where('id', $user->id)->lockForUpdate()->first();
+            $fresh->balance += $withdraw->value;
+            $fresh->requery += $withdraw->value;
+            $fresh->save();
+            DB::commit();
+        } catch(Exception $e) {
+            DB::rollBack();
+            DB::table('withdraw')->where('id', $id)->where('status', 2)->update(['status' => 0]);
+            return redirect()->route('admin.withdraws')->with('error', 'Something went wrong...');
+        }
 			
 		$this->redis->publish('updateBalance', json_encode([
 			'unique_id' => $user->unique_id,
-			'balance'	=> $user->balance
+			'balance'	=> $fresh->balance
 		]));
-        
+
         return redirect()->route('admin.withdraws')->with('success', 'You returned '.$withdraw->valueWithCom.'$ on balance for '.$user->username);
     }
 	
