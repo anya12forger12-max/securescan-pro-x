@@ -12,7 +12,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { promisify } from "node:util";
-import { baseEnvSchema, dbPoolOptions, loadEnv, registerErrorHandler } from "@gp/config";
+import { baseEnvSchema, dbPoolOptions, loadEnv, parseCorsOrigins, registerErrorHandler } from "@gp/config";
 import { ERROR_CODES } from "@gp/shared-types";
 
 /**
@@ -38,26 +38,7 @@ const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 // The browser talks to the gateway over the configured origin. Origins are
 // normalised once so `http://localhost:3000/` behaves exactly like the bare
 // form for both CORS and the cookie's Secure decision.
-const CORS_ORIGINS = env.CORS_ORIGIN.split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean)
-  .map((value) => {
-    try {
-      const url = new URL(value);
-      if (
-        (url.protocol === "http:" || url.protocol === "https:") &&
-        !url.username &&
-        !url.password &&
-        url.pathname === "/" &&
-        !url.search &&
-        !url.hash
-      )
-        return url.origin;
-    } catch {
-      // Keep the raw value; an invalid origin must not widen the allow-list.
-    }
-    return value;
-  });
+const CORS_ORIGINS = parseCorsOrigins(env.CORS_ORIGIN);
 const REFRESH_COOKIE = "gp_refresh_token";
 const REFRESH_COOKIE_PATH = "/v1/auth";
 const REFRESH_COOKIE_MAX_AGE = env.REFRESH_TTL_DAYS * 24 * 60 * 60;
@@ -173,7 +154,10 @@ const clearRefreshCookie = (reply, req) =>
 
 /** Cookie first: a browser must never fall back to an attacker-supplied body
  * token while it has a refresh cookie. Body tokens remain available only to
- * non-browser clients that have no cookie at all. */
+ * non-browser clients that have no refresh cookie at all.
+ *
+ * Return `null` only when there is no refresh cookie. An empty refresh cookie
+ * returns `""` so callers cannot silently fall through to a body token. */
 function requestRefreshToken(req) {
   const header = headerString(req.headers, "cookie");
   if (header) {

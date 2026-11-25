@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { randomUUID } from "node:crypto";
-import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv } from "@gp/config";
+import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, parseCorsOrigins } from "@gp/config";
 import { ERROR_CODES, serviceTokenOk, toMoney } from "@gp/shared-types";
 
 /**
@@ -36,7 +36,7 @@ const env = loadEnv(envSchema);
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
-await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
+await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
 await app.register(jwt, { secret: env.JWT_ACCESS_SECRET });
 
 app.addHook("onRequest", async (req, reply) => {

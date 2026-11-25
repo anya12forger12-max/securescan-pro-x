@@ -3,7 +3,7 @@ import { z } from "zod";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { randomUUID } from "node:crypto";
-import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv } from "@gp/config";
+import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, parseCorsOrigins } from "@gp/config";
 import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
 
 /**
@@ -24,9 +24,7 @@ const envSchema = baseEnvSchema.extend({
 const env = loadEnv(envSchema);
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL, 10));
 
-const CORS_ORIGINS = env.CORS_ORIGIN.split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const CORS_ORIGINS = parseCorsOrigins(env.CORS_ORIGIN);
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
 await app.register(cors, { origin: CORS_ORIGINS });
 

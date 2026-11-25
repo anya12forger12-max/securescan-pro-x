@@ -22,6 +22,9 @@ export declare const baseEnvSchema: z.ZodObject<{
   NODE_ENV: z.ZodDefault<z.ZodEnum<["development", "test", "production"]>>;
 }>;
 
+/** Parse a comma-separated CORS_ORIGIN into exact browser Origin strings. */
+export declare function parseCorsOrigins(value?: string): string[];
+
 /**
  * Bounded Postgres pool settings. DB_POOL_MAX overrides fallbackMax for the
  * whole fleet; leaks are bounded by idle/connection timeouts.

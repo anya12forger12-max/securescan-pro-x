@@ -10,6 +10,7 @@ import {
   dbPoolOptions,
   fetchWithTimeout,
   loadEnv,
+  parseCorsOrigins,
 } from "@gp/config";
 import { ERROR_CODES, moneyMul, serviceTokenOk, toMoney } from "@gp/shared-types";
 
@@ -66,7 +67,7 @@ const BETTING_TOLERANCE_MS = 1000;
 const UNSETTLED_RECONCILE_MS = 2000;
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
-await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
+await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
 await app.register(jwt, { secret: env.JWT_ACCESS_SECRET });
 
 app.addHook("onRequest", async (req, reply) => {

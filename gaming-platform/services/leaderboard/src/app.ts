@@ -3,6 +3,7 @@ import Fastify from "fastify";
 import type { FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
+import { parseCorsOrigins } from "@gp/config";
 import { getPool, closePool, createLeaderboardEntry, getLeaderboard, getUserBestScores, getUserStats, verifyGameResult } from "./db.js";
 import type { LeaderboardEnv } from "./env.js";
 
@@ -34,7 +35,7 @@ const LimitSchema = z.coerce.number().int().min(1).max(100).default(50);
 export async function buildLeaderboardService(env: LeaderboardEnv) {
   const app = Fastify({ logger: { level: env.LOG_LEVEL } });
 
-  await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
+  await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
   await app.register(jwt, {
     secret: env.JWT_ACCESS_SECRET,
     sign: { expiresIn: Math.floor(900) },

@@ -76,3 +76,12 @@ export async function listSessionPlayers(pool: PoolType, sessionId: string): Pro
   const result = await pool.query<GamePlayer>(`SELECT id, session_id, user_id, joined_at FROM game_players WHERE session_id = $1 ORDER BY joined_at ASC`, [sessionId]);
   return result.rows;
 }
+
+/** The host joins on creation, so this covers hosts and invited players. */
+export async function isSessionParticipant(pool: PoolType, sessionId: string, userId: string): Promise<boolean> {
+  const result = await pool.query<{ present: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM game_players WHERE session_id = $1 AND user_id = $2) AS present`,
+    [sessionId, userId],
+  );
+  return result.rows[0]?.present === true;
+}

@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { createHash, randomUUID } from "node:crypto";
-import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, registerErrorHandler } from "@gp/config";
+import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, registerErrorHandler, parseCorsOrigins } from "@gp/config";
 import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
 
 /**
@@ -48,7 +48,7 @@ const AUDIT_LOCK_KEY = 3013001;
 const AUDIT_COLUMNS = `seq, prev_hash, hash, actor, action, target, metadata, created_at`;
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
-await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
+await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
 await app.register(jwt, { secret: env.JWT_ACCESS_SECRET });
 registerErrorHandler(app);
 

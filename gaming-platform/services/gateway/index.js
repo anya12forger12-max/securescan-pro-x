@@ -6,6 +6,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRateLimiter } from "./rate-limit.js";
+import { parseCorsOrigins } from "@gp/config";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
@@ -20,27 +21,7 @@ const ADMIN_BOOTSTRAP_TOKEN = process.env.ADMIN_BOOTSTRAP_TOKEN;
 // send `Origin` without a trailing slash, so a raw allow-list entry such as
 // `http://localhost:3000/` would silently fail CORS while still appearing in
 // connect-src. Malformed entries are kept as-is and rejected by both checks.
-const CORS_ORIGINS = (process.env.CORS_ORIGIN ?? "http://localhost:5173")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean)
-  .map((value) => {
-    try {
-      const url = new URL(value);
-      if (
-        (url.protocol === "http:" || url.protocol === "https:") &&
-        !url.username &&
-        !url.password &&
-        url.pathname === "/" &&
-        !url.search &&
-        !url.hash
-      )
-        return url.origin;
-    } catch {
-      // Fall through to the raw value; it fails validation in both consumers.
-    }
-    return value;
-  });
+const CORS_ORIGINS = parseCorsOrigins(process.env.CORS_ORIGIN);
 
 /** Echo only a configured origin. A comma-separated allow-list in one header
  * is invalid, and credentials require an exact origin rather than `*`. */
@@ -373,7 +354,11 @@ async function recordAdminAudit(req, actorId, action, target, metadata) {
  */
 function auditedMutation(req, method, path, body) {
   const requestId = String(req.headers["x-request-id"] ?? "");
-  const auditPath = String(path ?? "");
+  // `matchesRoute()` deliberately accepts one trailing slash for collection
+  // routes. Audit detection must canonicalize the same way or a privileged
+  // mutation can commit without a hash-chained audit entry.
+  const rawPath = String(path ?? "");
+  const auditPath = rawPath.length > 1 && rawPath.endsWith("/") ? rawPath.slice(0, -1) : rawPath;
   const resourceId = (value) =>
     typeof value === "string" && value.trim().length > 0 ? value.trim() : `request:${requestId}`;
 
@@ -436,9 +421,23 @@ app.addHook("onRequest", async (req, reply) => {
 
 app.get("/health", async () => ({ status: "ok", service: "gateway" }));
 
-/** Aggregate readiness for orchestrators and `npm run smoke`: the gateway is
- * only ready once every downstream service reports its own DB-backed /ready. */
-app.get("/ready", async (_req, reply) => {
+/**
+ * Aggregate readiness for orchestrators and `npm run smoke`: the gateway is
+ * only ready once every downstream service reports its own DB-backed /ready.
+ *
+ * This endpoint is intentionally excluded from the player rate limiter (probes
+ * must not fail closed with Redis), so without a short cache each call fans out
+ * to every peer. Cache the aggregate briefly and coalesce concurrent calls so
+ * a burst of probes can trigger at most one fan-out per window.
+ */
+const READY_CACHE_MS = (() => {
+  const value = Number(process.env.READY_CACHE_MS ?? 2000);
+  return Number.isInteger(value) && value >= 0 ? Math.min(value, 10_000) : 2000;
+})();
+let readyCache = null; // { at, status, body }
+let readyInFlight = null;
+
+async function collectReadiness() {
   const checks = await Promise.all(
     DOWNSTREAM_PORTS.map(async ([service, port]) => {
       try {
@@ -452,10 +451,28 @@ app.get("/ready", async (_req, reply) => {
     }),
   );
   const failed = checks.filter((check) => !check.ok);
-  if (failed.length) {
-    return reply.code(503).send({ status: "not_ready", failed, services: checks.length });
+  return failed.length
+    ? { status: 503, body: { status: "not_ready", failed, services: checks.length } }
+    : { status: 200, body: { status: "ready", services: checks.length } };
+}
+
+app.get("/ready", async (_req, reply) => {
+  reply.header("cache-control", "no-store");
+  const now = Date.now();
+  if (readyCache && now - readyCache.at < READY_CACHE_MS)
+    return reply.code(readyCache.status).send(readyCache.body);
+  if (!readyInFlight) {
+    readyInFlight = collectReadiness()
+      .then((result) => {
+        readyCache = { at: Date.now(), ...result };
+        return result;
+      })
+      .finally(() => {
+        readyInFlight = null;
+      });
   }
-  return { status: "ready", services: checks.length };
+  const result = await readyInFlight;
+  return reply.code(result.status).send(result.body);
 });
 
 /** Rate-limit player traffic before it reaches any downstream service.

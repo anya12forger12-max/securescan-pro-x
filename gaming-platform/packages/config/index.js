@@ -37,6 +37,40 @@ export const baseEnvSchema = z.object({
 });
 
 /**
+ * Parse a comma-separated CORS_ORIGIN into the exact strings browsers send.
+ * Every service and the gateway must use this one implementation: trimming and
+ * URL-normalising in only some processes made edge and peer CORS decisions
+ * diverge (for example `http://localhost:3000/` never matches an Origin
+ * header even though it appears in the gateway's connect-src).
+ *
+ * Malformed entries are kept verbatim so they fail closed as exact,
+ * non-matching origins instead of widening the allow-list.
+ */
+export function parseCorsOrigins(value = "http://localhost:5173") {
+  return String(value)
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+    .map((origin) => {
+      try {
+        const url = new URL(origin);
+        if (
+          (url.protocol === "http:" || url.protocol === "https:") &&
+          !url.username &&
+          !url.password &&
+          url.pathname === "/" &&
+          !url.search &&
+          !url.hash
+        )
+          return url.origin;
+      } catch {
+        // Keep the raw value; an invalid origin must not widen the allow-list.
+      }
+      return origin;
+    });
+}
+
+/**
  * Bounded Postgres pool settings shared by every service.
  *
  * Thirteen services previously opened up to 20 connections each (~270) while

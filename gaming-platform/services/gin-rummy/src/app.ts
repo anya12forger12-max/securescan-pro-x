@@ -5,6 +5,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { PoolClient } from "pg";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
+import { parseCorsOrigins } from "@gp/config";
 import { getPool, closePool, createGame, getGame, getGameForUpdate, joinGameWithSessionSeat, isSessionParticipant, isSessionOfType, recordOutcome, setGameStatus, updateGameState, } from "./db.js";
 import type { GameRow } from "./db.js";
 import type { GinRummyEnv } from "./env.js";
@@ -127,7 +128,7 @@ async function rejectMove(client: PoolClient, reply: FastifyReply, code: number,
 
 export async function buildGinRummyService(env: GinRummyEnv) {
   const app = Fastify({ logger: { level: env.LOG_LEVEL } });
-  await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
+  await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
   await app.register(jwt, {
     secret: env.JWT_ACCESS_SECRET,
     sign: { expiresIn: Math.floor(900) },
