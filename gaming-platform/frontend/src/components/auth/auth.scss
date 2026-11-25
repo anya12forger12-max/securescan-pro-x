@@ -1,32 +1,83 @@
-$back-color: #0e0e12;
-$box-color: #171823;
-$accent: #7c5cff;
-$accent-2: #38e8b0;
-$text: #f2f3f7;
-$muted: #9aa0b5;
-$danger: #ff8a8a;
+@mixin neon-glow($color, $size: 20px) {
+  box-shadow: 
+    0 0 $size $color,
+    0 0 $size 30% $color,
+    inset 0 0 100px rgba(0,0,0,0.5);
+}
 
+$back-color: #050510;
+$dark-navy: #0A1025;
+$box-color: #101420;
+$box-light: #141828;
+$electric-cyan: #00F5FF;
+$neon-purple: #A020F0;
+$hot-pink: #FF00A8;
+$electric-blue: #0066FF;
+$neon-green: #39FF14;
+$soft-white: #EAFBFF;
+$muted: #78A0D0;
+
+/* Auth page background */
 .auth-page {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  padding: 28px 16px;
-  background: radial-gradient(circle at 50% -10%, #2a2752 0, $back-color 58%);
+  padding: 32px 24px;
+  background: 
+    radial-gradient(circle at 30% 20%, rgba(0, 245, 255, 0.05) 0%, $back-color 50%),
+    radial-gradient(circle at 70% 80%, rgba(160, 32, 240, 0.03) 0%, $back-color 50%),
+    $back-color;
 }
 
+/* Auth shell */
 .auth-shell {
   width: min(440px, 100%);
   display: grid;
-  gap: 18px;
+  gap: 24px;
+  padding: 32px 32px 24px;
+  background: rgba(16, 20, 32, 0.9);
+  border: 1px solid rgba(0, 245, 255, 0.1);
+  border-radius: 32px;
+  backdrop-filter: blur(20px);
+  position: relative;
+  overflow: hidden;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, $electric-cyan, transparent);
+    opacity: 0.4;
+  }
+  
+  &::after {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle, rgba(0, 245, 255, 0.03) 0%, transparent 50%);
+    animation: orbit 20s linear infinite;
+    pointer-events: none;
+  }
 }
 
+@keyframes orbit {
+  0% { transform: rotate(0deg) translate(100px) rotate(0deg); }
+  100% { transform: rotate(360deg) translate(100px) rotate(-360deg); }
+}
+
+/* Auth brand */
 .auth-brand {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  color: $text;
-  text-decoration: none;
+  gap: 16px;
+  margin-bottom: 24px;
 
   strong,
   small {
@@ -42,103 +93,166 @@ $danger: #ff8a8a;
 .auth-brand-mark {
   display: grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, $accent, #4f36c4);
-  font-weight: 800;
-  letter-spacing: 0.04em;
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, $electric-cyan, $neon-purple);
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  box-shadow: 0 0 12px #00F5FF, 0 0 20% #00F5FF, inset 0 0 100px rgba(0,0,0,0.5);
+  box-shadow: 0 0 30px rgba(0, 245, 255, 0.3);
 }
 
+/* Auth card */
 .auth-card {
-  padding: 28px 26px;
-  border-radius: 18px;
-  background: rgba(23, 24, 35, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-  display: grid;
-  gap: 16px;
-
+  padding: 32px 28px;
+  border-radius: 32px;
+  background: rgba(16, 20, 32, 0.8);
+  border: 1px solid rgba(0, 245, 255, 0.1);
+  backdrop-filter: blur(20px);
+  position: relative;
+  z-index: 1;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: inherit;
+    padding: 2px;
+    background: linear-gradient(135deg, $electric-cyan, $neon-purple, $hot-pink, $electric-blue);
+    background-size: 400% 400%;
+    z-index: -1;
+    animation: gradient-shift 10s ease infinite;
+  }
+  
   h1 {
     margin: 0;
-    font-size: 24px;
-  }
-
-  form {
-    display: grid;
-    gap: 14px;
+    font-size: 28px;
+    background: linear-gradient(135deg, $electric-cyan, $neon-purple);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
   }
 }
 
-.auth-intro {
-  margin: -6px 0 0;
-  color: $muted;
-  font-size: 13px;
-  line-height: 1.5;
+.form {
+  display: grid;
+  gap: 20px;
 }
 
+/* Auth field */
 .auth-field {
   display: grid;
-  gap: 6px;
+  gap: 8px;
   font-size: 12px;
   color: $muted;
 
   input {
-    padding: 11px 12px;
-    border-radius: 9px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    background: #10111a;
-    color: $text;
+    padding: 12px 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(0, 245, 255, 0.1);
+    background: rgba(5, 5, 16, 0.8);
+    color: $soft-white;
+    font-size: 14px;
     outline: none;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-
-    &:focus {
-      border-color: $accent;
-      box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.2);
-    }
-
+    transition: all 0.2s ease;
+    width: 100%;
+    
     &::placeholder {
-      color: #6f7488;
+      color: rgba(120, 160, 208, 0.4);
+    }
+    
+    &:focus {
+      border-color: $electric-cyan;
+      box-shadow: 0 0 15px rgba(0, 245, 255, 0.2);
     }
   }
 }
 
+/* Auth error */
 .auth-error {
   margin: 0;
-  padding: 9px 11px;
-  border-radius: 9px;
-  background: rgba(255, 138, 138, 0.12);
-  border: 1px solid rgba(255, 138, 138, 0.35);
-  color: $danger;
-  font-size: 12px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: rgba(255, 0, 168, 0.1);
+  border: 1px solid rgba(255, 0, 168, 0.3);
+  color: $hot-pink;
+  font-size: 13px;
 }
 
+/* Auth submit */
 .auth-submit {
+  padding: 12px 24px;
+  border-radius: 16px;
+  border: none;
+  background: linear-gradient(135deg, $electric-cyan, $neon-purple);
+  color: $dark-navy;
+  font-weight: 500;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: 100%;
   margin-top: 4px;
-  padding: 11px 14px;
+  
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0 20px rgba(0, 245, 255, 0.3);
+  }
+  
+  &:focus-visible {
+    outline: 2px solid $electric-cyan;
+    outline-offset: 2px;
+  }
 }
 
+/* Auth switch */
 .auth-switch {
   text-align: center;
   color: $muted;
   font-size: 13px;
 
   a {
-    color: #b7a8ff;
-    font-weight: 600;
+    color: $electric-cyan;
+    font-weight: 500;
+    text-decoration: none;
+    transition: color 0.2s ease;
+    
+    &:hover {
+      color: $neon-purple;
+    }
   }
 }
 
+/* Auth back link */
 .auth-back {
   text-align: center;
-  color: $accent-2;
+  color: $muted;
   font-size: 12px;
-  text-decoration: none;
+
+  a {
+    color: $muted;
+    font-weight: 500;
+    text-decoration: none;
+    transition: color 0.2s ease;
+    
+    &:hover {
+      color: $electric-cyan;
+    }
+  }
 }
 
+/* Auth footnote */
 .auth-footnote {
   margin: 0;
   text-align: center;
-  color: #6f7488;
-  font-size: 11px;
+  color: rgba(120, 160, 208, 0.4);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
 }

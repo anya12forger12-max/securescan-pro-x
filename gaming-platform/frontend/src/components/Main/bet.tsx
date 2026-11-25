@@ -68,6 +68,7 @@ export default function Bet() {
       <div className="control-heading">
         <h2>Controls</h2>
         <select
+          className="control-select"
           aria-label="Game type"
           value={kind}
           onChange={(event) => {
@@ -84,26 +85,28 @@ export default function Bet() {
       </div>
 
       <div className="control-grid">
-        <label>
+        <label className="control-label">
           Session ID
           <input
+            className="control-input"
             value={sessionId}
             onChange={(event) => setSessionId(event.target.value)}
             placeholder={session?.id ?? 'create or paste a UUID'}
           />
         </label>
-        <button type="button" onClick={() => void makeSession()}>
+        <button className="primary-button" type="button" onClick={() => void makeSession()}>
           Create session
         </button>
-        <button type="button" disabled={!sessionId} onClick={() => void joinSession(sessionId)}>
+        <button className="ghost-button" type="button" disabled={!sessionId} onClick={() => void joinSession(sessionId)}>
           Join session
         </button>
       </div>
 
       {kind !== 'crash' && <div className="control-grid">
-        <label>
+        <label className="control-label">
           Game ID
           <input
+            className="control-input"
             value={gameId}
             onChange={(event) => setGameId(event.target.value)}
             placeholder="game UUID"
@@ -142,6 +145,7 @@ export default function Bet() {
                 type="number"
                 min={1}
                 step={1}
+                className="control-input"
                 value={stake}
                 onChange={(event) => setStake(Number(event.target.value))}
               />
@@ -153,6 +157,7 @@ export default function Bet() {
                 min={1.01}
                 step={0.01}
                 placeholder="off"
+                className="control-input"
                 value={autoCashout ?? ''}
                 onChange={(event) => setAutoCashout(event.target.value ? Number(event.target.value) : null)}
               />
@@ -160,6 +165,7 @@ export default function Bet() {
             <button
               type="button"
               disabled={crash.round?.status !== 'betting' || stake <= 0}
+              className="primary-button"
               onClick={() => void placeCrashBet(stake, autoCashout)}
             >
               Place stake
@@ -167,6 +173,7 @@ export default function Bet() {
             <button
               type="button"
               disabled={crash.myBet?.status !== 'active' || crash.round?.status !== 'running'}
+              className="primary-button"
               onClick={() => void cashOutCrash()}
             >
               Cash out
@@ -182,6 +189,7 @@ export default function Bet() {
               onChange={(event) => setLabSeed(event.target.value)}
               placeholder="strategy seed"
               aria-label="Strategy seed"
+              className="control-input"
             />
             <button
               type="button"
@@ -218,11 +226,23 @@ export default function Bet() {
             Start
           </button>
           <form className="inline-form" onSubmit={submit}>
-            <input value={word} onChange={(event) => setWord(event.target.value)} placeholder="Guess a word" />
-            <button type="submit" disabled={!activeGameId}>Guess</button>
+            <input
+              value={word}
+              onChange={(event) => setWord(event.target.value)}
+              placeholder="Guess a word"
+              className="control-input"
+            />
+            <button type="submit" disabled={!activeGameId} className="primary-button">
+              Guess
+            </button>
           </form>
           <div className="inline-form">
-            <input value={word} onChange={(event) => setWord(event.target.value)} placeholder="Clue word" />
+            <input
+              value={word}
+              onChange={(event) => setWord(event.target.value)}
+              placeholder="Clue word"
+              className="control-input"
+            />
             <input
               type="number"
               min={1}
@@ -230,6 +250,7 @@ export default function Bet() {
               value={clueNumber}
               onChange={(event) => setClueNumber(Number(event.target.value))}
               aria-label="Clue number"
+              className="control-input"
             />
             <button type="button" disabled={!activeGameId} onClick={() => void clueCodenames(activeGameId, word, clueNumber)}>
               Clue
@@ -250,7 +271,7 @@ export default function Bet() {
             Draw discard
           </button>
           <div className="inline-form">
-            <input value={card} onChange={(event) => setCard(event.target.value)} placeholder="10H" />
+            <input value={card} onChange={(event) => setCard(event.target.value)} placeholder="10H" className="control-input" />
             <button type="button" disabled={!activeGameId} onClick={() => void discardGinRummy(activeGameId, card)}>
               Discard
             </button>
@@ -260,6 +281,7 @@ export default function Bet() {
               value={melds}
               onChange={(event) => setMelds(event.target.value)}
               placeholder="7H,8H,9H | 2S,2D,2C"
+              className="control-input"
             />
             <button
               type="button"
@@ -281,8 +303,15 @@ export default function Bet() {
       {kind === 'pictionary' && (
         <div className="control-actions">
           <form className="inline-form" onSubmit={submit}>
-            <input value={word} onChange={(event) => setWord(event.target.value)} placeholder="Your guess" />
-            <button type="submit" disabled={!activeGameId}>Guess</button>
+            <input
+              value={word}
+              onChange={(event) => setWord(event.target.value)}
+              placeholder="Your guess"
+              className="control-input"
+            />
+            <button type="submit" disabled={!activeGameId} className="primary-button">
+              Guess
+            </button>
           </form>
         </div>
       )}

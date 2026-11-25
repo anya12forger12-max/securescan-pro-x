@@ -11,6 +11,7 @@ export default function Chat() {
       <div className="control-heading">
         <h2>Chat</h2>
         <select
+          className="control-select"
           aria-label="Chat room"
           value={room}
           onChange={(event) => void loadMessages(event.target.value)}
@@ -27,7 +28,9 @@ export default function Chat() {
         {messages.length === 0 && <p className="empty">No messages yet.</p>}
         {messages.map((message) => (
           <div key={message.id} className="chat-line">
-            <strong>{message.username || message.user_id?.slice(0, 8) || 'system'}</strong>
+            <strong className="username">
+              {message.username || message.user_id?.slice(0, 8) || 'system'}
+            </strong>
             <span>{message.content}</span>
           </div>
         ))}
@@ -42,8 +45,15 @@ export default function Chat() {
             setDraft('');
           }}
         >
-          <input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Message" />
-          <button type="submit">Send</button>
+          <input
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder="Message"
+            className="control-input"
+          />
+          <button type="submit" className="primary-button">
+            Send
+          </button>
         </form>
       ) : (
         <p className="empty">Sign in to post messages.</p>
@@ -57,8 +67,18 @@ export default function Chat() {
           setNewRoom('');
         }}
       >
-        <input value={newRoom} onChange={(event) => setNewRoom(event.target.value)} placeholder="New room" />
-        <button type="button" onClick={() => void createRoom(newRoom.trim())} disabled={!newRoom.trim()}>
+        <input
+          value={newRoom}
+          onChange={(event) => setNewRoom(event.target.value)}
+          placeholder="New room"
+          className="control-input"
+        />
+        <button
+          type="button"
+          onClick={() => void createRoom(newRoom.trim())}
+          disabled={!newRoom.trim()}
+          className="primary-button"
+        >
           Add room
         </button>
       </form>
