@@ -75,6 +75,20 @@ export function decodeFrames(buffer) {
   return { frames, rest: buffer.subarray(offset) };
 }
 
+/** Re-check the player's access token on the socket's own privileged path.
+ * REST requests pass through the gateway, which rejects revoked/rotated tokens
+ * via `accessTokenActive`; these internal `api()` calls go straight to the
+ * crash and chat services and would otherwise keep a logged-out socket live
+ * until the JWT's natural expiry. */
+export async function bearerActive(verifyToken, token, log) {
+  if (!token) return false;
+  const auth = await verifyToken({
+    headers: { authorization: `Bearer ${token}` },
+    log,
+  });
+  return auth?.status === "valid";
+}
+
 const multiplierFor = (flightStart, crashPoint, elapsed) => {
   const start = Date.parse(flightStart ?? "");
   if (!Number.isFinite(start) || elapsed < start) return 1;
@@ -373,6 +387,11 @@ export function registerAviatorSocket(app, deps) {
       try {
         if (msg.t === "ping") {
           send({ t: "pong", ts: msg.ts ?? null, serverTime: Date.now() });
+          return;
+        }
+        if (!(await bearerActive(deps.verifyToken, state.token, deps.log))) {
+          send({ t: "error", code: "UNAUTHORIZED", message: "session revoked" });
+          close();
           return;
         }
         if (msg.t === "bet") {

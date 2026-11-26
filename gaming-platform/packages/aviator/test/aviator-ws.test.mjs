@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decodeFrames, textFrame } from "../../../services/gateway/aviator-ws.js";
+import { bearerActive, decodeFrames, textFrame } from "../../../services/gateway/aviator-ws.js";
 
 /** Build a masked client frame the way a browser does. */
 function clientFrame(text) {
@@ -44,4 +44,20 @@ test("unmasked and oversized client frames are rejected", () => {
   huge[1] = 0xff;
   huge.writeBigUInt64BE(2n ** 40n, 2);
   assert.throws(() => decodeFrames(huge), /frame too large/);
+});
+
+test("privileged socket frames re-check token liveness", async () => {
+  let active = true;
+  const seen = [];
+  const verifyToken = async (req) => {
+    seen.push(req.headers.authorization);
+    return active
+      ? { status: "valid", claims: { userId: "u1" } }
+      : { status: "invalid" };
+  };
+  assert.equal(await bearerActive(verifyToken, "jwt-1"), true);
+  active = false;
+  assert.equal(await bearerActive(verifyToken, "jwt-1"), false);
+  assert.equal(await bearerActive(verifyToken, null), false);
+  assert.deepEqual(seen, ["Bearer jwt-1", "Bearer jwt-1"]);
 });
