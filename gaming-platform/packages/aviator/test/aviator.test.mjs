@@ -102,6 +102,31 @@ test("snapshot and feed frames use protocol fields and masked names", () => {
   assert.equal(feed.list[0].payout, "194.00");
 });
 
+test("snapshot never reveals the crash point before settlement", () => {
+  const serverTime = 1_800_000_000_000;
+  const secret = 9.87;
+  const betting = buildSnapshot({
+    round: { id: "r-bet", status: "betting", crash_point: secret, created_at: new Date(serverTime).toISOString() },
+    serverTime,
+  });
+  assert.equal(betting.round.state, "BETTING");
+  assert.equal(betting.round.crashPoint, null);
+
+  const running = buildSnapshot({
+    round: { id: "r-run", status: "running", crash_point: secret, started_at: new Date(serverTime - 1000).toISOString() },
+    serverTime,
+  });
+  assert.equal(running.round.state, "FLYING");
+  assert.equal(running.round.crashPoint, null);
+
+  const finished = buildSnapshot({
+    round: { id: "r-done", status: "finished", crash_point: secret },
+    serverTime,
+  });
+  assert.equal(finished.round.state, "CRASHED");
+  assert.equal(finished.round.crashPoint, secret);
+});
+
 test("panel and money helpers reject invalid values", () => {
   assert.equal(normalisePanel(undefined), 1);
   assert.equal(normalisePanel(2), 2);

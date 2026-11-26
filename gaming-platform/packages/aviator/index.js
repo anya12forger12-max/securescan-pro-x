@@ -187,6 +187,13 @@ export function buildSnapshot({
   round, balance, myBets = [], history = [], limits = {},
   serverTime = Date.now(), bettingWindowMs = 5000,
 }) {
+  // The crash point is precomputed when the round is created. It is a secret
+  // until settlement: revealing it for a betting/running round lets a player
+  // bet or auto-cashout with certainty. Keep it internal for phase maths and
+  // only publish it once the round row is terminal.
+  const status = round?.status ?? round?.state;
+  const outcomeKnown = status === "finished" || status === "cancelled"
+    || status === "CRASHED" || status === "SETTLING";
   return {
     t: "snapshot",
     v: PROTOCOL_VERSION,
@@ -198,7 +205,7 @@ export function buildSnapshot({
           seedHash: round.seed_hash ?? round.seedHash ?? null,
           flightStart: round.started_at ?? round.startedAt ?? null,
           bettingEndsAt: round.betting_ends_at ?? round.bettingEndsAt ?? null,
-          crashPoint: round.crash_point ?? round.crashPoint ?? null,
+          crashPoint: outcomeKnown ? (round.crash_point ?? round.crashPoint ?? null) : null,
         }
       : null,
     balance: balance
