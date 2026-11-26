@@ -3,17 +3,44 @@
 All operator endpoints live behind the gateway's `/v1/operator/*` alias and are
 implemented in `services/crash/index.js`. They are disabled (401) unless both
 `OPERATOR_API_KEY` and `OPERATOR_API_SECRET` are configured. Never reuse an
-internal service token as an operator key.
+internal service token as an operator key. Apply migration
+`0020_operator_signature_nonces.sql` before enabling operator credentials; v2
+verification fails closed if the nonce table is missing.
 
 ## Authentication
 
+Every operator call needs four headers:
+
 ```
 x-api-key: <operator API key>
-x-signature: hmac_sha256(OPERATOR_API_SECRET, canonical_json(body))
+x-ts: <unix seconds, ±300>
+x-nonce: <random 16-128 char string, unique per request>
+x-signature-v2: <hex hmac_sha256(OPERATOR_API_SECRET, signed_material)>
 ```
 
-`canonical_json` recursively sorts object keys; arrays keep their order. GET
-requests sign `{}`. Both values are compared in constant time.
+`signed_material` is newline-joined:
+
+```
+gp-operator-v2
+<METHOD>
+<route pattern, e.g. /v1/operator/players/:playerId/block>
+canonical_json(req.params)
+canonical_json(req.query)
+<ts>
+<nonce>
+canonical_json(req.body or {})
+```
+
+`canonical_json` recursively sorts object keys; arrays keep their order. The
+signature binds the player id, method, query and body, so a captured request
+cannot be replayed against a different target. Nonces are single-use per API
+key (migration `0020`) and timestamps outside the five-minute window are
+rejected. All comparisons are constant time.
+
+Legacy `x-signature: hmac_sha256(OPERATOR_API_SECRET, canonical_json(body))`
+is accepted only when the deployment explicitly sets
+`OPERATOR_ALLOW_LEGACY_SIGNATURES=true` as a temporary migration step. That
+mode is replayable and should be removed after clients move to v2.
 
 ## Endpoints
 

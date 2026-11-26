@@ -5,6 +5,7 @@ import cors from "@fastify/cors";
 import { randomUUID } from "node:crypto";
 import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, parseCorsOrigins } from "@gp/config";
 import { ERROR_CODES, boundedInt, serviceTokenOk } from "@gp/shared-types";
+import { publicEvent, sanitizePayload } from "./redaction.js";
 
 /**
  * Realtime fan-out service (3010) -- the default REALTIME_URL of the game
@@ -87,52 +88,6 @@ const pruneTimer = setInterval(async () => {
   }
 }, Math.min((env.EVENT_RETENTION_HOURS * 3_600_000) / 2, 3_600_000));
 pruneTimer.unref?.();
-
-/** Every stored event is replayed to every authenticated player, so every
- * payload is redacted on write and read. Topic-specific exceptions used to let
- * `config.updated` publish user ids and bonus amounts to the whole lobby.
- * Unknown fields (e.g. a `marker` used by tests) are preserved. */
-const SENSITIVE_KEYS = new Set([
-  "userId",
-  "user_id",
-  "amount",
-  "payout",
-  "cashoutAt",
-  "cashout_at",
-  "autoCashout",
-  "auto_cashout",
-  "losers",
-  "balanceAfter",
-  "balance_after",
-  "sessionId",
-  "session_id",
-  "referenceId",
-  "reference_id",
-  "email",
-  "username",
-]);
-
-/** Recursive, idempotent redaction for public-broadcast payloads. Dates are
- * returned untouched so JSON.stringify can serialize them normally. */
-function sanitizeEventData(value) {
-  if (value instanceof Date) return value;
-  if (Array.isArray(value)) return value.map(sanitizeEventData);
-  if (value === null || typeof value !== "object") return value;
-  const clean = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (SENSITIVE_KEYS.has(key) || key === "__proto__") continue;
-    clean[key] = sanitizeEventData(item);
-  }
-  return clean;
-}
-
-/** Applied on write and on every read so older rows cannot leak either. */
-const sanitizePayload = (payload) => sanitizeEventData(payload ?? {});
-
-function publicEvent(event) {
-  if (event === null || typeof event !== "object" || Array.isArray(event)) return event;
-  return { ...event, payload: sanitizePayload(event.payload) };
-}
 
 /** SSE `event:` is a single line: a topic containing CR/LF would start forged
  * frames (for example a fake `data:` line with a huge seq) and permanently

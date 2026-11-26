@@ -24,6 +24,13 @@ import {
   phaseForRound,
   verifyFairness,
 } from "@gp/aviator";
+import {
+  NONCE_TTL_SECONDS,
+  canonicalJson,
+  constantTimeEqualHex,
+  operatorRoute,
+  verifyOperatorSignatureV2,
+} from "./operator-auth.js";
 
 /**
  * Unified Aviator/crash service (3023).
@@ -75,6 +82,9 @@ const envSchema = baseEnvSchema.extend({
   OPERATOR_API_KEY: z.preprocess((v) => v || undefined, z.string().min(32).optional()),
   OPERATOR_API_SECRET: z.preprocess((v) => v || undefined, z.string().min(32).optional()),
   OPERATOR_LAUNCH_URL: z.preprocess((v) => v || undefined, z.string().url().optional()),
+  // Temporary migration switch for operators still sending the old
+  // body-only `x-signature`. It is opt-in: new deployments require v2.
+  OPERATOR_ALLOW_LEGACY_SIGNATURES: z.string().optional().default("false"),
 });
 const env = loadEnv(envSchema);
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
@@ -108,33 +118,68 @@ const deny = (reply, status, code, message, details) =>
     error: details === undefined ? { code, message } : { code, message, details },
   });
 
-/** Operator calls carry an API key and a body signature. Canonicalising the
- * parsed body means the signature does not depend on JSON key order. Both
- * comparisons are constant time, and a missing credential fails closed. */
-const canonical = (value) => {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value ?? null);
-};
-
-function operatorAuthorised(req) {
+/** Operator calls carry an API key and a v2 signature over method, route,
+ * parameters, timestamp and nonce. Nonces are consumed atomically in the
+ * database so a captured request cannot be replayed. */
+async function operatorAuthorised(req) {
   const key = req.headers["x-api-key"];
-  const signature = req.headers["x-signature"];
+  const legacySignature = req.headers["x-signature"];
   if (!env.OPERATOR_API_KEY || !env.OPERATOR_API_SECRET) return false;
-  if (typeof key !== "string" || typeof signature !== "string") return false;
+  if (typeof key !== "string") return false;
   const keyA = Buffer.from(key);
   const keyB = Buffer.from(env.OPERATOR_API_KEY);
   if (keyA.length !== keyB.length || !timingSafeEqual(keyA, keyB)) return false;
-  const expected = createHmac("sha256", env.OPERATOR_API_SECRET).update(canonical(req.body ?? {})).digest("hex");
-  const sigA = Buffer.from(signature.toLowerCase());
-  const sigB = Buffer.from(expected);
-  return sigA.length === sigB.length && timingSafeEqual(sigA, sigB);
+
+  const verified = verifyOperatorSignatureV2(env.OPERATOR_API_SECRET, {
+    headers: req.headers,
+    method: req.method,
+    // Operators call the public `/v1/operator/*` alias; the gateway rewrites
+    // it before it reaches this service. Normalise back so the signed material
+    // matches the documented public route.
+    route: operatorRoute(req.routeOptions?.url ?? String(req.url).split(/[?#]/, 1)[0]),
+    params: req.params ?? {},
+    query: req.query ?? {},
+    body: req.body ?? {},
+  });
+
+  if (verified.ok) {
+    const keyHash = createHash("sha256").update(keyB).digest("hex");
+    const consumed = await pool.query(
+      `INSERT INTO operator_signature_nonces (key_hash, nonce, expires_at)
+       VALUES ($1, $2, now() + ($3 * INTERVAL '1 second'))
+       ON CONFLICT (key_hash, nonce) DO NOTHING RETURNING nonce`,
+      [keyHash, verified.nonce, NONCE_TTL_SECONDS],
+    );
+    if (!consumed.rowCount) return false;
+    // Opportunistic cleanup; the PK also makes expiry irrelevant to security.
+    if (Math.random() < 0.01) {
+      pool.query("DELETE FROM operator_signature_nonces WHERE expires_at < now()")
+        .catch((err) => app.log.warn({ err }, "operator nonce cleanup failed"));
+    }
+    return true;
+  }
+
+  // v1 signed only the body and had no expiry. Accept it only when an operator
+  // explicitly opts into a migration window, and never as a fallback for a
+  // malformed v2 attempt.
+  if (
+    verified.reason === "missing_v2_headers" &&
+    env.OPERATOR_ALLOW_LEGACY_SIGNATURES === "true" &&
+    typeof legacySignature === "string"
+  ) {
+    const expected = createHmac("sha256", env.OPERATOR_API_SECRET)
+      .update(canonicalJson(req.body ?? {})).digest("hex");
+    const allowed = constantTimeEqualHex(legacySignature, expected);
+    if (allowed) {
+      app.log.warn("legacy operator signature used; migrate to x-signature-v2");
+    }
+    return allowed;
+  }
+  return false;
 }
 
-const requireOperator = (req, reply) => {
-  if (!operatorAuthorised(req)) {
+const requireOperator = async (req, reply) => {
+  if (!(await operatorAuthorised(req))) {
     deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid operator credentials");
     return false;
   }
@@ -692,6 +737,22 @@ async function reserveBet(roundId, userId, amount, autoCashout, sessionId, panel
         ? "stake was refunded; betting is closed"
         : "already bet on this round";
       return { error: [409, ERROR_CODES.CONFLICT, message] };
+    }
+    // Both panels share one per-player stake cap. Doing this inside the same
+    // transaction that locks the round closes the auto-bet bypass: the manual
+    // route checked it before reserveBet, but auto sessions called reserveBet
+    // directly and could stake MAX_BET on each panel in the same round.
+    const committed = await client.query(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM crash_bets
+        WHERE round_id = $1 AND user_id = $2 AND panel <> $3
+          AND status IN ('pending','active','cashing_out','cashed_out')`,
+      [roundId, userId, panel],
+    );
+    if (Number(committed.rows[0]?.total ?? 0) + amount > env.MAX_BET) {
+      await client.query("ROLLBACK");
+      return {
+        error: [422, "BET_LIMIT_EXCEEDED", "combined stake exceeds the round limit"],
+      };
     }
     const betId = randomUUID();
     const inserted = await client.query(
@@ -1865,7 +1926,7 @@ app.get("/v1/crash/me", async (req, reply) => {
 });
 
 app.post("/v1/crash/operator/launch", async (req, reply) => {
-  if (!requireOperator(req, reply)) return undefined;
+  if (!(await requireOperator(req, reply))) return undefined;
   const parsed = z.object({
     operatorId: z.string().min(1).max(64),
     playerId: z.string().min(1).max(128),
@@ -1903,7 +1964,7 @@ app.post("/v1/crash/operator/launch", async (req, reply) => {
 });
 
 app.get("/v1/crash/operator/rounds", async (req, reply) => {
-  if (!requireOperator(req, reply)) return undefined;
+  if (!(await requireOperator(req, reply))) return undefined;
   const limit = boundedInt(req.query.limit, 50, 1, 200);
   const from = req.query.from ? new Date(String(req.query.from)) : new Date(Date.now() - 24 * 3600_000);
   const to = req.query.to ? new Date(String(req.query.to)) : new Date();
@@ -1917,7 +1978,7 @@ app.get("/v1/crash/operator/rounds", async (req, reply) => {
 });
 
 app.get("/v1/crash/operator/players/:playerId/bets", async (req, reply) => {
-  if (!requireOperator(req, reply)) return undefined;
+  if (!(await requireOperator(req, reply))) return undefined;
   const limit = boundedInt(req.query.limit, 50, 1, 200);
   const result = await pool.query(
     `SELECT id, round_id, panel, amount, auto_cashout, cashout_at, payout, status, created_at, settled_at
@@ -1928,7 +1989,7 @@ app.get("/v1/crash/operator/players/:playerId/bets", async (req, reply) => {
 });
 
 app.post("/v1/crash/operator/limits", async (req, reply) => {
-  if (!requireOperator(req, reply)) return undefined;
+  if (!(await requireOperator(req, reply))) return undefined;
   const parsed = z.object({
     playerId: z.string().min(1).max(128).optional(),
     currency: z.string().max(8).optional(),
@@ -1952,7 +2013,7 @@ app.post("/v1/crash/operator/limits", async (req, reply) => {
 });
 
 app.post("/v1/crash/operator/players/:playerId/block", async (req, reply) => {
-  if (!requireOperator(req, reply)) return undefined;
+  if (!(await requireOperator(req, reply))) return undefined;
   const parsed = z.object({
     blocked: z.boolean().default(true),
     reason: z.string().max(200).optional(),
@@ -1975,7 +2036,7 @@ app.post("/v1/crash/operator/players/:playerId/block", async (req, reply) => {
 });
 
 app.get("/v1/crash/operator/config", async (req, reply) => {
-  if (!requireOperator(req, reply)) return undefined;
+  if (!(await requireOperator(req, reply))) return undefined;
   return ok(reply, 200, {
     currencies: ["INR"],
     limits: { minBet: env.MIN_BET, maxBet: env.MAX_BET, maxWin: env.MAX_BET * env.MAX_MULTIPLIER },
@@ -1987,7 +2048,7 @@ app.get("/v1/crash/operator/config", async (req, reply) => {
 });
 
 app.post("/v1/crash/operator/freebets", async (req, reply) => {
-  if (!requireOperator(req, reply)) return undefined;
+  if (!(await requireOperator(req, reply))) return undefined;
   // A free bet is recorded, not silently credited: this adapter does not hold
   // player funds. The operator wallet remains the source of truth and can
   // reconcile the grant through its own promotion ledger.
