@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import pg from "pg";
 import { z } from "zod";
 import Fastify from "fastify";
@@ -15,6 +15,15 @@ import {
   jwtVerifyPluginOptions,
 } from "@gp/config";
 import { ERROR_CODES, boundedInt, moneyMul, serviceTokenOk, toMoney } from "@gp/shared-types";
+import {
+  PHASES,
+  buildFeed,
+  buildSnapshot,
+  maskPlayer,
+  normalisePanel,
+  phaseForRound,
+  verifyFairness,
+} from "@gp/aviator";
 
 /**
  * Unified Aviator/crash service (3023).
@@ -59,6 +68,13 @@ const envSchema = baseEnvSchema.extend({
   MAX_MULTIPLIER: z.coerce.number().positive().min(2).max(1000).default(100),
   MIN_BET: z.coerce.number().positive().default(1),
   MAX_BET: z.coerce.number().positive().default(10000),
+  // Operator integration credentials. Absent keys fail closed: the endpoints
+  // never fall back to a shared internal token or an unsigned request.
+  // Compose injects empty strings for unset optional variables; treat those
+  // as absent rather than failing schema validation at startup.
+  OPERATOR_API_KEY: z.preprocess((v) => v || undefined, z.string().min(32).optional()),
+  OPERATOR_API_SECRET: z.preprocess((v) => v || undefined, z.string().min(32).optional()),
+  OPERATOR_LAUNCH_URL: z.preprocess((v) => v || undefined, z.string().url().optional()),
 });
 const env = loadEnv(envSchema);
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
@@ -91,6 +107,39 @@ const deny = (reply, status, code, message, details) =>
     request_id: String(reply.getHeader("x-request-id") ?? ""),
     error: details === undefined ? { code, message } : { code, message, details },
   });
+
+/** Operator calls carry an API key and a body signature. Canonicalising the
+ * parsed body means the signature does not depend on JSON key order. Both
+ * comparisons are constant time, and a missing credential fails closed. */
+const canonical = (value) => {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+};
+
+function operatorAuthorised(req) {
+  const key = req.headers["x-api-key"];
+  const signature = req.headers["x-signature"];
+  if (!env.OPERATOR_API_KEY || !env.OPERATOR_API_SECRET) return false;
+  if (typeof key !== "string" || typeof signature !== "string") return false;
+  const keyA = Buffer.from(key);
+  const keyB = Buffer.from(env.OPERATOR_API_KEY);
+  if (keyA.length !== keyB.length || !timingSafeEqual(keyA, keyB)) return false;
+  const expected = createHmac("sha256", env.OPERATOR_API_SECRET).update(canonical(req.body ?? {})).digest("hex");
+  const sigA = Buffer.from(signature.toLowerCase());
+  const sigB = Buffer.from(expected);
+  return sigA.length === sigB.length && timingSafeEqual(sigA, sigB);
+}
+
+const requireOperator = (req, reply) => {
+  if (!operatorAuthorised(req)) {
+    deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid operator credentials");
+    return false;
+  }
+  return true;
+};
 
 async function requestUserId(req) {
   // A service token or a caller-supplied header is never an identity. Only a
@@ -207,13 +256,22 @@ function verifyRound(round) {
 function publicRound(row) {
   const out = {
     id: row.id,
+    // Legacy status stays for existing clients; `state` is the canonical
+    // WAITING/BETTING/FLYING/CRASHED/SETTLING lifecycle from the spec.
     status: row.status,
+    state: phaseForRound(row, Date.now(), env.BETTING_WINDOW_MS),
     seedHash: row.seed_hash,
     createdAt: row.created_at,
     startedAt: row.started_at ?? null,
+    bettingEndsAt: row.status === "betting" && row.created_at
+      ? new Date(new Date(row.created_at).getTime() + env.BETTING_WINDOW_MS).toISOString()
+      : null,
+    flightStart: row.started_at ?? null,
     // The client renders the same exponential curve the server pays.
     doublingSeconds: roundConfig(row).doublingSeconds,
     maxMultiplier: roundConfig(row).maxMultiplier,
+    houseEdge: roundConfig(row).houseEdge,
+    phases: PHASES,
   };
   if (row.status === "finished" || row.status === "cancelled") {
     Object.assign(out, {
@@ -305,6 +363,26 @@ async function walletIdempotent(request) {
  * wager is gated on it and an unreachable/stale service fails closed, so an
  * excluded player cannot stake during an RG or network outage. */
 async function wageringAllowed(userId, amount) {
+  // An operator block is a second, independent gate. It is stored with the
+  // player's other operator-side settings and checked before any stake leaves
+  // the wallet; clearing it is an explicit operator action.
+  try {
+    const stored = await pool.query(
+      `SELECT user_id, settings FROM crash_player_settings WHERE user_id = $1 OR user_id = $2`,
+      [userId, "currency:INR"],
+    );
+    const player = stored.rows.find((row) => row.user_id === userId)?.settings ?? {};
+    const currency = stored.rows.find((row) => row.user_id === "currency:INR")?.settings ?? {};
+    if (player.blocked === true || currency.blocked === true) return false;
+    // Currency limits are the default; a player-specific limit overrides them.
+    const limits = { ...(currency.limits ?? {}), ...(player.limits ?? {}) };
+    const stake = Number(amount);
+    if (Number.isFinite(Number(limits.minBet)) && stake < Number(limits.minBet)) return false;
+    if (Number.isFinite(Number(limits.maxBet)) && stake > Number(limits.maxBet)) return false;
+  } catch (err) {
+    app.log.warn({ err, userId }, "operator policy lookup failed; blocking wager");
+    return false;
+  }
   try {
     const response = await fetchWithTimeout(
       `${env.RESPONSIBLE_GAMING_URL}/v1/internal/check`,
@@ -511,6 +589,15 @@ async function createRound() {
   // would be a no-op and leave the round with no finish timer at all; derive
   // the next deadline from the persisted status instead.
   scheduleRoundDeadlines(round);
+  if (round.status === "betting") {
+    try {
+      await placeAutoBets(round);
+    } catch (err) {
+      // Auto-bet is an optional convenience. A failure here must never stop
+      // the round lifecycle or affect a manual player's bet.
+      app.log.warn({ err, roundId: round.id }, "auto-bet placement failed");
+    }
+  }
   return round;
 }
 
@@ -542,7 +629,7 @@ async function startRound(id) {
 //   * all wallet keys are deterministic per bet, so retries never double-pay.
 // ---------------------------------------------------------------------------
 
-async function reserveBet(roundId, userId, amount, autoCashout, sessionId) {
+async function reserveBet(roundId, userId, amount, autoCashout, sessionId, panel = 1) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -562,8 +649,8 @@ async function reserveBet(roundId, userId, amount, autoCashout, sessionId) {
     // id would give the wallet a fresh key and could book a second wager for
     // a debit that had already committed.
     const existing = await client.query(
-      `SELECT * FROM crash_bets WHERE round_id = $1 AND user_id = $2 FOR UPDATE`,
-      [roundId, userId],
+      `SELECT * FROM crash_bets WHERE round_id = $1 AND user_id = $2 AND panel = $3 FOR UPDATE`,
+      [roundId, userId, panel],
     );
     if (existing.rowCount) {
       const prior = existing.rows[0];
@@ -609,17 +696,17 @@ async function reserveBet(roundId, userId, amount, autoCashout, sessionId) {
     const betId = randomUUID();
     const inserted = await client.query(
       `INSERT INTO crash_bets
-        (id, round_id, session_id, user_id, amount, auto_cashout, idempotency_key, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
-       ON CONFLICT (round_id, user_id) DO NOTHING RETURNING *`,
-      [betId, roundId, sessionId ?? null, userId, toMoney(amount),
+        (id, round_id, session_id, user_id, panel, amount, auto_cashout, idempotency_key, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
+       ON CONFLICT (round_id, user_id, panel) DO NOTHING RETURNING *`,
+      [betId, roundId, sessionId ?? null, userId, panel, toMoney(amount),
         autoCashout === undefined ? null : autoCashout.toFixed(2), `crash-bet-${betId}`],
     );
     if (!inserted.rowCount) {
       // A concurrent request won the insert race; read its committed claim.
       const winner = await client.query(
-        `SELECT * FROM crash_bets WHERE round_id = $1 AND user_id = $2 FOR UPDATE`,
-        [roundId, userId],
+        `SELECT * FROM crash_bets WHERE round_id = $1 AND user_id = $2 AND panel = $3 FOR UPDATE`,
+        [roundId, userId, panel],
       );
       await client.query("COMMIT");
       const prior = winner.rows[0];
@@ -1126,6 +1213,88 @@ async function tick() {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-bet sessions. A session never bypasses the manual bet path: at the
+// start of every BETTING phase we reserve, debit and activate exactly as a
+// player click would. Stop rules are evaluated from settled bets, and a
+// definitive wallet rejection stops the session immediately.
+// ---------------------------------------------------------------------------
+
+async function stopAutoSession(session, reason) {
+  await pool.query(
+    `UPDATE crash_auto_sessions SET status = 'stopped', updated_at = now()
+      WHERE id = $1 AND status = 'active'`, [session.id]);
+  await publish("crash.auto_stopped", { userId: session.user_id, panel: session.panel, reason });
+}
+
+async function placeAutoBets(round) {
+  const sessions = await pool.query(
+    `SELECT * FROM crash_auto_sessions
+      WHERE status = 'active' AND rounds_left > 0
+        AND (last_round_id IS NULL OR last_round_id <> $1)`, [round.id],
+  );
+  for (const session of sessions.rows) {
+    const rules = typeof session.stop_rules === "string"
+      ? JSON.parse(session.stop_rules) : (session.stop_rules ?? {});
+    const performance = await pool.query(
+      `SELECT COALESCE(SUM(CASE
+          WHEN status = 'cashed_out' THEN payout - amount
+          WHEN status IN ('lost','refunded') THEN -amount
+          ELSE 0 END), 0) AS profit,
+        COALESCE(MAX(CASE WHEN status = 'cashed_out' THEN payout - amount ELSE 0 END), 0) AS best
+        FROM crash_bets WHERE user_id = $1 AND created_at >= $2`,
+      [session.user_id, session.created_at],
+    );
+    const profit = Number(performance.rows[0]?.profit ?? 0);
+    const best = Number(performance.rows[0]?.best ?? 0);
+    if (Number.isFinite(Number(rules.totalLossLimit)) && profit <= -Number(rules.totalLossLimit)) {
+      await stopAutoSession(session, "total_loss_limit");
+      continue;
+    }
+    if (Number.isFinite(Number(rules.singleWinAbove)) && best >= Number(rules.singleWinAbove)) {
+      await stopAutoSession(session, "single_win_above");
+      continue;
+    }
+    if (!(await wageringAllowed(session.user_id, Number(session.stake)))) {
+      await stopAutoSession(session, "player_blocked");
+      continue;
+    }
+    let reserved;
+    try {
+      reserved = await reserveBet(
+        round.id, session.user_id, Number(session.stake),
+        session.auto_cashout === null ? undefined : Number(session.auto_cashout),
+        undefined, session.panel,
+      );
+    } catch (err) {
+      app.log.warn({ err, sessionId: session.id }, "auto-bet reservation failed");
+      continue;
+    }
+    if (reserved.error) continue;
+    try {
+      await walletDebit(reserved.bet);
+    } catch (err) {
+      if (definitiveWalletRejection(err)) await stopAutoSession(session, "wallet_rejected");
+      else app.log.warn({ err, sessionId: session.id }, "auto-bet debit is ambiguous");
+      continue;
+    }
+    const activation = await activateReservedBet(reserved.bet);
+    if (activation.error) {
+      if (activation.refund) await refundBet(reserved.bet, { ensureDebit: false }).catch(() => undefined);
+      continue;
+    }
+    await pool.query(
+      `UPDATE crash_auto_sessions SET rounds_left = rounds_left - 1,
+        last_round_id = $2, updated_at = now() WHERE id = $1`,
+      [session.id, round.id],
+    );
+    await publish("crash.bet", {
+      id: activation.bet.id, roundId: round.id, panel: session.panel,
+      status: activation.bet.status, auto: true,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Player API
 // ---------------------------------------------------------------------------
 
@@ -1158,20 +1327,26 @@ app.get("/v1/crash/rounds/:id", async (req, reply) => {
   const round = { ...publicRound(row), multiplier: publicMultiplier(row) };
   const userId = await requestUserId(req);
   let myBet = null;
+  let myBets = [];
   if (userId) {
     const bet = await pool.query(
-      `SELECT id, amount, auto_cashout, cashout_at, payout, status, created_at
-        FROM crash_bets WHERE round_id = $1 AND user_id = $2`,
+      `SELECT id, panel, amount, auto_cashout, cashout_at, payout, status, created_at
+        FROM crash_bets WHERE round_id = $1 AND user_id = $2 ORDER BY panel`,
       [id, userId],
     );
+    myBets = bet.rows;
     myBet = bet.rows[0] ?? null;
   }
-  return ok(reply, 200, { round, myBet });
+  return ok(reply, 200, { round, myBet, myBets });
 });
 
 const BetSchema = z.object({
   amount: z.coerce.number().positive().finite(),
   autoCashout: z.coerce.number().min(1.01).max(1000).optional(),
+  // Double bet: two independent panels, one shared round and crash point.
+  panel: z.coerce.number().int().min(1).max(2).optional().default(1),
+  // Client idempotency key echoed in bet_ok / bet_err frames.
+  requestId: z.string().max(128).optional(),
   // The game-engine session this wager belongs to. Used only to anchor a
   // verified leaderboard score; it never influences the crash outcome.
   sessionId: z.string().uuid().optional(),
@@ -1184,9 +1359,19 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
   const parsed = BetSchema.safeParse(req.body);
   if (!parsed.success)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
-  const { amount, autoCashout, sessionId } = parsed.data;
+  const { amount, autoCashout, sessionId, panel, requestId } = parsed.data;
   if (amount < env.MIN_BET || amount > env.MAX_BET)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "bet amount out of range");
+
+  // The two panels share a combined per-player stake limit for the round.
+  const committed = await pool.query(
+    `SELECT COALESCE(SUM(amount), 0) AS total FROM crash_bets
+      WHERE round_id = $1 AND user_id = $2 AND panel <> $3
+        AND status IN ('pending','active','cashing_out','cashed_out')`,
+    [req.params.id, userId, panel],
+  );
+  if (Number(committed.rows[0]?.total ?? 0) + amount > env.MAX_BET)
+    return deny(reply, 422, "BET_LIMIT_EXCEEDED", "combined stake exceeds the round limit");
 
   // Fail-closed self-exclusion gate: no stake may be reserved for a player the
   // RG service has excluded (or cannot confirm is eligible).
@@ -1201,7 +1386,7 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
 
   // Reservation and status guard are one DB transaction; the wallet debit
   // follows only once the bet row is durably committed as `pending`.
-  const reserved = await reserveBet(round.id, userId, amount, autoCashout, sessionId);
+  const reserved = await reserveBet(round.id, userId, amount, autoCashout, sessionId, panel);
   if (reserved.error) return deny(reply, ...reserved.error);
   let bet = reserved.bet;
 
@@ -1246,11 +1431,15 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
   await publish("crash.bet", {
     id: bet.id,
     roundId: round.id,
+    panel: bet.panel,
     status: bet.status,
   });
   return ok(reply, activation.replay ? 200 : 201, {
     bet: {
+      betId: bet.id,
       id: bet.id,
+      reqId: requestId ?? null,
+      panel: bet.panel,
       amount: Number(bet.amount),
       autoCashout: bet.auto_cashout === null ? null : Number(bet.auto_cashout),
       status: bet.status,
@@ -1258,10 +1447,20 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
   });
 });
 
+const CashoutSchema = z.object({
+  panel: z.coerce.number().int().min(1).max(2).optional().default(1),
+  betId: z.string().uuid().optional(),
+  requestId: z.string().max(128).optional(),
+});
+
 app.post("/v1/crash/rounds/:id/cashout", async (req, reply) => {
   const userId = await requestUserId(req);
   if (!userId)
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
+  const requested = CashoutSchema.safeParse(req.body ?? {});
+  if (!requested.success)
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(requested.error.flatten()));
+  const { panel, betId } = requested.data;
   let payout;
   let pendingBet = null;
   try {
@@ -1269,10 +1468,15 @@ app.post("/v1/crash/rounds/:id/cashout", async (req, reply) => {
       const roundResult = await pool.query(`SELECT * FROM crash_rounds WHERE id = $1`, [req.params.id]);
       const round = roundResult.rows[0];
       if (!round) return { error: [404, ERROR_CODES.NOT_FOUND, "round not found"] };
-      const betResult = await pool.query(
-        `SELECT * FROM crash_bets WHERE round_id = $1 AND user_id = $2`,
-        [round.id, userId],
-      );
+      const betResult = betId
+        ? await pool.query(
+            `SELECT * FROM crash_bets WHERE round_id = $1 AND user_id = $2 AND id = $3`,
+            [round.id, userId, betId],
+          )
+        : await pool.query(
+            `SELECT * FROM crash_bets WHERE round_id = $1 AND user_id = $2 AND panel = $3`,
+            [round.id, userId, panel],
+          );
       const bet = betResult.rows[0];
       if (!bet) return { error: [404, ERROR_CODES.NOT_FOUND, "no bet on this round"] };
       pendingBet = bet;
@@ -1320,11 +1524,482 @@ app.get("/v1/crash/me/bets", async (req, reply) => {
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
   const limit = boundedInt(req.query.limit, 50, 1, 100);
   const result = await pool.query(
-    `SELECT id, round_id, amount, auto_cashout, cashout_at, payout, status, created_at, settled_at
+    `SELECT id, round_id, panel, amount, auto_cashout, cashout_at, payout, status, created_at, settled_at
       FROM crash_bets WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
     [userId, limit],
   );
   return ok(reply, 200, { items: result.rows });
+});
+
+// ---------------------------------------------------------------------------
+// Aviator reference API: snapshot, history, fairness, leaderboards, settings.
+// These paths mirror the player REST surface in the API design document while
+// the older /crash/... aliases keep existing clients working.
+// ---------------------------------------------------------------------------
+
+app.get("/v1/crash/snapshot", async (req, reply) => {
+  const userId = await requestUserId(req);
+  const current = await pool.query(
+    `SELECT * FROM crash_rounds WHERE status IN ('betting','running')
+      ORDER BY created_at DESC LIMIT 1`,
+  );
+  const history = await pool.query(
+    `SELECT crash_point FROM crash_rounds WHERE status IN ('finished','cancelled')
+        AND crash_point IS NOT NULL
+      ORDER BY finished_at DESC NULLS LAST, created_at DESC LIMIT $1`,
+    [boundedInt(req.query.limit, 20, 1, 100)],
+  );
+  let myBets = [];
+  if (userId && current.rows[0]) {
+    const bets = await pool.query(
+      `SELECT id, panel, amount, auto_cashout, status FROM crash_bets
+        WHERE round_id = $1 AND user_id = $2 AND status IN ('pending','active','cashing_out')
+        ORDER BY panel`,
+      [current.rows[0].id, userId],
+    );
+    myBets = bets.rows;
+  }
+  return ok(reply, 200, {
+    snapshot: buildSnapshot({
+      round: current.rows[0] ?? null,
+      myBets,
+      history: history.rows.map((row) => Number(row.crash_point)),
+      limits: { minBet: env.MIN_BET, maxBet: env.MAX_BET, maxWin: env.MAX_MULTIPLIER * env.MAX_BET },
+      serverTime: Date.now(),
+      bettingWindowMs: env.BETTING_WINDOW_MS,
+    }),
+  });
+});
+
+const FairnessSchema = z.object({
+  serverSeed: z.string().min(1).max(256),
+  clientSeed: z.string().max(256).optional().default(""),
+  seedHash: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  crashPoint: z.coerce.number().positive().optional(),
+  edge: z.coerce.number().min(0).max(0.5).optional().default(0.03),
+});
+
+app.post("/v1/crash/fairness/verify", async (req, reply) => {
+  const parsed = FairnessSchema.safeParse(req.body);
+  if (!parsed.success)
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+  const { serverSeed, clientSeed, seedHash, crashPoint, edge } = parsed.data;
+  return ok(reply, 200, {
+    verification: verifyFairness({ serverSeed, clientSeed, seedHash, crashPoint, edge }),
+  });
+});
+
+// Spec-aligned aliases over the same authoritative ledger.
+app.get("/v1/crash/rounds", async (req, reply) => {
+  const limit = boundedInt(req.query.limit, 20, 1, 100);
+  const cursor = typeof req.query.cursor === "string" ? req.query.cursor : null;
+  const params = [limit];
+  let where = `WHERE status IN ('finished','cancelled')`;
+  if (cursor) {
+    const parsed = Buffer.from(cursor, "base64url").toString("utf8");
+    const before = Date.parse(parsed);
+    if (Number.isFinite(before)) {
+      params.push(new Date(before).toISOString());
+      where += ` AND finished_at < $2`;
+    }
+  }
+  const result = await pool.query(
+    `SELECT * FROM crash_rounds ${where}
+      ORDER BY finished_at DESC NULLS LAST, created_at DESC LIMIT $1`, params,
+  );
+  const items = result.rows.map(publicRound);
+  const last = result.rows[result.rows.length - 1];
+  return ok(reply, 200, {
+    items,
+    nextCursor: last?.finished_at
+      ? Buffer.from(new Date(last.finished_at).toISOString()).toString("base64url")
+      : null,
+  });
+});
+
+app.get("/v1/crash/bets", async (req, reply) => {
+  const userId = await requestUserId(req);
+  if (!userId)
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
+  const limit = boundedInt(req.query.limit, 50, 1, 100);
+  const result = await pool.query(
+    `SELECT id, round_id, panel, amount, auto_cashout, cashout_at, payout, status, created_at, settled_at
+      FROM crash_bets WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    [userId, limit],
+  );
+  return ok(reply, 200, {
+    items: result.rows.map((bet) => ({ ...bet, betId: bet.id })),
+    nextCursor: result.rows.length === limit ? result.rows[result.rows.length - 1].id : null,
+  });
+});
+
+app.get("/v1/crash/bets/:id", async (req, reply) => {
+  const userId = await requestUserId(req);
+  if (!userId)
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
+  const result = await pool.query(
+    `SELECT b.*, r.seed_hash, r.server_seed, r.crash_point, r.finished_at,
+            r.house_edge, r.max_multiplier, r.doubling_seconds
+      FROM crash_bets b JOIN crash_rounds r ON r.id = b.round_id
+      WHERE b.id = $1 AND b.user_id = $2`,
+    [req.params.id, userId],
+  );
+  if (!result.rowCount) return deny(reply, 404, ERROR_CODES.NOT_FOUND, "bet not found");
+  const bet = result.rows[0];
+  return ok(reply, 200, {
+    bet: {
+      ...bet,
+      betId: bet.id,
+      proof: verifyRound({ ...bet, id: bet.round_id }),
+    },
+  });
+});
+
+app.get("/v1/crash/stats/top", async (req, reply) => {
+  const period = ["day", "month", "year"].includes(req.query.period) ? req.query.period : "day";
+  const interval = period === "day" ? "24 hours" : period === "month" ? "30 days" : "365 days";
+  const limit = boundedInt(req.query.limit, 10, 1, 50);
+  const wins = await pool.query(
+    `SELECT b.user_id, b.payout, b.cashout_at, b.round_id
+      FROM crash_bets b JOIN crash_rounds r ON r.id = b.round_id
+      WHERE b.status = 'cashed_out' AND b.created_at > now() - ($2 * INTERVAL '1 hour')
+      ORDER BY b.payout DESC LIMIT $1`,
+    [limit, period === "day" ? 24 : period === "month" ? 720 : 8760],
+  );
+  const multipliers = await pool.query(
+    `SELECT b.user_id, b.cashout_at, b.round_id
+      FROM crash_bets b JOIN crash_rounds r ON r.id = b.round_id
+      WHERE b.status = 'cashed_out' AND b.created_at > now() - ($2 * INTERVAL '1 hour')
+      ORDER BY b.cashout_at DESC LIMIT $1`,
+    [limit, period === "day" ? 24 : period === "month" ? 720 : 8760],
+  );
+  return ok(reply, 200, {
+    period,
+    interval,
+    topWins: wins.rows.map((row) => ({
+      user: maskPlayer(row.user_id), payout: Number(row.payout), roundId: row.round_id,
+    })),
+    topMultipliers: multipliers.rows.map((row) => ({
+      user: maskPlayer(row.user_id), mult: Number(row.cashout_at), roundId: row.round_id,
+    })),
+  });
+});
+
+app.get("/v1/crash/rules", async (_req, reply) => {
+  return ok(reply, 200, {
+    rules: {
+      houseEdge: env.HOUSE_EDGE,
+      minBet: env.MIN_BET,
+      maxBet: env.MAX_BET,
+      maxMultiplier: env.MAX_MULTIPLIER,
+      doublingSeconds: env.DOUBLING_SECONDS,
+      bettingWindowMs: env.BETTING_WINDOW_MS,
+      algorithm: "hmac-sha256-v1",
+      text: "Bet during BETTING. Cash out before the server crash to win stake × multiplier. Auto cash-out is evaluated server-side on every tick.",
+    },
+  });
+});
+
+app.get("/v1/crash/settings", async (req, reply) => {
+  const userId = await requestUserId(req);
+  if (!userId)
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
+  const result = await pool.query(
+    `SELECT settings FROM crash_player_settings WHERE user_id = $1`, [userId]);
+  return ok(reply, 200, {
+    settings: result.rows[0]?.settings ?? {
+      sound: false, animations: true, theme: "dark", language: "en", currency: "INR",
+    },
+  });
+});
+
+app.put("/v1/crash/settings", async (req, reply) => {
+  const userId = await requestUserId(req);
+  if (!userId)
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
+  const parsed = z.object({
+    sound: z.boolean().optional(),
+    animations: z.boolean().optional(),
+    theme: z.enum(["dark", "light"]).optional(),
+    language: z.string().max(16).optional(),
+    currency: z.string().max(8).optional(),
+  }).safeParse(req.body);
+  if (!parsed.success)
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+  await pool.query(
+    `INSERT INTO crash_player_settings (user_id, settings) VALUES ($1, $2)
+      ON CONFLICT (user_id) DO UPDATE SET settings = crash_player_settings.settings || $2`,
+    [userId, JSON.stringify(parsed.data)],
+  );
+  return ok(reply, 200, { settings: parsed.data });
+});
+
+app.post("/v1/crash/rounds/:id/bets/:betId/cancel", async (req, reply) => {
+  const userId = await requestUserId(req);
+  if (!userId)
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
+  const outcome = await serialized(async () => {
+    const round = await pool.query(`SELECT status FROM crash_rounds WHERE id = $1`, [req.params.id]);
+    if (!round.rowCount) return { error: [404, ERROR_CODES.NOT_FOUND, "round not found"] };
+    if (round.rows[0].status !== "betting")
+      return { error: [409, ERROR_CODES.CONFLICT, "betting is closed for this round"] };
+    const bet = await pool.query(
+      `SELECT * FROM crash_bets WHERE id = $1 AND round_id = $2 AND user_id = $3`,
+      [req.params.betId, req.params.id, userId],
+    );
+    if (!bet.rowCount) return { error: [404, ERROR_CODES.NOT_FOUND, "bet not found"] };
+    if (!["pending", "active"].includes(bet.rows[0].status))
+      return { error: [409, ERROR_CODES.CONFLICT, "bet can no longer be cancelled"] };
+    await refundBet(bet.rows[0]);
+    return { cancelled: true, betId: req.params.betId };
+  });
+  if (outcome.error) return deny(reply, ...outcome.error);
+  return ok(reply, 200, outcome);
+});
+
+// ---------------------------------------------------------------------------
+// Auto-bet session management
+// ---------------------------------------------------------------------------
+
+const AutoSchema = z.object({
+  panel: z.coerce.number().int().min(1).max(2).optional().default(1),
+  amount: z.coerce.number().positive().finite(),
+  autoCashout: z.coerce.number().min(1.01).max(1000).optional(),
+  rounds: z.coerce.number().int().min(1).max(1000).default(1),
+  stopRules: z.object({
+    balanceBelow: z.coerce.number().min(0).optional(),
+    singleWinAbove: z.coerce.number().min(0).optional(),
+    totalLossLimit: z.coerce.number().min(0).optional(),
+  }).default({}),
+});
+
+app.get("/v1/crash/auto", async (req, reply) => {
+  const userId = await requestUserId(req);
+  if (!userId)
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
+  const result = await pool.query(
+    `SELECT id, panel, stake, auto_cashout, rounds_left, stop_rules, status, last_round_id, created_at
+      FROM crash_auto_sessions WHERE user_id = $1 ORDER BY panel`, [userId]);
+  return ok(reply, 200, { sessions: result.rows });
+});
+
+app.post("/v1/crash/auto", async (req, reply) => {
+  const userId = await requestUserId(req);
+  if (!userId)
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
+  const parsed = AutoSchema.safeParse(req.body);
+  if (!parsed.success)
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+  const { panel, amount, autoCashout, rounds, stopRules } = parsed.data;
+  if (amount < env.MIN_BET || amount > env.MAX_BET)
+    return deny(reply, 422, "BET_LIMIT_EXCEEDED", "bet amount out of range");
+  await pool.query(
+    `INSERT INTO crash_auto_sessions
+       (user_id, panel, stake, auto_cashout, rounds_left, stop_rules, status)
+     VALUES ($1, $2, $3, $4, $5, $6, 'active')
+     ON CONFLICT (user_id, panel) DO UPDATE SET
+       stake = EXCLUDED.stake, auto_cashout = EXCLUDED.auto_cashout,
+       rounds_left = EXCLUDED.rounds_left, stop_rules = EXCLUDED.stop_rules,
+       status = 'active', last_round_id = NULL, updated_at = now()`,
+    [userId, panel, toMoney(amount), autoCashout?.toFixed(2) ?? null, rounds, JSON.stringify(stopRules)],
+  );
+  return ok(reply, 201, {
+    session: {
+      panel, stake: amount, autoCashout: autoCashout ?? null,
+      rounds, stopRules, status: "active",
+    },
+  });
+});
+
+app.post("/v1/crash/auto/:panel/stop", async (req, reply) => {
+  const userId = await requestUserId(req);
+  if (!userId)
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
+  const panel = normalisePanel(req.params.panel);
+  const result = await pool.query(
+    `UPDATE crash_auto_sessions SET status = 'stopped', updated_at = now()
+      WHERE user_id = $1 AND panel = $2 AND status = 'active' RETURNING id`,
+    [userId, panel],
+  );
+  await publish("crash.auto_stopped", { userId, panel, reason: "player" });
+  return ok(reply, 200, { stopped: result.rowCount > 0 });
+});
+
+// ---------------------------------------------------------------------------
+// Spec player/operator surface. These paths are reached through the gateway's
+// /v1/me, /v1/operator/... aliases; they reuse the same ledger as /v1/crash/*.
+// ---------------------------------------------------------------------------
+
+app.get("/v1/crash/me", async (req, reply) => {
+  const userId = await requestUserId(req);
+  if (!userId)
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
+  let balance = null;
+  try {
+    const response = await fetchWithTimeout(
+      `${env.WALLET_INTERNAL_URL}/v1/wallet/balance`,
+      {
+        headers: {
+          "content-type": "application/json",
+          authorization: req.headers.authorization ?? "",
+          "x-user-id": userId,
+        },
+      },
+      3000,
+    );
+    if (response.ok) balance = (await response.json())?.data?.account ?? null;
+  } catch {
+    // Limits and identity still work when the wallet is briefly unavailable.
+  }
+  return ok(reply, 200, {
+    userId,
+    username: req.headers["x-username"] ?? null,
+    currency: "INR",
+    balance: balance ? { amount: Number(balance.balance).toFixed(2), currency: "INR" } : null,
+    limits: {
+      minBet: toMoney(env.MIN_BET),
+      maxBet: toMoney(env.MAX_BET),
+      maxWin: toMoney(env.MAX_BET * env.MAX_MULTIPLIER),
+    },
+  });
+});
+
+app.post("/v1/crash/operator/launch", async (req, reply) => {
+  if (!requireOperator(req, reply)) return undefined;
+  const parsed = z.object({
+    operatorId: z.string().min(1).max(64),
+    playerId: z.string().min(1).max(128),
+    currency: z.string().max(8).optional().default("INR"),
+    mode: z.enum(["real", "demo"]).optional().default("real"),
+    returnUrl: z.string().url().optional(),
+  }).safeParse(req.body);
+  if (!parsed.success)
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+  const input = parsed.data;
+  // The launch token is opaque to the operator and never grants wallet access.
+  // It is derived from the same signed identity the gateway already trusts;
+  // operators exchange it for a session through their normal login flow.
+  const nonce = randomBytes(16).toString("hex");
+  const payload = Buffer.from(JSON.stringify({
+    operatorId: input.operatorId, playerId: input.playerId,
+    currency: input.currency, mode: input.mode, exp: Date.now() + 5 * 60_000, nonce,
+  })).toString("base64url");
+  const signature = createHmac("sha256", env.OPERATOR_API_SECRET).update(payload).digest("base64url");
+  const token = `${payload}.${signature}`;
+  const base = env.OPERATOR_LAUNCH_URL ?? `http://${req.headers.host ?? "localhost:3000"}/`;
+  const launch = new URL(base);
+  launch.searchParams.set("token", token);
+  if (input.returnUrl) launch.searchParams.set("returnUrl", input.returnUrl);
+  await publish("crash.operator_launch", {
+    operatorId: input.operatorId, playerId: input.playerId, mode: input.mode, nonce,
+  });
+  return ok(reply, 201, {
+    launchUrl: launch.toString(),
+    sessionToken: token,
+    expiresIn: 300,
+    currency: input.currency,
+    mode: input.mode,
+  });
+});
+
+app.get("/v1/crash/operator/rounds", async (req, reply) => {
+  if (!requireOperator(req, reply)) return undefined;
+  const limit = boundedInt(req.query.limit, 50, 1, 200);
+  const from = req.query.from ? new Date(String(req.query.from)) : new Date(Date.now() - 24 * 3600_000);
+  const to = req.query.to ? new Date(String(req.query.to)) : new Date();
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()))
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "invalid time range");
+  const result = await pool.query(
+    `SELECT * FROM crash_rounds WHERE created_at BETWEEN $1 AND $2
+      ORDER BY created_at DESC LIMIT $3`, [from.toISOString(), to.toISOString(), limit],
+  );
+  return ok(reply, 200, { items: result.rows.map(publicRound), from, to });
+});
+
+app.get("/v1/crash/operator/players/:playerId/bets", async (req, reply) => {
+  if (!requireOperator(req, reply)) return undefined;
+  const limit = boundedInt(req.query.limit, 50, 1, 200);
+  const result = await pool.query(
+    `SELECT id, round_id, panel, amount, auto_cashout, cashout_at, payout, status, created_at, settled_at
+      FROM crash_bets WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    [req.params.playerId, limit],
+  );
+  return ok(reply, 200, { items: result.rows });
+});
+
+app.post("/v1/crash/operator/limits", async (req, reply) => {
+  if (!requireOperator(req, reply)) return undefined;
+  const parsed = z.object({
+    playerId: z.string().min(1).max(128).optional(),
+    currency: z.string().max(8).optional(),
+    minBet: z.coerce.number().positive().optional(),
+    maxBet: z.coerce.number().positive().optional(),
+    maxWin: z.coerce.number().positive().optional(),
+  }).safeParse(req.body);
+  if (!parsed.success)
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+  const limits = Object.fromEntries(
+    Object.entries(parsed.data).filter(([key]) => ["minBet", "maxBet", "maxWin"].includes(key)),
+  );
+  const key = parsed.data.playerId ?? `currency:${parsed.data.currency ?? "INR"}`;
+  await pool.query(
+    `INSERT INTO crash_player_settings (user_id, settings) VALUES ($1, $2)
+      ON CONFLICT (user_id) DO UPDATE SET settings = crash_player_settings.settings || $2,
+        updated_at = now()`,
+    [key, JSON.stringify({ limits })],
+  );
+  return ok(reply, 200, { scope: key, limits });
+});
+
+app.post("/v1/crash/operator/players/:playerId/block", async (req, reply) => {
+  if (!requireOperator(req, reply)) return undefined;
+  const parsed = z.object({
+    blocked: z.boolean().default(true),
+    reason: z.string().max(200).optional(),
+  }).safeParse(req.body ?? {});
+  if (!parsed.success)
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+  await pool.query(
+    `INSERT INTO crash_player_settings (user_id, settings) VALUES ($1, $2)
+      ON CONFLICT (user_id) DO UPDATE SET settings = crash_player_settings.settings || $2,
+        updated_at = now()`,
+    [req.params.playerId, JSON.stringify({
+      blocked: parsed.data.blocked,
+      blockReason: parsed.data.reason ?? null,
+    })],
+  );
+  await publish("crash.operator_block", {
+    playerId: req.params.playerId, blocked: parsed.data.blocked,
+  });
+  return ok(reply, 200, { playerId: req.params.playerId, blocked: parsed.data.blocked });
+});
+
+app.get("/v1/crash/operator/config", async (req, reply) => {
+  if (!requireOperator(req, reply)) return undefined;
+  return ok(reply, 200, {
+    currencies: ["INR"],
+    limits: { minBet: env.MIN_BET, maxBet: env.MAX_BET, maxWin: env.MAX_BET * env.MAX_MULTIPLIER },
+    rtp: 1 - env.HOUSE_EDGE,
+    houseEdge: env.HOUSE_EDGE,
+    features: { doubleBet: true, autoBet: true, autoCashout: true, fairnessVerify: true, chat: true },
+    protocol: "aviator-v1",
+  });
+});
+
+app.post("/v1/crash/operator/freebets", async (req, reply) => {
+  if (!requireOperator(req, reply)) return undefined;
+  // A free bet is recorded, not silently credited: this adapter does not hold
+  // player funds. The operator wallet remains the source of truth and can
+  // reconcile the grant through its own promotion ledger.
+  const parsed = z.object({
+    playerId: z.string().min(1).max(128),
+    amount: z.coerce.number().positive(),
+    grantId: z.string().min(1).max(128),
+  }).safeParse(req.body);
+  if (!parsed.success)
+    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+  await publish("crash.operator_freebet", parsed.data);
+  return ok(reply, 201, { ...parsed.data, credited: false, currency: "INR" });
 });
 
 // ---------------------------------------------------------------------------

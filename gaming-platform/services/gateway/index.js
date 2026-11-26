@@ -7,6 +7,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRateLimiter } from "./rate-limit.js";
+import { registerAviatorSocket } from "./aviator-ws.js";
 import {
   assertDistinctSecrets,
   dbPoolOptions,
@@ -254,6 +255,19 @@ const ROUTES = [
   // the broad promotions `/internal` rule, which would otherwise swallow it.
   { prefix: "/v1/crash", service: "crash", port: 3023 },
   { prefix: "/internal/crash", service: "crash", port: 3023, privileged: true },
+  // Spec-compatible player/operator aliases. The crash service owns these
+  // resources; `rewrite` maps the public path onto its implementation route
+  // without exposing a second copy of the ledger.
+  { prefix: "/v1/rounds", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/rounds/, "/v1/crash/rounds") },
+  { prefix: "/v1/bets", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/bets/, "/v1/crash/bets") },
+  { prefix: "/v1/fairness/verify", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/fairness/, "/v1/crash/fairness") },
+  { prefix: "/v1/stats/top", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/stats/, "/v1/crash/stats") },
+  { prefix: "/v1/rules", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/rules/, "/v1/crash/rules") },
+  { prefix: "/v1/settings", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/settings/, "/v1/crash/settings") },
+  { prefix: "/v1/me", service: "crash", port: 3023, rewrite: () => "/v1/crash/me" },
+  // Operator endpoints carry their own API key and signed body; the crash
+  // service verifies both, so the gateway only needs to route them.
+  { prefix: "/v1/operator", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/operator/, "/v1/crash/operator") },
   { prefix: "/internal", service: "promotions", port: 3022, privileged: true },
   { prefix: "/v1/internal", service: "promotions", port: 3022, privileged: true },
   { prefix: "/v1/promotions", service: "promotions", port: 3022 },
@@ -836,7 +850,8 @@ async function proxy(req, reply) {
     reply.raw.once("close", releaseStream);
   }
 
-  const upstream = `http://${upstreamHost(target.service)}:${target.port}${parsed.pathname}${parsed.search}`;
+  const upstreamPath = target.rewrite ? target.rewrite(parsed.pathname) : parsed.pathname;
+  const upstream = `http://${upstreamHost(target.service)}:${target.port}${upstreamPath}${parsed.search}`;
   const init = { method: req.method, headers };
   if (req.body !== undefined) {
     init.body = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
@@ -958,6 +973,17 @@ async function proxy(req, reply) {
     });
   }
 }
+
+// Aviator protocol v1 socket. Registered before the catch-all proxy because a
+// WebSocket handshake cannot be forwarded through the plain fetch proxy.
+registerAviatorSocket(app, {
+  verifyToken: resolveBearer,
+  allowedOrigin: (origin) => Boolean(corsOrigin({ headers: { origin } })),
+  upstream: (service, port) => `http://${upstreamHost(service)}:${port}`,
+  realtimeToken: REALTIME_SERVICE_TOKEN,
+  maxPerUser: 4,
+  log: app.log,
+});
 
 app.all("/v1/*", proxy);
 app.all("/internal/*", proxy);

@@ -375,6 +375,11 @@ services:
       REALTIME_SERVICE_TOKEN: ${REALTIME_SERVICE_TOKEN:?REALTIME_SERVICE_TOKEN must be set}
       WALLET_INTERNAL_URL: http://wallet:3011
       REALTIME_INTERNAL_URL: http://realtime:3010
+      # Optional signed operator integration. Both keys must be set to enable
+      # the endpoints; leaving them empty keeps them disabled (fail closed).
+      OPERATOR_API_KEY: ${OPERATOR_API_KEY:-}
+      OPERATOR_API_SECRET: ${OPERATOR_API_SECRET:-}
+      OPERATOR_LAUNCH_URL: ${OPERATOR_LAUNCH_URL:-}
     expose:
       - "3023"
 

@@ -51,7 +51,13 @@ executed by the platform. Their playable ideas are now implemented natively:
   instead of booking a duplicate net-zero pair.
 * The browser stage renders the multiplier curve locally from the server's
   `startedAt`, while all outcomes, settlement and auto cash-outs stay
-  authoritative in the service.
+  authoritative in the service. It also consumes protocol v1 frames from
+  `GET /v1/ws` (REST/SSE remain the fallback), including two independent bet
+  panels, auto-bet stop rules and the live fairness proof.
+* `packages/aviator` holds the shared, pure crash-point/phase/protocol helpers;
+  `migrations/0019_aviator_features.sql` adds panel uniqueness, auto-bet
+  sessions and player/operator settings. Signed operator endpoints and the
+  standalone reference map are documented in `aviator-reference/`.
 * The bot's strategies live on as `POST /v1/crash/strategy-lab/run`, a
   deterministic **paper-only** simulator that uses our own provably-fair
   generator and never contacts an external betting site.
@@ -222,8 +228,9 @@ revoke all of that user's access tokens immediately, with at most
 | `0016_pictionary_guess_limit.sql` | index for per-player incorrect-guess allowance checks |
 | `0017_gin_rummy_outcomes.sql` | append-only record of validated wins and explicit concessions |
 | `0018_access_token_revocation.sql` | user token versions and issued `jti` records for RS256 access tokens |
+| `0019_aviator_features.sql` | two bet panels per round, auto-bet sessions, operator/player settings |
 
-All eighteen are applied by the one-shot `migrate` service before any application
+All nineteen are applied by the one-shot `migrate` service before any application
 starts, on first boot and on every upgrade. Applied files are checksummed, so
 editing an already-applied migration fails the deploy instead of drifting.
 

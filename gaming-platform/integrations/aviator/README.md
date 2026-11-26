@@ -42,5 +42,19 @@ The four separate projects are unified behind the platform's gateway:
   alongside the pre-existing game types; paid entry stays fail-closed until
   escrow exists.
 
-See `../../README.md` for the service table and `../../migrations/0008_crash.sql`
-for the new tables.
+The reference-design implementation added later lives alongside them, still
+outside the runtime of the vendored trees:
+
+* `../../packages/aviator` — canonical phases, HMAC crash point, verifier and
+  protocol helpers, shared by the crash service and its tests.
+* `../../services/gateway/aviator-ws.js` — protocol v1 WebSocket frames; REST
+  aliases `/v1/rounds`, `/v1/bets`, `/v1/me`, `/v1/stats/top`, `/v1/rules`,
+  `/v1/settings` and `/v1/operator/*` are routed to the crash service.
+* `../../frontend/src/components/crash/AviatorStage.tsx` — the canvas stage,
+  dual bet panels, auto-bet tabs, live feed and fairness/rules modals.
+* `../../aviator-reference` — a standalone reference map with an RTP simulation
+  and operator contract. It is documentation and verification tooling only.
+
+See `../../README.md` for the service table, `../../migrations/0008_crash.sql`
+for the original tables and `../../migrations/0019_aviator_features.sql` for
+double-bet panels, auto sessions and player settings.

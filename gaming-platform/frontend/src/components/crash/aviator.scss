@@ -1,0 +1,555 @@
+/* Aviator-style crash stage — self-contained so the other game surfaces keep
+   their existing styling. Tokens follow the reference UI design document. */
+$bg: #0b0d13;
+$surface: #121724;
+$surface-2: #1a2030;
+$border: #262d3d;
+$text: #f0f2f7;
+$muted: #8b94a7;
+$blue: #4aa3ff;
+$blue-soft: rgba(74, 163, 255, 0.14);
+$green: #32d583;
+$red: #e0334a;
+$pink: #ff5fb0;
+
+@mixin card {
+  background: $surface;
+  border: 1px solid $border;
+  border-radius: 12px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.aviator-stage {
+  color: $text;
+  background: $bg;
+  border: 1px solid $border;
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+
+  button,
+  input,
+  select {
+    font: inherit;
+    color: inherit;
+  }
+
+  button {
+    cursor: pointer;
+    border: 1px solid $border;
+    background: $surface-2;
+    border-radius: 8px;
+    transition: background 120ms ease, border-color 120ms ease;
+
+    &:hover:not(:disabled) {
+      background: #232b3e;
+      border-color: $blue;
+    }
+
+    &:focus-visible,
+    input:focus-visible,
+    select:focus-visible {
+      outline: 2px solid $blue;
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+  }
+}
+
+.aviator-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+
+  nav {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+
+    > button {
+      padding: 7px 10px;
+      font-size: 12px;
+      color: $muted;
+    }
+  }
+
+  .game-switch select {
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid $border;
+    background: $surface-2;
+    font-size: 12px;
+  }
+}
+
+.aviator-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  span {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, $blue, $pink);
+    font-weight: 800;
+    font-size: 12px;
+  }
+
+  strong {
+    letter-spacing: 0.18em;
+    font-size: 15px;
+  }
+}
+
+.aviator-balance {
+  @include card;
+  padding: 6px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+
+  small {
+    color: $muted;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+  }
+
+  strong {
+    font-variant-numeric: tabular-nums;
+    font-size: 17px;
+    color: $green;
+  }
+}
+
+.history-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+
+  .empty {
+    color: $muted;
+    font-size: 12px;
+  }
+
+  button {
+    padding: 5px 8px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    border-color: transparent;
+  }
+
+  .mult-low { background: rgba(74, 163, 255, 0.12); color: $blue; }
+  .mult-mid { background: rgba(50, 213, 131, 0.12); color: $green; }
+  .mult-high { background: rgba(255, 95, 176, 0.14); color: $pink; }
+}
+
+.aviator-canvas-wrap {
+  position: relative;
+  height: 320px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid $border;
+  background: #0a0d13;
+
+  .aviator-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+}
+
+.aviator-hero {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  pointer-events: none;
+  text-shadow: 0 2px 22px rgba(0, 0, 0, 0.85);
+
+  strong {
+    font-size: clamp(42px, 9vw, 82px);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.04em;
+    color: $blue;
+  }
+
+  small {
+    color: $muted;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    font-weight: 700;
+  }
+
+  &.mult-mid strong { color: $green; }
+  &.mult-high strong { color: $pink; }
+  &.crashed strong { color: $red; }
+}
+
+.countdown {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+
+  span {
+    font-weight: 700;
+    font-size: 15px;
+  }
+
+  .countdown-bar {
+    width: 70px;
+    height: 3px;
+    border-radius: 3px;
+    background: $blue;
+    animation: countdown 1s linear infinite;
+    transform-origin: left;
+  }
+}
+
+@keyframes countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+.aviator-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.aviator-panel {
+  @include card;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+
+  .panel-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+
+    button {
+      padding: 6px 14px;
+      border-color: transparent;
+      background: transparent;
+      color: $muted;
+      font-weight: 700;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+
+      &.active {
+        background: $blue-soft;
+        color: $blue;
+        border-color: rgba(74, 163, 255, 0.35);
+      }
+    }
+
+    .panel-state {
+      margin-left: auto;
+      font-size: 10px;
+      text-transform: uppercase;
+      color: $muted;
+    }
+  }
+
+  .stake-row {
+    display: grid;
+    grid-template-columns: 38px 1fr 38px;
+    gap: 6px;
+
+    button { font-size: 19px; line-height: 1; }
+
+    input {
+      width: 100%;
+      min-width: 0;
+      text-align: center;
+      padding: 9px 6px;
+      border-radius: 8px;
+      border: 1px solid $border;
+      background: #0e1220;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+  }
+
+  .quick-amounts {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 5px;
+
+    button { padding: 5px 0; font-size: 11px; color: $muted; }
+  }
+
+  .auto-settings {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+  }
+
+  .auto-settings label,
+  .auto-target {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: $muted;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+
+    input {
+      padding: 7px 8px;
+      border-radius: 7px;
+      border: 1px solid $border;
+      background: #0e1220;
+      font-variant-numeric: tabular-nums;
+    }
+  }
+
+  .action {
+    margin-top: auto;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    border-color: transparent;
+    background: linear-gradient(135deg, $blue, #2e6ec9);
+    color: #fff;
+
+    small {
+      font-size: 10px;
+      opacity: 0.8;
+      font-variant-numeric: tabular-nums;
+    }
+
+    &.cashout { background: linear-gradient(135deg, $green, #1d9c5c); }
+    &.cancel { background: $surface-2; color: $muted; border-color: $border; }
+
+    &:hover:not(:disabled) { filter: brightness(1.1); }
+  }
+}
+
+.aviator-lower {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.aviator-card {
+  @include card;
+  min-width: 0;
+  padding: 11px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+
+    h3 { margin: 0; font-size: 13px; }
+    span { color: $muted; font-size: 10px; text-transform: uppercase; }
+    button { padding: 4px 9px; font-size: 11px; }
+  }
+
+  .activity-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 84px;
+    max-height: 130px;
+    overflow-y: auto;
+
+    > div {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      padding: 4px 6px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.025);
+
+      .masked { color: $muted; }
+      .win { color: $green; }
+    }
+
+    em { color: $muted; font-size: 11px; }
+  }
+
+  .auto-controls {
+    display: flex;
+    gap: 6px;
+
+    button { flex: 1; padding: 6px; font-size: 11px; color: $muted; }
+  }
+
+  .chat-log {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 130px;
+    overflow-y: auto;
+    font-size: 11px;
+
+    p { margin: 0; }
+    strong { color: $blue; }
+    em { color: $muted; }
+  }
+
+  form {
+    display: flex;
+    gap: 6px;
+
+    input {
+      flex: 1;
+      min-width: 0;
+      padding: 7px 9px;
+      border-radius: 7px;
+      border: 1px solid $border;
+      background: #0e1220;
+      font-size: 11px;
+    }
+
+    button { padding: 7px 12px; font-size: 11px; }
+  }
+}
+
+.toast-stack {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 60;
+
+  > div {
+    padding: 9px 13px;
+    border-radius: 8px;
+    border: 1px solid $border;
+    background: $surface-2;
+    font-size: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+
+    &.ok { border-left: 3px solid $green; }
+    &.error { border-left: 3px solid $red; }
+  }
+}
+
+.aviator-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 7, 12, 0.78);
+  padding: 16px;
+}
+
+.aviator-modal {
+  @include card;
+  width: min(520px, 100%);
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 18px;
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    h2 { margin: 0; font-size: 18px; }
+    button { padding: 4px 10px; font-size: 18px; line-height: 1; }
+  }
+
+  p, li { color: $muted; font-size: 12px; line-height: 1.6; }
+  ul { padding-left: 18px; }
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 9px;
+    font-size: 11px;
+    color: $muted;
+
+    input {
+      padding: 8px 10px;
+      border-radius: 7px;
+      border: 1px solid $border;
+      background: #0e1220;
+      color: $text;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+    }
+  }
+
+  .verify {
+    margin-top: 12px;
+    padding: 9px 16px;
+    background: $blue;
+    border-color: transparent;
+    color: #fff;
+    font-weight: 700;
+  }
+
+  pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #0e1220;
+    border: 1px solid $border;
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 11px;
+    color: $green;
+  }
+}
+
+@media (max-width: 640px) {
+  .aviator-stage { padding: 10px; gap: 9px; }
+  .aviator-canvas-wrap { height: 240px; }
+  .aviator-header nav { width: 100%; justify-content: space-between; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .countdown-bar { animation: none; }
+  .aviator-stage button { transition: none; }
+}

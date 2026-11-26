@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gaming-platform.local/aviator/protocol-v1.json",
+  "title": "Aviator protocol v1 frames",
+  "description": "Illustrative JSON Schema for the t-typed frames implemented by services/gateway/aviator-ws.js and packages/aviator.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["t"],
+      "properties": {
+        "t": { "const": "bet" },
+        "reqId": { "type": "string", "maxLength": 128 },
+        "panel": { "enum": [1, 2] },
+        "amount": { "type": "number", "exclusiveMinimum": 0 },
+        "autoCashout": { "type": "number", "minimum": 1.01 }
+      }
+    },
+    { "type": "object", "required": ["t", "betId"], "properties": { "t": { "const": "cancel_bet" }, "reqId": { "type": "string" }, "betId": { "type": "string" } } },
+    { "type": "object", "required": ["t", "betId"], "properties": { "t": { "const": "cashout" }, "reqId": { "type": "string" }, "betId": { "type": "string" } } },
+    {
+      "type": "object",
+      "required": ["t", "amount", "rounds"],
+      "properties": {
+        "t": { "const": "auto_start" },
+        "reqId": { "type": "string" },
+        "panel": { "enum": [1, 2] },
+        "amount": { "type": "number", "exclusiveMinimum": 0 },
+        "autoCashout": { "type": "number", "minimum": 1.01 },
+        "rounds": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "stopRules": { "type": "object" }
+      }
+    },
+    { "type": "object", "required": ["t"], "properties": { "t": { "const": "auto_stop" }, "panel": { "enum": [1, 2] } } },
+    { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "chat" }, "text": { "type": "string", "maxLength": 200 }, "room": { "type": "string" } } },
+    { "type": "object", "required": ["t"], "properties": { "t": { "const": "ping" }, "ts": { "type": "number" } } },
+    {
+      "type": "object",
+      "required": ["t", "roundId", "mult"],
+      "properties": { "t": { "const": "tick" }, "roundId": { "type": "string" }, "mult": { "type": "string" } }
+    },
+    {
+      "type": "object",
+      "required": ["t", "roundId", "mult"],
+      "properties": { "t": { "const": "crash" }, "roundId": { "type": "string" }, "mult": { "type": "number" }, "seed": { "type": "string" } }
+    },
+    {
+      "type": "object",
+      "required": ["t", "code"],
+      "properties": { "t": { "enum": ["bet_err", "cashout_err", "error"] }, "reqId": { "type": "string" }, "code": { "type": "string" }, "message": { "type": "string" } }
+    }
+  ]
+}

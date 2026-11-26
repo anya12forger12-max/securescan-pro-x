@@ -10,6 +10,10 @@ export const config = {
   gateway: gatewayOrigin,
   api: `${gatewayOrigin}/v1`,
   events: `${gatewayOrigin}/v1/events/stream`,
+  // Aviator protocol v1. Native WebSockets cannot set an Authorization header,
+  // so the gateway accepts the short-lived access token as a query parameter
+  // on this same-origin endpoint.
+  socket: `ws${gatewayOrigin.startsWith("https") ? "s" : ""}://${gatewayOrigin.replace(/^https?:\/\//, "") || (typeof window === "undefined" ? "" : window.location.host)}/v1/ws`,
   // No token is persisted any more. These old keys exist only so the client
   // can delete credentials written by earlier builds during session bootstrap.
   legacyTokenKey: "gp.access.token",
