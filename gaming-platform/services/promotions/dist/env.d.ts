@@ -17,12 +17,14 @@ import { z } from "zod";
  * internal endpoint; the old Redis EventBus had no subscriber.
  */
 export declare const promotionsEnvSchema: z.ZodObject<{
+    JWT_PUBLIC_KEY: z.ZodString;
+    JWT_ISSUER: z.ZodDefault<z.ZodString>;
+    JWT_AUDIENCE: z.ZodDefault<z.ZodString>;
     NODE_ENV: z.ZodDefault<z.ZodEnum<["development", "test", "production"]>>;
     WALLET_SERVICE_TOKEN: z.ZodOptional<z.ZodString>;
     WALLET_BONUS_SERVICE_TOKEN: z.ZodOptional<z.ZodString>;
     PORT: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
     DATABASE_URL: z.ZodString;
-    JWT_ACCESS_SECRET: z.ZodString;
     REDIS_URL: z.ZodOptional<z.ZodString>;
     CORS_ORIGIN: z.ZodDefault<z.ZodString>;
     LOG_LEVEL: z.ZodDefault<z.ZodEnum<{
@@ -43,6 +45,9 @@ export declare const promotionsEnvSchema: z.ZodObject<{
 }, z.core.$strip>;
 export type PromotionsEnv = z.infer<typeof promotionsEnvSchema>;
 export declare const loadEnv: (data: unknown, params?: z.core.ParseContext<z.core.$ZodIssue>) => {
+    JWT_PUBLIC_KEY: string;
+    JWT_ISSUER: string;
+    JWT_AUDIENCE: string;
     NODE_ENV: "development" | "production" | "test" | 3 | (() => string) | {
         (): string;
         (locales: string | string[], options?: Intl.NumberFormatOptions & Intl.DateTimeFormatOptions): string;
@@ -111,7 +116,6 @@ export declare const loadEnv: (data: unknown, params?: z.core.ParseContext<z.cor
     WALLET_BONUS_SERVICE_TOKEN?: string | undefined;
     PORT: number;
     DATABASE_URL: string;
-    JWT_ACCESS_SECRET: string;
     REDIS_URL?: string | undefined;
     CORS_ORIGIN: string;
     LOG_LEVEL: "debug" | "error" | "fatal" | "info" | "silent" | "trace" | "warn";

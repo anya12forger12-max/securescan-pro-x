@@ -1,7 +1,9 @@
 declare const env: {
+    JWT_PUBLIC_KEY: string;
+    JWT_ISSUER: string;
+    JWT_AUDIENCE: string;
     DATABASE_URL: string;
     PORT: number;
-    JWT_ACCESS_SECRET: string;
     REALTIME_URL: string;
     REALTIME_SERVICE_TOKEN: string;
     CORS_ORIGIN: string;

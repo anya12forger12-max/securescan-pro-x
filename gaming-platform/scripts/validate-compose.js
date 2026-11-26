@@ -181,7 +181,9 @@ const pgMax = Number(compose.match(/max_connections=(\d+)/)?.[1] ?? 0);
 const appServices = [...blocks.keys()]
   .map((name) => [name, body(name)])
   .filter(([, text]) => /command:\s*(?:node services\/|\[\s*["']node["']\s*,\s*["']services\/)/.test(text));
-const dbServices = appServices.filter(([name]) => name !== "gateway" && name !== "migrate");
+// The gateway now checks access-token jti/version records in Postgres, so it
+// needs a pool slot like every other app service. Only migrations are excluded.
+const dbServices = appServices.filter(([name]) => name !== "migrate");
 if (!poolMax) errors.push("DB_POOL_MAX default is missing");
 if (!pgMax) errors.push("postgres max_connections is not configured");
 if (poolMax && pgMax) {

@@ -12,21 +12,31 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { promisify } from "node:util";
-import { baseEnvSchema, dbPoolOptions, loadEnv, parseCorsOrigins, registerErrorHandler } from "@gp/config";
+import {
+  baseEnvSchema,
+  dbPoolOptions,
+  jwtSignEnvFields,
+  jwtVerifyOptions,
+  jwtVerifyPluginOptions,
+  loadEnv,
+  normalizePem,
+  parseCorsOrigins,
+  registerErrorHandler,
+} from "@gp/config";
 import { ERROR_CODES } from "@gp/shared-types";
 
 /**
  * Auth service (3015).
  *
- * Mints the platform-wide HS256 access token contract
- * ({ userId, username } with a 900s default lifetime) and owns credential
- * storage plus rotating refresh tokens. Every other service verifies the same
- * JWT with the shared JWT_ACCESS_SECRET.
+ * The only process holding JWT_PRIVATE_KEY. It mints RS256 access tokens
+ * ({ userId, username, ver, jti, iss, aud } with a 900s default lifetime) and
+ * owns credential storage plus rotating refresh tokens. Every other service
+ * verifies with the matching public key and pinned issuer/audience.
  */
 const envSchema = baseEnvSchema.extend({
   PORT: z.coerce.number().int().positive().default(3015),
   DATABASE_URL: z.string().min(1).url(),
-  JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 characters"),
+  ...jwtSignEnvFields,
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   JWT_EXPIRES_IN: z.coerce.number().int().positive().default(900),
@@ -57,7 +67,7 @@ const refreshCookieSecure = (req) => {
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
 await app.register(cors, { origin: CORS_ORIGINS });
-await app.register(jwt, { secret: env.JWT_ACCESS_SECRET });
+await app.register(jwt, jwtVerifyPluginOptions(env));
 registerErrorHandler(app);
 
 app.addHook("onRequest", async (req, reply) => {
@@ -124,12 +134,39 @@ const DUMMY_PASSWORD_HASH = await hashPassword("timing-equalizer-password");
 // ---------------------------------------------------------------------------
 // Token helpers
 // ---------------------------------------------------------------------------
-const mintAccessToken = (user) =>
-  jsonwebtoken.sign(
-    { userId: String(user.id), username: user.username },
-    env.JWT_ACCESS_SECRET,
-    { algorithm: "HS256", expiresIn: env.JWT_EXPIRES_IN },
+const mintAccessToken = (user) => {
+  const jti = randomUUID();
+  const ver = Number(user.token_version ?? 1);
+  const token = jsonwebtoken.sign(
+    { userId: String(user.id), username: user.username, ver },
+    normalizePem(env.JWT_PRIVATE_KEY),
+    {
+      algorithm: "RS256",
+      expiresIn: env.JWT_EXPIRES_IN,
+      issuer: env.JWT_ISSUER,
+      audience: env.JWT_AUDIENCE,
+      jwtid: jti,
+    },
   );
+  return {
+    token,
+    jti,
+    ver,
+    expiresAt: new Date(Date.now() + env.JWT_EXPIRES_IN * 1000),
+  };
+};
+
+/** Persist the jti before returning the token. The gateway refuses any signed
+ * token without a matching, unrevoked record at the current generation. */
+async function issueAccessToken(user, executor = pool) {
+  const issued = mintAccessToken(user);
+  await executor.query(
+    `INSERT INTO auth_access_tokens (jti, user_id, token_version, expires_at)
+     VALUES ($1, $2, $3, $4)`,
+    [issued.jti, user.id, issued.ver, issued.expiresAt],
+  );
+  return issued;
+}
 
 const hashRefreshToken = (token) => createHash("sha256").update(token).digest("hex");
 
@@ -212,7 +249,9 @@ async function issueRefreshToken(executor, userId, familyId = randomUUID()) {
   return token;
 }
 
-const PUBLIC_USER_COLUMNS = "id, username, email, created_at";
+// token_version is not returned by publicUser(), but mintAccessToken needs it
+// so every issued token is bound to the current revocation generation.
+const PUBLIC_USER_COLUMNS = "id, username, email, created_at, token_version";
 const publicUser = (row) => ({
   id: row.id,
   username: row.username,
@@ -220,11 +259,12 @@ const publicUser = (row) => ({
   created_at: row.created_at,
 });
 
-function authData(user) {
+async function authData(user, executor = pool) {
   // Never include the refresh token here: it lives only in the HttpOnly cookie
   // and must be unreachable from JavaScript (and from XSS).
+  const access = await issueAccessToken(user, executor);
   return {
-    token: mintAccessToken(user),
+    token: access.token,
     token_type: "Bearer",
     expires_in: env.JWT_EXPIRES_IN,
     user: publicUser(user),
@@ -289,7 +329,7 @@ app.post("/v1/auth/login", async (req, reply) => {
   const { identifier, password } = parsed.data;
   try {
     const result = await pool.query(
-      `SELECT id, username, email, created_at, password_hash
+      `SELECT id, username, email, created_at, password_hash, token_version
        FROM auth_users WHERE username = $1 OR email = $1 LIMIT 1`,
       [identifier],
     );
@@ -301,9 +341,12 @@ app.post("/v1/auth/login", async (req, reply) => {
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid credentials");
 
     await pool.query(`UPDATE auth_users SET last_login_at = now() WHERE id = $1`, [row.id]);
+    // Mint the access record first so a failed insert cannot leave a live
+    // refresh cookie with no usable access token.
+    const data = await authData(row);
     const refreshToken = await issueRefreshToken(pool, row.id);
     setRefreshCookie(reply, refreshToken, req);
-    return ok(reply, 200, authData(row), reqId(req));
+    return ok(reply, 200, data, reqId(req));
   } catch (err) {
     req.log.error({ err }, "login failed");
     return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "login failed");
@@ -350,6 +393,17 @@ app.post("/v1/auth/refresh", async (req, reply) => {
           WHERE family_id = $1 AND revoked_at IS NULL`,
         [familyId],
       );
+      // A replayed refresh token is treated as theft: revoke every access
+      // token already minted for this user, not just refresh siblings.
+      await client.query(
+        `UPDATE auth_users SET token_version = token_version + 1 WHERE id = $1`,
+        [userId],
+      );
+      await client.query(
+        `UPDATE auth_access_tokens SET revoked_at = now()
+          WHERE user_id = $1 AND revoked_at IS NULL`,
+        [userId],
+      );
       await client.query("COMMIT");
       clearSessionHint(reply, req);
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid or expired refresh token");
@@ -365,8 +419,8 @@ app.post("/v1/auth/refresh", async (req, reply) => {
       clearSessionHint(reply, req);
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid or expired refresh token");
     }
+    const data = await authData(userResult.rows[0], client);
     await client.query("COMMIT");
-    const data = authData(userResult.rows[0]);
     if (cookieToken) {
       // Cookie clients never receive the rotated token in JSON: only the new
       // HttpOnly cookie carries it, so XSS cannot read or exfiltrate it.
@@ -400,7 +454,7 @@ app.post("/v1/auth/logout", async (req, reply) => {
       // Include revoked rows: an already-rotated token still points at the
       // family whose new sibling this logout must kill.
       const found = await client.query(
-        `SELECT family_id FROM auth_refresh_tokens WHERE token_hash = $1 FOR UPDATE`,
+        `SELECT family_id, user_id FROM auth_refresh_tokens WHERE token_hash = $1 FOR UPDATE`,
         [hashRefreshToken(token)],
       );
       if (found.rowCount && found.rows[0].family_id) {
@@ -414,6 +468,20 @@ app.post("/v1/auth/logout", async (req, reply) => {
           `UPDATE auth_refresh_tokens SET revoked_at = now()
            WHERE token_hash = $1 AND revoked_at IS NULL`,
           [hashRefreshToken(token)],
+        );
+      }
+      if (found.rowCount) {
+        // Refresh revocation alone leaves already-issued access tokens valid
+        // until exp. Bump the generation in the same transaction so the edge
+        // rejects them immediately (bounded by its short version cache TTL).
+        await client.query(
+          `UPDATE auth_users SET token_version = token_version + 1 WHERE id = $1`,
+          [found.rows[0].user_id],
+        );
+        await client.query(
+          `UPDATE auth_access_tokens SET revoked_at = now()
+            WHERE user_id = $1 AND revoked_at IS NULL`,
+          [found.rows[0].user_id],
         );
       }
       await client.query("COMMIT");
@@ -438,15 +506,33 @@ app.get("/v1/auth/me", async (req, reply) => {
 
   let decoded;
   try {
-    decoded = await app.jwt.verify(raw.slice(7), { algorithms: ["HS256"] });
+    decoded = await app.jwt.verify(raw.slice(7), jwtVerifyOptions(env));
   } catch {
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid token");
   }
   const userId = decoded?.userId;
-  if (typeof userId !== "string" || !UUID.test(userId))
+  const jti = decoded?.jti;
+  const ver = Number(decoded?.ver);
+  if (
+    typeof userId !== "string" || !UUID.test(userId) ||
+    typeof jti !== "string" || !UUID.test(jti) ||
+    !Number.isInteger(ver) || ver < 1
+  )
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid token");
 
   try {
+    // Signature validity alone is not enough after logout or refresh replay.
+    const active = await pool.query(
+      `SELECT 1 FROM auth_access_tokens t
+       JOIN auth_users u ON u.id = t.user_id
+       WHERE t.jti = $1 AND t.user_id = $2 AND t.token_version = $3
+         AND t.revoked_at IS NULL AND t.expires_at > now()
+         AND u.token_version = t.token_version`,
+      [jti, userId, ver],
+    );
+    if (!active.rowCount)
+      return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "token has been revoked");
+
     const result = await pool.query(
       `SELECT ${PUBLIC_USER_COLUMNS} FROM auth_users WHERE id = $1`,
       [userId],

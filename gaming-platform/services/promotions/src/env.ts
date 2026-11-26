@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { baseEnvSchema, capabilityFields } from "@gp/config";
+import { baseEnvSchema, capabilityFields, jwtVerifyEnvFields } from "@gp/config";
 
 /**
  * Promotions env.
@@ -25,7 +25,7 @@ export const promotionsEnvSchema = baseEnvSchema
     WALLET_BONUS_SERVICE_TOKEN: z.string().min(32).optional(),
     PORT: z.coerce.number().int().positive().default(3022),
     DATABASE_URL: z.string().min(1).url(),
-    JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 characters"),
+    ...jwtVerifyEnvFields,
     // Retained only so older deployment manifests keep parsing; no code path
     // uses Redis any more.
     REDIS_URL: z.string().min(1).url().optional(),

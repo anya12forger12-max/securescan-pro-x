@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { chmod, readFile, writeFile } from "node:fs/promises";
 
 const force = process.argv.includes("--force");
@@ -65,7 +65,16 @@ const databaseUrl = previous.DATABASE_URL
 const redisPassword = previous.REDIS_PASSWORD || previousRedis || secret(24);
 const redisUrl = previous.REDIS_URL
   || `redis://:${encodeURIComponent(redisPassword)}@redis:6379`;
-const jwtSecret = secret(48);
+// Access tokens are RS256-signed: auth holds the private key, every other
+// service (and the gateway's jti/version check) only gets the public key. PEM
+// text is stored with literal \n escapes so Compose can interpolate one line.
+const { publicKey, privateKey } = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  publicKeyEncoding: { type: "spki", format: "pem" },
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+});
+const jwtPublicKey = publicKey.replace(/\n/g, "\\n").trim();
+const jwtPrivateKey = privateKey.replace(/\n/g, "\\n").trim();
 const serviceToken = secret(48);
 const adminServiceToken = secret(48);
 const walletServiceToken = secret(48);
@@ -89,7 +98,11 @@ DB_POOL_MAX=5
 # Redis is password-protected and reachable only on the Compose internal network.
 REDIS_PASSWORD=${redisPassword}
 REDIS_URL=${redisUrl}
-JWT_ACCESS_SECRET=${jwtSecret}
+# RS256 access-token keypair. Regenerating .env invalidates every access token.
+JWT_PUBLIC_KEY=${jwtPublicKey}
+JWT_PRIVATE_KEY=${jwtPrivateKey}
+JWT_ISSUER=gaming-platform
+JWT_AUDIENCE=gaming-platform-api
 SERVICE_TOKEN=${serviceToken}
 # Capability-scoped internal credentials. Never reuse SERVICE_TOKEN for these.
 ADMIN_SERVICE_TOKEN=${adminServiceToken}
@@ -116,6 +129,9 @@ RATE_LIMIT_FAIL_CLOSED=true
 RATE_LIMIT_STREAM_MAX=20
 TRUST_PROXY_HOPS=1
 UPSTREAM_TIMEOUT_MS=30000
+# Gateway cache for access-token jti/version checks; revocation takes effect
+# within this window. 0 disables caching and hits Postgres on every request.
+TOKEN_VERSION_CACHE_MS=15000
 MAX_STREAMS=500
 EVENT_RETENTION_HOURS=168
 `;

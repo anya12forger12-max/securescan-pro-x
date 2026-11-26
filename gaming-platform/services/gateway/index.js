@@ -1,15 +1,23 @@
 import Fastify from "fastify";
 import jwt from "jsonwebtoken";
+import pg from "pg";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRateLimiter } from "./rate-limit.js";
-import { parseCorsOrigins } from "@gp/config";
+import {
+  assertDistinctSecrets,
+  dbPoolOptions,
+  jwtVerifyOptions,
+  normalizePem,
+  parseCorsOrigins,
+} from "@gp/config";
 
 const PORT = Number(process.env.PORT ?? 3000);
-const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
+const JWT_PUBLIC_KEY = normalizePem(process.env.JWT_PUBLIC_KEY);
+const JWT_VERIFY_OPTIONS = jwtVerifyOptions(process.env);
 const SERVICE_TOKEN = process.env.SERVICE_TOKEN;
 const ADMIN_SERVICE_TOKEN = process.env.ADMIN_SERVICE_TOKEN;
 const WALLET_SERVICE_TOKEN = process.env.WALLET_SERVICE_TOKEN;
@@ -78,10 +86,24 @@ const ADMIN_RISK_URL =
   process.env.ADMIN_RISK_URL ??
   (UPSTREAM_MODE === "docker" ? "http://admin-risk:3013" : "http://127.0.0.1:3013");
 
-if (!JWT_ACCESS_SECRET || JWT_ACCESS_SECRET.length < 32) {
-  console.error("[gateway] JWT_ACCESS_SECRET must be at least 32 characters");
+if (!JWT_PUBLIC_KEY.includes("BEGIN PUBLIC KEY")) {
+  console.error("[gateway] JWT_PUBLIC_KEY must be a PEM-encoded RSA public key");
   process.exit(1);
 }
+assertDistinctSecrets(process.env);
+
+if (!process.env.DATABASE_URL) {
+  console.error("[gateway] DATABASE_URL is required to verify access-token records");
+  process.exit(1);
+}
+const TOKEN_VERSION_CACHE_MS = (() => {
+  const parsed = Number(process.env.TOKEN_VERSION_CACHE_MS ?? 15_000);
+  return Number.isInteger(parsed) && parsed >= 0 ? Math.min(parsed, 60_000) : 15_000;
+})();
+const tokenPool = new pg.Pool(dbPoolOptions(process.env.DATABASE_URL));
+const tokenCache = new Map(); // jti -> { at, valid, userId, version }
+const TOKEN_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const REQUIRED_SECRETS = {
   SERVICE_TOKEN,
   ADMIN_SERVICE_TOKEN,
@@ -404,6 +426,88 @@ const app = Fastify({
   logger: { level: process.env.LOG_LEVEL ?? "info" },
   trustProxy: TRUST_PROXY_HOPS,
 });
+app.addHook("onClose", async () => {
+  await tokenPool.end();
+});
+
+/**
+ * A valid RS256 signature is necessary but not sufficient: auth records every
+ * issued jti and bumps `auth_users.token_version` on logout/replay. Checking
+ * both at the edge makes a revoked token unusable without waiting for exp.
+ * Positive results are cached briefly; a negative result is cached only for
+ * the same bounded window so newly minted jtis cannot be stuck out of date.
+ */
+function pruneTokenCache(now) {
+  if (tokenCache.size < 5000) return;
+  for (const [key, value] of tokenCache) {
+    if (now - value.at >= TOKEN_VERSION_CACHE_MS) tokenCache.delete(key);
+  }
+}
+
+async function accessTokenActive(decoded, log) {
+  const { userId, jti } = decoded ?? {};
+  const version = Number(decoded?.ver);
+  if (
+    typeof userId !== "string" || !TOKEN_UUID.test(userId) ||
+    typeof jti !== "string" || !TOKEN_UUID.test(jti) ||
+    !Number.isInteger(version) || version < 1
+  )
+    return false;
+
+  const now = Date.now();
+  if (TOKEN_VERSION_CACHE_MS > 0) {
+    const cached = tokenCache.get(jti);
+    if (cached && now - cached.at < TOKEN_VERSION_CACHE_MS) {
+      return cached.valid &&
+        cached.userId === userId &&
+        cached.version === version;
+    }
+  }
+
+  try {
+    const result = await tokenPool.query(
+      `SELECT t.user_id::text AS "userId", t.token_version
+       FROM auth_access_tokens t
+       JOIN auth_users u ON u.id = t.user_id
+       WHERE t.jti = $1 AND t.user_id = $2 AND t.token_version = $3
+         AND t.revoked_at IS NULL AND t.expires_at > now()
+         AND u.token_version = t.token_version`,
+      [jti, userId, version],
+    );
+    const row = result.rows[0];
+    const valid = Boolean(row && row.userId === userId && Number(row.token_version) === version);
+    if (TOKEN_VERSION_CACHE_MS > 0) {
+      pruneTokenCache(now);
+      tokenCache.set(jti, {
+        at: now,
+        valid,
+        userId: valid ? userId : null,
+        version: valid ? version : null,
+      });
+    }
+    return valid;
+  } catch (err) {
+    // Fail closed: an unverifiable token must not be treated as anonymous and
+    // forwarded with a stale identity header.
+    log?.warn({ err, jti }, "access-token record lookup failed");
+    return null;
+  }
+}
+
+async function resolveBearer(req) {
+  const raw = req.headers.authorization;
+  if (typeof raw !== "string" || !raw.startsWith("Bearer ")) return { status: "none" };
+  let decoded;
+  try {
+    decoded = jwt.verify(raw.slice(7), JWT_PUBLIC_KEY, JWT_VERIFY_OPTIONS);
+  } catch {
+    return { status: "invalid" };
+  }
+  const active = await accessTokenActive(decoded, req.log);
+  if (active === null) return { status: "unavailable" };
+  if (!active) return { status: "invalid" };
+  return { status: "valid", claims: decoded };
+}
 
 // The gateway is a transparent proxy. Parsing JSON into an object and then
 // re-serialising it rejects legitimate empty POST bodies and can change number
@@ -506,6 +610,20 @@ app.addHook("onRequest", async (req, reply) => {
   if (path.startsWith("/internal/")) return;
   const ip = req.ip ?? req.socket?.remoteAddress ?? "unknown";
 
+  // Registration/login/refresh are anonymous by definition; do not require a
+  // token record lookup for them. Every other path with a Bearer credential is
+  // checked here so rate-limit buckets and proxy identity use the same truth.
+  let authResult = { status: "none" };
+  if (!IP_LIMITED_AUTH_PATH.test(path)) {
+    authResult = await resolveBearer(req);
+    if (authResult.status === "unavailable") {
+      return reply.code(503).send({
+        error: "SERVICE_UNAVAILABLE",
+        message: "access-token verification unavailable",
+      });
+    }
+  }
+
   const applyLimit = (result) => {
     reply.header("x-ratelimit-limit", String(result.limit));
     reply.header("x-ratelimit-remaining", String(result.remaining));
@@ -520,19 +638,10 @@ app.addHook("onRequest", async (req, reply) => {
     });
   };
 
-  const verifiedUserId = () => {
-    const raw = req.headers.authorization;
-    if (typeof raw === "string" && raw.startsWith("Bearer ")) {
-      try {
-        const decoded = jwt.verify(raw.slice(7), JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
-        if (typeof decoded.userId === "string") return decoded.userId;
-      } catch {
-        // An invalid token is still counted by IP; the downstream service
-        // performs the authoritative rejection.
-      }
-    }
-    return null;
-  };
+  // An invalid token is still counted by IP; the proxy will reject it before
+  // forwarding if the route requires a player identity.
+  const verifiedUserId = () =>
+    authResult.status === "valid" ? authResult.claims.userId : null;
 
   // Anonymous stream attempts are limited by IP; a verified player's stream
   // establishment is a normal read request and falls through to the per-user
@@ -578,19 +687,14 @@ const KNOWN_PERMISSIONS = [
   "roles.manage",
 ];
 app.get("/v1/me/permissions", async (req, reply) => {
-  const raw = req.headers.authorization;
-  if (typeof raw !== "string" || !raw.startsWith("Bearer ")) {
-    return reply.code(401).send({ error: "UNAUTHORIZED", message: "a player token is required" });
+  const authResult = await resolveBearer(req);
+  if (authResult.status === "unavailable") {
+    return reply.code(503).send({ error: "SERVICE_UNAVAILABLE", message: "token verification unavailable" });
   }
-  let decoded;
-  try {
-    decoded = jwt.verify(raw.slice(7), JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
-  } catch {
+  if (authResult.status !== "valid") {
     return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid token" });
   }
-  if (typeof decoded?.userId !== "string") {
-    return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid token" });
-  }
+  const decoded = authResult.claims;
   const granted = await Promise.all(
     KNOWN_PERMISSIONS.map(async (permission) =>
       (await hasPermission(decoded.userId, permission, req.log)) ? permission : null),
@@ -632,18 +736,23 @@ async function proxy(req, reply) {
     delete headers[name];
   }
 
-  // Assert identity only from a verified player JWT. Services still receive
-  // the original Authorization header and can verify it independently.
-  let decoded = null;
-  const raw = headers.authorization;
-  if (typeof raw === "string" && raw.startsWith("Bearer ")) {
-    try {
-      decoded = jwt.verify(raw.slice(7), JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
-      if (typeof decoded.userId === "string") headers["x-user-id"] = decoded.userId;
-      if (typeof decoded.username === "string") headers["x-username"] = decoded.username;
-    } catch {
-      // Invalid tokens are passed through; the downstream service rejects them.
-    }
+  // Assert identity only from a verified, unrevoked player token. Services
+  // still receive the original Authorization header and verify it independently.
+  // Login/register/refresh are anonymous capabilities: a stale Authorization
+  // header must not be able to block a credential exchange.
+  const authResult = IP_LIMITED_AUTH_PATH.test(path)
+    ? { status: "none" }
+    : await resolveBearer(req);
+  if (authResult.status === "unavailable") {
+    return reply.code(503).send({
+      error: "SERVICE_UNAVAILABLE",
+      message: "access-token verification unavailable",
+    });
+  }
+  const decoded = authResult.status === "valid" ? authResult.claims : null;
+  if (decoded) {
+    headers["x-user-id"] = decoded.userId;
+    if (typeof decoded.username === "string") headers["x-username"] = decoded.username;
   }
 
   // Peer-to-peer routes are authenticated by their capability token alone;

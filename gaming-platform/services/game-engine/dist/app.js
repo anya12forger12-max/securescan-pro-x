@@ -3,7 +3,7 @@ import { z } from "zod";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { parseCorsOrigins } from "@gp/config";
+import { jwtVerifyPluginOptions, parseCorsOrigins } from "@gp/config";
 import { getPool, closePool, createSession, getSession, endSession, joinSession, listSessionPlayers, isSessionParticipant } from "./db.js";
 /**
  * The request's route path.
@@ -32,10 +32,7 @@ const JoinSessionSchema = z.object({
 export async function buildGameEngineService(env) {
     const app = Fastify({ logger: { level: env.LOG_LEVEL } });
     await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
-    await app.register(jwt, {
-        secret: env.JWT_ACCESS_SECRET,
-        sign: { expiresIn: Math.floor(900) },
-    });
+    await app.register(jwt, jwtVerifyPluginOptions(env));
     // Auth middleware
     app.addHook("onRequest", async (req, reply) => {
         // the probes are not player calls: a container that cannot be probed

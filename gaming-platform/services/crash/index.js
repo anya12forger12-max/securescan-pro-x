@@ -11,6 +11,8 @@ import {
   fetchWithTimeout,
   loadEnv,
   parseCorsOrigins,
+  jwtVerifyEnvFields,
+  jwtVerifyPluginOptions,
 } from "@gp/config";
 import { ERROR_CODES, moneyMul, serviceTokenOk, toMoney } from "@gp/shared-types";
 
@@ -44,7 +46,7 @@ const envSchema = baseEnvSchema.extend({
   WALLET_WIN_SERVICE_TOKEN: z.string().min(32).optional(),
   PORT: z.coerce.number().int().positive().default(3023),
   DATABASE_URL: z.string().min(1).url(),
-  JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 characters"),
+  ...jwtVerifyEnvFields,
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   WALLET_INTERNAL_URL: z.string().url().default("http://wallet:3011"),
@@ -68,7 +70,7 @@ const UNSETTLED_RECONCILE_MS = 2000;
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
 await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
-await app.register(jwt, { secret: env.JWT_ACCESS_SECRET });
+await app.register(jwt, jwtVerifyPluginOptions(env));
 
 app.addHook("onRequest", async (req, reply) => {
   const requestId = req.headers["x-request-id"] ?? randomUUID();

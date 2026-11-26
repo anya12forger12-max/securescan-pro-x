@@ -2,7 +2,7 @@ import { z } from "zod";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { parseCorsOrigins } from "@gp/config";
+import { jwtVerifyPluginOptions, parseCorsOrigins } from "@gp/config";
 import { getPool, closePool, createLeaderboardEntry, getLeaderboard, getUserBestScores, getUserStats, verifyGameResult } from "./db.js";
 /**
  * The request's route path.
@@ -25,10 +25,7 @@ const LimitSchema = z.coerce.number().int().min(1).max(100).default(50);
 export async function buildLeaderboardService(env) {
     const app = Fastify({ logger: { level: env.LOG_LEVEL } });
     await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
-    await app.register(jwt, {
-        secret: env.JWT_ACCESS_SECRET,
-        sign: { expiresIn: Math.floor(900) },
-    });
+    await app.register(jwt, jwtVerifyPluginOptions(env));
     // ---------- get leaderboard (public) ----------
     app.get("/v1/leaderboard/:gameType", async (req, reply) => {
         const { gameType } = req.params;

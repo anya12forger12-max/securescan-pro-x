@@ -10,7 +10,11 @@ x-common-env: &common-env
   DB_POOL_MAX: ${DB_POOL_MAX:-5}
   # Must embed REDIS_PASSWORD; a missing URL fails the deploy (no anonymous Redis).
   REDIS_URL: ${REDIS_URL:?REDIS_URL must include the Redis password}
-  JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET must be at least 32 random characters}
+  # Every process verifies tokens with the public key. Only auth receives the
+  # private key (below), so a compromised game service cannot mint identities.
+  JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?JWT_PUBLIC_KEY must be an RSA public key}
+  JWT_ISSUER: ${JWT_ISSUER:-gaming-platform}
+  JWT_AUDIENCE: ${JWT_AUDIENCE:-gaming-platform-api}
   # Capability credentials are intentionally NOT shared here. Each service
   # below receives only the token(s) its own code verifies; the gateway holds
   # all of them because it is the component that injects them per route.
@@ -186,6 +190,9 @@ services:
       # Upstream connection/response-header budget. SSE streams are exempt once
       # established because their socket lifetime is intentionally long.
       UPSTREAM_TIMEOUT_MS: ${UPSTREAM_TIMEOUT_MS:-30000}
+      # Positive token-record lookups are cached briefly. Revocation is bounded
+      # by this window; set 0 to hit Postgres on every authenticated request.
+      TOKEN_VERSION_CACHE_MS: ${TOKEN_VERSION_CACHE_MS:-15000}
       # MAX_STREAMS/EVENT_RETENTION_HOURS belong to realtime only. Injecting
       # them here suggested a gateway knob that its stream lease code never read.
     healthcheck:
@@ -214,6 +221,9 @@ services:
     environment:
       <<: *common-env
       PORT: 3015
+      # The private signing key is deliberately absent from common-env: auth
+      # is the only process allowed to mint access tokens.
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?JWT_PRIVATE_KEY must be an RSA private key}
     expose:
       - "3015"
 

@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import type { FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { parseCorsOrigins } from "@gp/config";
+import { jwtVerifyPluginOptions, parseCorsOrigins } from "@gp/config";
 import { getPool, closePool, createMessage, listMessages, createRoom, listRooms } from "./db.js";
 import type { ChatEnv } from "./env.js";
 
@@ -49,10 +49,7 @@ export async function buildChatService(env: ChatEnv) {
   };
 
   await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
-  await app.register(jwt, {
-    secret: env.JWT_ACCESS_SECRET,
-    sign: { expiresIn: Math.floor(900) },
-  });
+  await app.register(jwt, jwtVerifyPluginOptions(env));
 
   // Auth middleware
   app.addHook("onRequest", async (req, reply) => {

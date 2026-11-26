@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { createHash, randomUUID } from "node:crypto";
-import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, registerErrorHandler, parseCorsOrigins } from "@gp/config";
+import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, registerErrorHandler, parseCorsOrigins, jwtVerifyEnvFields, jwtVerifyPluginOptions } from "@gp/config";
 import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
 
 /**
@@ -19,7 +19,7 @@ const envSchema = baseEnvSchema.extend({
   ...capabilityFields("ADMIN_SERVICE_TOKEN", "ADMIN_BOOTSTRAP_TOKEN"),
   PORT: z.coerce.number().int().positive().default(3013),
   DATABASE_URL: z.string().min(1).url(),
-  JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 characters"),
+  ...jwtVerifyEnvFields,
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
@@ -49,7 +49,7 @@ const AUDIT_COLUMNS = `seq, prev_hash, hash, actor, action, target, metadata, cr
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
 await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
-await app.register(jwt, { secret: env.JWT_ACCESS_SECRET });
+await app.register(jwt, jwtVerifyPluginOptions(env));
 registerErrorHandler(app);
 
 app.addHook("onRequest", async (req, reply) => {

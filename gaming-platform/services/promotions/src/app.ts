@@ -1,4 +1,4 @@
-import { parseCorsOrigins, registerErrorHandler } from "@gp/config";
+import { jwtVerifyPluginOptions, parseCorsOrigins, registerErrorHandler } from "@gp/config";
 import Fastify from "fastify";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
@@ -127,7 +127,7 @@ export async function buildPromotionsService(deps: PromotionsDeps): Promise<Fast
   const app = Fastify({ logger: { level: env.LOG_LEVEL }, genReqId: () => randomUUID() });
   registerErrorHandler(app);
   await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN), credentials: true });
-  await app.register(jwt, { secret: env.JWT_ACCESS_SECRET });
+  await app.register(jwt, jwtVerifyPluginOptions(env));
   app.addHook("onRequest", async (req, reply) => {
     const requestId = req.headers["x-request-id"] ?? randomUUID();
     req.headers["x-request-id"] = requestId;

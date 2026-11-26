@@ -17,6 +17,53 @@ export declare function capabilityFields<K extends keyof typeof capabilityTokenF
   ...names: K[]
 ): { [P in K]: z.ZodString };
 
+/** RS256 access-token configuration. Only auth receives the private key. */
+export declare const JWT_ALGORITHM: "RS256";
+export declare const JWT_ISSUER: "gaming-platform";
+export declare const JWT_AUDIENCE: "gaming-platform-api";
+
+export declare function normalizePem(value: unknown): string;
+
+export declare const jwtVerifyEnvFields: {
+  JWT_PUBLIC_KEY: z.ZodString;
+  JWT_ISSUER: z.ZodDefault<z.ZodString>;
+  JWT_AUDIENCE: z.ZodDefault<z.ZodString>;
+};
+
+export declare const jwtSignEnvFields: {
+  JWT_PUBLIC_KEY: z.ZodString;
+  JWT_ISSUER: z.ZodDefault<z.ZodString>;
+  JWT_AUDIENCE: z.ZodDefault<z.ZodString>;
+  JWT_PRIVATE_KEY: z.ZodString;
+};
+
+export declare function jwtVerifyOptions(env: {
+  JWT_ISSUER?: string;
+  JWT_AUDIENCE?: string;
+}): {
+  algorithms: ["RS256"];
+  issuer: string;
+  audience: string;
+};
+
+export declare function jwtVerifyPluginOptions(env: {
+  JWT_PUBLIC_KEY: string;
+  JWT_ISSUER?: string;
+  JWT_AUDIENCE?: string;
+}): {
+  secret: { public: string };
+  verify: {
+    algorithms: ["RS256"];
+    issuer: string;
+    audience: string;
+  };
+};
+
+/** Reject a deployment that accidentally reuses one secret for two purposes. */
+export declare function assertDistinctSecrets(
+  env?: Record<string, unknown>,
+): void;
+
 /** Base environment schema shared by every service (no credentials). */
 export declare const baseEnvSchema: z.ZodObject<{
   NODE_ENV: z.ZodDefault<z.ZodEnum<["development", "test", "production"]>>;
