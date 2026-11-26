@@ -48,3 +48,35 @@ server replies at protocol version 1). Server frames include `snapshot`,
 `cashout_ok`, `cashout_err`, `balance`, `feed`, `chat_msg`, `error`, `pong`.
 Client frames include `bet`, `cancel_bet`, `cashout`, `auto_start`, `auto_stop`,
 `chat`, `ping`. Each request `reqId` is echoed in its reply.
+
+## Embedding in an operator site
+
+The stage can be served in an iframe using the launch URL from
+`POST /v1/operator/launch`. Add the embedding origin to the build-time
+`REACT_APP_OPERATOR_ORIGINS` list (comma separated). Same-origin parents are
+always accepted; every other parent is rejected unless listed. The game never
+sends an access or refresh token over `postMessage`.
+
+Every message is an envelope `{ gp: 1, type, payload? }`. Replies are addressed
+to the exact verified `event.origin`, never to `*`.
+
+| Direction | `type` | Payload / reply |
+| --- | --- | --- |
+| game → parent | `ready` | `{ game: 'aviator', version: 1 }` |
+| parent → game | `balance-refresh` | replies `balance` with `{ balance, currency }` |
+| parent → game | `close` | replies `closed` with `{ reason: 'operator' }` |
+| parent → game | `limits` | `{ minBet, maxBet }`, replies `limits-applied` or `error` (`VALIDATION_FAILED`) |
+| parent → game | `theme` | `{ primaryColor?, logo?, language? }`, replies `theme-applied` |
+| parent → game | `language` | `{ language }`, replies `language-applied` |
+| game → parent | `error` | `{ code: 'UNKNOWN_MESSAGE' \| 'VALIDATION_FAILED' }` |
+
+Themes are deliberately narrow: `primaryColor` must be a six-digit hex colour,
+`logo` must be a same-origin absolute path or an `https://` URL, and `language`
+must be one of the bundled locales. Layout, CSS and game logic cannot be
+changed from a message. Use a restrictive `Content-Security-Policy` on the
+shell page (`frame-src` limited to the game origin) and validate `event.source`
+on the parent side as well.
+
+Player-facing preferences (language, sound, animations) are persisted through
+`PUT /v1/crash/settings` when signed in; operator overrides are session-scoped
+and never overwrite the player's saved settings.

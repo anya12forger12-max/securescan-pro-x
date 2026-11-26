@@ -1,12 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { apiRequest, errorMessage } from '../../api';
 import { config } from '../../config';
 import { useGamingContext } from '../../context';
+import { useSound, type SoundCue } from '../../hooks/useSound';
+import {
+  formatAmount, formatDate, isLocale, localeDirection, LOCALES, translate, type Locale,
+} from '../../i18n/aviator';
 import type { GameKind } from '../../types';
 import './aviator.scss';
 
 type Phase = 'WAITING' | 'BETTING' | 'FLYING' | 'CRASHED' | 'SETTLING';
 type PanelTab = 'bet' | 'auto';
+type Translator = (key: string, vars?: Record<string, string | number>) => string;
+
+/** Messages exchanged with an operator shell that embeds the game in an iframe.
+ * Every envelope carries `gp: 1` and is accepted only from an allowed parent. */
+interface BridgeEnvelope {
+  gp: 1;
+  type: string;
+  payload?: Record<string, unknown>;
+}
+interface OperatorLimits { minBet: number; maxBet: number }
+interface OperatorTheme { primaryColor?: string; logo?: string; language?: Locale }
 
 interface AviatorRound {
   id: string;
@@ -89,8 +104,8 @@ function useTick(active: boolean) {
   return now;
 }
 
-function FlightCanvas({ round, phase, multiplier, reduced }: {
-  round: AviatorRound | null; phase: Phase; multiplier: number; reduced: boolean;
+function FlightCanvas({ round, phase, multiplier, reduced, t }: {
+  round: AviatorRound | null; phase: Phase; multiplier: number; reduced: boolean; t: Translator;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -200,10 +215,10 @@ function FlightCanvas({ round, phase, multiplier, reduced }: {
       <div className={`aviator-hero ${multClass(multiplier)} ${phase.toLowerCase()}`}>
         <strong>{multiplier.toFixed(2)}x</strong>
         <small>
-          {phase === 'BETTING' ? 'PLACE YOUR BETS'
-            : phase === 'FLYING' ? 'CASH OUT BEFORE THE CRASH'
-              : phase === 'CRASHED' ? `FLEW AWAY @ ${Number(round?.crashPoint ?? 1).toFixed(2)}x`
-                : phase === 'SETTLING' ? 'SETTLING' : 'WAITING FOR NEXT ROUND'}
+          {phase === 'BETTING' ? t('phaseBetting')
+            : phase === 'FLYING' ? t('phaseFlying')
+              : phase === 'CRASHED' ? t('phaseCrashed', { point: Number(round?.crashPoint ?? 1).toFixed(2) })
+                : phase === 'SETTLING' ? t('phaseSettling') : t('phaseWaiting')}
         </small>
       </div>
       {phase === 'BETTING' && round?.bettingEndsAt && (
@@ -216,7 +231,8 @@ function FlightCanvas({ round, phase, multiplier, reduced }: {
   );
 }
 
-function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, notify }: {
+function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, notify,
+  t, money, onSound, limits }: {
   index: 1 | 2;
   round: AviatorRound | null;
   phase: Phase;
@@ -225,12 +241,16 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
   token: string | null;
   onRefresh: () => void;
   notify: (message: string, kind?: 'ok' | 'error') => void;
+  t: Translator;
+  money: (value: number | string) => string;
+  onSound: (cue: SoundCue) => void;
+  limits: OperatorLimits;
 }) {
   const [settings, setSettings] = useState<PanelSettings>(DEFAULT_PANEL);
   const [busy, setBusy] = useState(false);
   const patch = (next: Partial<PanelSettings>) => setSettings((prev) => ({ ...prev, ...next }));
   const stake = Number(settings.stake);
-  const validStake = Number.isFinite(stake) && stake > 0;
+  const validStake = Number.isFinite(stake) && stake >= limits.minBet && stake <= limits.maxBet;
   const liveWin = bet && phase === 'FLYING'
     ? Number(bet.amount) * multiplier
     : bet?.payout ? Number(bet.payout) : 0;
@@ -250,7 +270,8 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
             ? { autoCashout: Number(settings.autoCashout) } : {}),
         },
       });
-      notify(`Panel ${index}: bet placed`);
+      onSound('bet');
+      notify(t('notifyBetPlaced', { panel: index }));
       if (settings.tab === 'auto') {
         await apiRequest('/crash/auto', {
           method: 'POST',
@@ -266,7 +287,7 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
             },
           },
         });
-        notify(`Panel ${index}: auto bet started`);
+        notify(t('notifyAutoStarted', { panel: index }));
       }
       onRefresh();
     } catch (error) {
@@ -276,7 +297,7 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
     }
   };
 
-  const cashOut = async () => {
+  const cashOut = useCallback(async () => {
     if (!round || !token || !bet || busy) return;
     setBusy(true);
     try {
@@ -284,21 +305,22 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
         `/crash/rounds/${round.id}/cashout`,
         { method: 'POST', token, body: { panel: index, betId: bet.id } },
       );
-      notify(`Panel ${index}: cashed out ${Number(result?.payout ?? liveWin).toFixed(2)}`);
+      onSound('cashout');
+      notify(t('notifyCashedOut', { panel: index, amount: money(result?.payout ?? liveWin) }));
       onRefresh();
     } catch (error) {
       notify(errorMessage(error), 'error');
     } finally {
       setBusy(false);
     }
-  };
+  }, [round, token, bet, busy, index, onSound, notify, t, money, liveWin, onRefresh]);
 
   const cancel = async () => {
     if (!round || !token || !bet || busy) return;
     setBusy(true);
     try {
       await apiRequest(`/crash/rounds/${round.id}/bets/${bet.id}/cancel`, { method: 'POST', token });
-      notify(`Panel ${index}: bet cancelled`);
+      notify(t('notifyCancelled', { panel: index }));
       onRefresh();
     } catch (error) {
       notify(errorMessage(error), 'error');
@@ -309,74 +331,93 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
 
   const live = bet && phase === 'FLYING';
   const label = phase === 'BETTING'
-    ? (bet ? 'CANCEL' : 'BET')
-    : live ? `CASH OUT ${liveWin.toFixed(2)}`
-      : phase === 'FLYING' ? 'WAIT FOR NEXT ROUND' : 'BET';
+    ? (bet ? t('actionCancel') : t('actionBet'))
+    : live ? t('actionCashout', { amount: money(liveWin) })
+      : phase === 'FLYING' ? t('actionWait') : t('actionBet');
   const action = phase === 'BETTING' ? (bet ? cancel : placeBet) : live ? cashOut : () => undefined;
   const disabled = busy || !token || phase === 'CRASHED' || phase === 'SETTLING'
     || (phase === 'FLYING' && !live) || (!validStake && phase === 'BETTING' && !bet);
 
+  // Keyboard cash-out: `C` while a panel has a live bet. Panel 1 owns the
+  // shortcut so two open bets never race on one key press.
+  useEffect(() => {
+    if (index !== 1 || !live || disabled) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'c' || event.repeat) return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      event.preventDefault();
+      void cashOut();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [index, live, disabled, cashOut]);
+
   return (
-    <section className="aviator-panel" aria-label={`Bet panel ${index}`}>
+    <section className="aviator-panel" aria-label={t('panelAria', { panel: index })}>
       <div className="panel-tabs" role="tablist">
         {(['bet', 'auto'] as PanelTab[]).map((tab) => (
           <button key={tab} type="button" role="tab" aria-selected={settings.tab === tab}
             className={settings.tab === tab ? 'active' : ''}
             onClick={() => patch({ tab })}>
-            {tab === 'bet' ? 'Bet' : 'Auto'}
+            {t(tab === 'bet' ? 'tabBet' : 'tabAuto')}
           </button>
         ))}
         {bet && <span className="panel-state">{bet.status.replace('_', ' ')}</span>}
       </div>
 
       <div className="stake-row">
-        <button type="button" aria-label="Decrease stake" onClick={() => patch({ stake: String(Math.max(1, stake - 10)) })}>−</button>
-        <input aria-label={`Panel ${index} stake`} inputMode="decimal" value={settings.stake}
+        <button type="button" aria-label={t('stakeDecrease')}
+          onClick={() => patch({ stake: String(Math.max(limits.minBet, stake - 10)) })}>−</button>
+        <input aria-label={t('panelStake', { panel: index })} inputMode="decimal" value={settings.stake}
           onChange={(event) => patch({ stake: event.target.value })} />
-        <button type="button" aria-label="Increase stake" onClick={() => patch({ stake: String(stake + 10) })}>+</button>
+        <button type="button" aria-label={t('stakeIncrease')}
+          onClick={() => patch({ stake: String(Math.min(limits.maxBet, stake + 10)) })}>+</button>
       </div>
       <div className="quick-amounts">
-        {[10, 50, 100, 500].map((amount) => (
-          <button key={amount} type="button" onClick={() => patch({ stake: String(amount) })}>{amount}</button>
-        ))}
+        {[10, 50, 100, 500].map((amount) => {
+          const clamped = Math.min(limits.maxBet, Math.max(limits.minBet, amount));
+          return <button key={amount} type="button" onClick={() => patch({ stake: String(clamped) })}>{clamped}</button>;
+        })}
       </div>
 
       {settings.tab === 'auto' ? (
         <div className="auto-settings">
-          <label>Auto cash out
-            <input aria-label="Auto cash-out target" inputMode="decimal" value={settings.autoCashout}
+          <label>{t('autoCashout')}
+            <input aria-label={t('autoTargetAria')} inputMode="decimal" value={settings.autoCashout}
               onChange={(event) => patch({ autoCashout: event.target.value })} />
           </label>
-          <label>Rounds
-            <input aria-label="Auto bet rounds" inputMode="numeric" value={settings.rounds}
+          <label>{t('rounds')}
+            <input aria-label={t('autoRoundsAria')} inputMode="numeric" value={settings.rounds}
               onChange={(event) => patch({ rounds: event.target.value })} />
           </label>
-          <label>Stop loss
-            <input aria-label="Auto bet stop loss" inputMode="decimal" value={settings.stopLoss}
+          <label>{t('stopLoss')}
+            <input aria-label={t('stopLossAria')} inputMode="decimal" value={settings.stopLoss}
               onChange={(event) => patch({ stopLoss: event.target.value })} />
           </label>
-          <label>Stop win
-            <input aria-label="Auto bet stop win" inputMode="decimal" value={settings.stopWin}
+          <label>{t('stopWin')}
+            <input aria-label={t('stopWinAria')} inputMode="decimal" value={settings.stopWin}
               onChange={(event) => patch({ stopWin: event.target.value })} />
           </label>
         </div>
       ) : (
-        <label className="auto-target">Auto cash out (optional)
-          <input aria-label="Auto cash-out target" inputMode="decimal" value={settings.autoCashout}
+        <label className="auto-target">{t('autoCashoutOptional')}
+          <input aria-label={t('autoTargetAria')} inputMode="decimal" value={settings.autoCashout}
             onChange={(event) => patch({ autoCashout: event.target.value })} />
         </label>
       )}
 
-      <button type="button" className={`action ${label.includes('CASH') ? 'cashout' : label === 'CANCEL' ? 'cancel' : 'bet'}`}
+      <button type="button" className={`action ${live ? 'cashout' : bet ? 'cancel' : 'bet'}`}
         disabled={disabled} onClick={action}>
         <strong>{label}</strong>
-        <small>{phase === 'BETTING' ? `${validStake ? stake.toFixed(2) : '—'} INR` : `${multiplier.toFixed(2)}x`}</small>
+        <small>{phase === 'BETTING' ? (validStake ? money(stake) : '—') : `${multiplier.toFixed(2)}x`}</small>
       </button>
     </section>
   );
 }
 
-function FairnessModal({ onClose, notify }: { onClose: () => void; notify: (m: string, k?: 'ok' | 'error') => void }) {
+function FairnessModal({ onClose, notify, t }: {
+  onClose: () => void; notify: (m: string, k?: 'ok' | 'error') => void; t: Translator;
+}) {
   const [seed, setSeed] = useState('');
   const [clientSeed, setClientSeed] = useState('');
   const [hash, setHash] = useState('');
@@ -399,34 +440,36 @@ function FairnessModal({ onClose, notify }: { onClose: () => void; notify: (m: s
   };
   return (
     <div className="aviator-modal-backdrop" role="presentation" onClick={onClose}>
-      <div className="aviator-modal" role="dialog" aria-modal="true" aria-label="Provably fair" onClick={(e) => e.stopPropagation()}>
-        <header><h2>Provably fair</h2><button type="button" aria-label="Close" onClick={onClose}>×</button></header>
-        <p>Hash the revealed server seed and recompute the crash point. The published hash is fixed before betting opens.</p>
-        <label>Server seed<input value={seed} onChange={(e) => setSeed(e.target.value)} /></label>
-        <label>Client seed<input value={clientSeed} onChange={(e) => setClientSeed(e.target.value)} /></label>
-        <label>Published hash (optional)<input value={hash} onChange={(e) => setHash(e.target.value)} /></label>
-        <label>Crash point (optional)<input value={point} onChange={(e) => setPoint(e.target.value)} /></label>
-        <button type="button" className="verify" onClick={() => void verify()}>Verify</button>
+      <div className="aviator-modal" role="dialog" aria-modal="true" aria-label={t('fairnessTitle')} onClick={(e) => e.stopPropagation()}>
+        <header><h2>{t('fairnessTitle')}</h2><button type="button" aria-label={t('close')} onClick={onClose}>×</button></header>
+        <p>{t('fairnessDescription')}</p>
+        <label>{t('serverSeed')}<input value={seed} onChange={(e) => setSeed(e.target.value)} /></label>
+        <label>{t('clientSeed')}<input value={clientSeed} onChange={(e) => setClientSeed(e.target.value)} /></label>
+        <label>{t('publishedHash')}<input value={hash} onChange={(e) => setHash(e.target.value)} /></label>
+        <label>{t('crashPoint')}<input value={point} onChange={(e) => setPoint(e.target.value)} /></label>
+        <button type="button" className="verify" onClick={() => void verify()}>{t('verify')}</button>
         {result && <pre>{JSON.stringify(result, null, 2)}</pre>}
       </div>
     </div>
   );
 }
 
-function RulesModal({ rules, onClose }: { rules: Record<string, unknown> | null; onClose: () => void }) {
+function RulesModal({ rules, onClose, t }: {
+  rules: Record<string, unknown> | null; onClose: () => void; t: Translator;
+}) {
   return (
     <div className="aviator-modal-backdrop" role="presentation" onClick={onClose}>
-      <div className="aviator-modal" role="dialog" aria-modal="true" aria-label="Rules" onClick={(e) => e.stopPropagation()}>
-        <header><h2>How to play</h2><button type="button" aria-label="Close" onClick={onClose}>×</button></header>
+      <div className="aviator-modal" role="dialog" aria-modal="true" aria-label={t('rules')} onClick={(e) => e.stopPropagation()}>
+        <header><h2>{t('rulesTitle')}</h2><button type="button" aria-label={t('close')} onClick={onClose}>×</button></header>
         {rules ? (
           <ul>
-            <li>Bet during the BETTING phase. The server decides the crash point before betting closes.</li>
-            <li>Cash out before the plane flies away to win stake × multiplier.</li>
-            <li>Auto cash-out is evaluated by the server on every tick — your connection does not matter.</li>
-            <li>Two panels place independent bets that share one round and one crash point.</li>
-            <li>Min bet {String(rules.minBet)} · Max bet {String(rules.maxBet)} · House edge {String(rules.houseEdge)}</li>
+            <li>{t('rule1')}</li>
+            <li>{t('rule2')}</li>
+            <li>{t('rule3')}</li>
+            <li>{t('rule4')}</li>
+            <li>{t('rule5', { min: String(rules.minBet), max: String(rules.maxBet), edge: String(rules.houseEdge) })}</li>
           </ul>
-        ) : <p>Loading rules…</p>}
+        ) : <p>{t('rulesLoading')}</p>}
       </div>
     </div>
   );
@@ -435,7 +478,7 @@ function RulesModal({ rules, onClose }: { rules: Record<string, unknown> | null;
 export default function AviatorStage() {
   const {
     token, balance, crash, messages, room, sendMessage,
-    update, forgetLastGame, gameKind,
+    update, forgetLastGame, loadDashboard, gameKind,
   } = useGamingContext();
   const contextRound = (crash.round as AviatorRound | null) ?? null;
   // Protocol v1 frames refine the server-clock view between REST refreshes.
@@ -455,8 +498,41 @@ export default function AviatorStage() {
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; kind: string }>>([]);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatText, setChatText] = useState('');
-  const [sound, setSound] = useState(false);
+  const { enabled: sound, toggle: toggleSound, play: playSound } = useSound();
   const [reduced, setReduced] = useState(false);
+  const [animations, setAnimations] = useState(true);
+  const [locale, setLocale] = useState<Locale>('en');
+  const [currency, setCurrency] = useState('INR');
+  const [limits, setLimits] = useState<OperatorLimits>({ minBet: 1, maxBet: 10000 });
+  const [announcement, setAnnouncement] = useState('');
+  const [themeColor, setThemeColor] = useState<string | null>(null);
+  const [themeLogo, setThemeLogo] = useState<string | null>(null);
+
+  const t = useCallback<Translator>((key, vars) => translate(locale, key, vars), [locale]);
+  const money = useCallback((value: number | string) => formatAmount(value, locale, currency), [locale, currency]);
+
+  // Player-facing preferences are saved server-side when signed in so they
+  // follow the account; local storage keeps sound usable before sign-in.
+  const saveSettings = useCallback((settings: Record<string, unknown>) => {
+    if (!token) return;
+    void apiRequest('/crash/settings', { method: 'PUT', token, body: settings }).catch(() => undefined);
+  }, [token]);
+
+  const changeLocale = useCallback((next: Locale) => {
+    setLocale(next);
+    saveSettings({ language: next });
+  }, [saveSettings]);
+
+  const toggleSoundWithSettings = useCallback(() => {
+    toggleSound();
+    saveSettings({ sound: !sound });
+  }, [toggleSound, saveSettings, sound]);
+
+  const toggleAnimationsWithSettings = useCallback(() => {
+    const next = !animations;
+    setAnimations(next);
+    saveSettings({ animations: next });
+  }, [animations, saveSettings]);
 
   useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -465,6 +541,41 @@ export default function AviatorStage() {
     query.addEventListener?.('change', onChange);
     return () => query.removeEventListener?.('change', onChange);
   }, []);
+
+  // Player settings own language/currency; operator limits override the stake
+  // bounds the player may use. All three arrive from the authoritative REST API.
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    void Promise.allSettled([
+      apiRequest<{ settings?: { language?: string; currency?: string; animations?: boolean } }>('/crash/settings', { token }),
+      apiRequest<{ rules?: { minBet?: number | string; maxBet?: number | string } }>('/crash/rules', { token }),
+    ]).then(([settingsResult, rulesResult]) => {
+      if (!active) return;
+      if (settingsResult.status === 'fulfilled') {
+        const settings = settingsResult.value.settings;
+        if (isLocale(settings?.language)) setLocale(settings.language);
+        if (settings?.currency) setCurrency(settings.currency.slice(0, 8));
+        if (typeof settings?.animations === 'boolean') setAnimations(settings.animations);
+      }
+      if (rulesResult.status === 'fulfilled') {
+        const minBet = Number(rulesResult.value.rules?.minBet);
+        const maxBet = Number(rulesResult.value.rules?.maxBet);
+        if (Number.isFinite(minBet) && minBet > 0) setLimits((prev) => ({ ...prev, minBet }));
+        if (Number.isFinite(maxBet) && maxBet >= minBet) setLimits((prev) => ({ ...prev, maxBet }));
+      }
+    });
+    return () => { active = false; };
+  }, [token]);
+
+  // Screen-reader announcements for state changes only — never for ticks.
+  useEffect(() => {
+    if (livePhase === 'BETTING') setAnnouncement(t('announcementBetting'));
+    else if (livePhase === 'FLYING') setAnnouncement(t('announcementFlying'));
+    else if (livePhase === 'CRASHED') {
+      setAnnouncement(t('announcementCrashed', { point: Number(round?.crashPoint ?? 1).toFixed(2) }));
+    }
+  }, [livePhase, round?.crashPoint, t]);
 
   const notify = useCallback((message: string, kind: 'ok' | 'error' = 'ok') => {
     const id = Date.now() + Math.random();
@@ -526,6 +637,7 @@ export default function AviatorStage() {
           case 'round_start':
             setSocketRound(frameRound(frame, 'BETTING'));
             setServerMult(null);
+            playSound('roundStart');
             void refresh();
             break;
           case 'betting_closed':
@@ -542,17 +654,20 @@ export default function AviatorStage() {
               ? { ...previous, state: 'CRASHED', status: 'finished', crashPoint: Number(frame.mult) }
               : frameRound(frame, 'CRASHED'));
             setServerMult(null);
+            playSound('crash');
             void refresh();
             break;
           case 'bet_ok':
           case 'cashout_ok':
-            notify(frame.t === 'bet_ok' ? 'Bet placed' : `Cash-out at ${frame.mult ?? ''}×`);
+            notify(frame.t === 'bet_ok'
+              ? t('socketBetPlaced')
+              : t('socketCashoutAt', { mult: String(frame.mult ?? '') }));
             void refresh();
             break;
           case 'bet_err':
           case 'cashout_err':
           case 'error':
-            if (frame.code !== 'AUTO_STOPPED') notify(String(frame.message ?? frame.code ?? 'Request failed'), 'error');
+            if (frame.code !== 'AUTO_STOPPED') notify(String(frame.message ?? frame.code ?? t('requestFailed')), 'error');
             break;
           default:
             break;
@@ -571,7 +686,7 @@ export default function AviatorStage() {
       socketRef.current?.close();
       socketRef.current = null;
     };
-  }, [token, refresh, notify]);
+  }, [token, refresh, notify, playSound, t]);
 
   useEffect(() => {
     if (!token || modal !== 'rules') return;
@@ -579,6 +694,72 @@ export default function AviatorStage() {
       .then((response) => setRules(response.rules))
       .catch(() => undefined);
   }, [token, modal]);
+
+  // Operator shell bridge. Only the embedding parent, and only origins listed
+  // in REACT_APP_OPERATOR_ORIGINS (plus our own origin), can drive the game.
+  // No token or refresh credential is ever sent over postMessage.
+  useEffect(() => {
+    if (window.parent === window) return;
+    const parent = window.parent;
+    const allowed = new Set([window.location.origin, ...config.operatorOrigins]);
+    let target: string | null = null;
+    const post = (type: string, payload: Record<string, unknown> = {}) => {
+      const envelope: BridgeEnvelope = { gp: 1, type, payload };
+      parent.postMessage(envelope, target ?? '*');
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== parent || !allowed.has(event.origin)) return;
+      const data = event.data as BridgeEnvelope | null;
+      if (!data || data.gp !== 1 || typeof data.type !== 'string') return;
+      // From here on every reply is addressed to the exact, verified origin.
+      target = event.origin;
+      const payload = data.payload ?? {};
+      switch (data.type) {
+        case 'balance-refresh':
+          void apiRequest<{ account?: { balance?: number | string } }>('/wallet/balance', { token })
+            .then((response) => post('balance', { balance: response.account?.balance ?? null, currency }))
+            .catch(() => post('balance', { balance: null, currency }));
+          void loadDashboard();
+          void refresh();
+          break;
+        case 'close':
+          forgetLastGame();
+          update({ gameKind: 'crash', gameId: '', session: null, players: [] });
+          post('closed', { reason: 'operator' });
+          break;
+        case 'limits': {
+          const minBet = Number(payload.minBet);
+          const maxBet = Number(payload.maxBet);
+          if (Number.isFinite(minBet) && Number.isFinite(maxBet) && minBet > 0 && maxBet >= minBet) {
+            setLimits({ minBet, maxBet });
+            post('limits-applied', { minBet, maxBet });
+          } else {
+            post('error', { code: 'VALIDATION_FAILED' });
+          }
+          break;
+        }
+        case 'theme':
+        case 'language': {
+          const theme = payload as OperatorTheme;
+          const color = String(theme.primaryColor ?? '');
+          if (/^#[0-9a-f]{6}$/i.test(color)) setThemeColor(color);
+          // Only same-origin paths and https image URLs are accepted. No SVG
+          // markup, javascript: URL or arbitrary remote script can be injected.
+          const logo = String(theme.logo ?? '');
+          if (/^\/[a-zA-Z0-9/._-]*$/.test(logo) || /^https:\/\/\S+$/i.test(logo)) setThemeLogo(logo);
+          const language = data.type === 'language' ? payload.language : theme.language;
+          if (isLocale(language)) setLocale(language);
+          post(data.type === 'language' ? 'language-applied' : 'theme-applied', {});
+          break;
+        }
+        default:
+          post('error', { code: 'UNKNOWN_MESSAGE' });
+      }
+    };
+    window.addEventListener('message', onMessage);
+    post('ready', { game: 'aviator', version: 1 });
+    return () => window.removeEventListener('message', onMessage);
+  }, [token, currency, refresh, loadDashboard, forgetLastGame, update]);
 
   const betFor = useCallback((panel: number) =>
     bets.find((bet) => bet.round_id === round?.id && bet.panel === panel
@@ -601,118 +782,139 @@ export default function AviatorStage() {
     if (!token) return;
     try {
       await apiRequest(`/crash/auto/${panel}/stop`, { method: 'POST', token });
-      notify(`Panel ${panel}: auto bet stopped`);
+      notify(t('notifyAutoStopped', { panel }));
       void refresh();
     } catch (error) { notify(errorMessage(error), 'error'); }
   };
 
   return (
-    <div className="aviator-stage">
+    <div className="aviator-stage" dir={localeDirection(locale)}
+      style={themeColor ? ({ '--gp-primary': themeColor } as CSSProperties) : undefined}>
+      <span className="sr-only" aria-live="polite">{announcement}</span>
       <header className="aviator-header">
-        <div className="aviator-brand"><span>GP</span><strong>AVIATOR</strong></div>
+        <div className="aviator-brand">
+          {themeLogo
+            ? <img className="operator-logo" src={themeLogo} alt={t('operatorLogo')} />
+            : <span>GP</span>}
+          <strong>AVIATOR</strong>
+        </div>
         <div className="aviator-balance">
-          <small>BALANCE</small>
-          <strong>{Number(balance || 0).toFixed(2)}</strong>
+          <small>{t('balance')}</small>
+          <strong>{money(balance || 0)}</strong>
         </div>
         <nav>
           <label className="game-switch">
-            <span className="sr-only">Switch game</span>
+            <span className="sr-only">{t('switchGame')}</span>
             <select value={gameKind} onChange={(event) => {
               const next = event.target.value as GameKind;
               forgetLastGame();
               update({ gameKind: next, gameId: '', session: null, players: [] });
             }}>
-              <option value="crash">Aviator Crash</option>
-              <option value="codenames">Codenames</option>
-              <option value="gin-rummy">Gin Rummy</option>
-              <option value="pictionary">Pictionary</option>
+              <option value="crash">{t('gameCrash')}</option>
+              <option value="codenames">{t('gameCodenames')}</option>
+              <option value="gin-rummy">{t('gameGinRummy')}</option>
+              <option value="pictionary">{t('gamePictionary')}</option>
             </select>
           </label>
-          <button type="button" onClick={() => setModal('fairness')}>Provably fair</button>
-          <button type="button" onClick={() => setModal('rules')}>Rules</button>
-          <button type="button" aria-label="Toggle sound" aria-pressed={sound} onClick={() => setSound((v) => !v)}>
-            {sound ? '♪ On' : '♪ Off'}
+          <label className="language-switch">
+            <span className="sr-only">{t('language')}</span>
+            <select value={locale} onChange={(event) => changeLocale(event.target.value as Locale)}>
+              {LOCALES.map((option) => <option key={option} value={option}>{option.toUpperCase()}</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={() => setModal('fairness')}>{t('provablyFair')}</button>
+          <button type="button" onClick={() => setModal('rules')}>{t('rules')}</button>
+          <button type="button" aria-label={t('toggleSound')} aria-pressed={sound} onClick={toggleSoundWithSettings}>
+            {sound ? t('soundOn') : t('soundOff')}
+          </button>
+          <button type="button" aria-label={t('toggleAnimations')} aria-pressed={animations}
+            onClick={toggleAnimationsWithSettings}>
+            {animations ? t('animationsOn') : t('animationsOff')}
           </button>
         </nav>
       </header>
 
-      <div className="history-strip" aria-label="Recent crashes">
-        {recentHistory.length === 0 ? <span className="empty">No completed rounds yet</span>
+      <div className="history-strip" aria-label={t('recentCrashes')}>
+        {recentHistory.length === 0 ? <span className="empty">{t('noHistory')}</span>
           : recentHistory.map((point, index) => (
             <button key={`${point}-${index}`} type="button" className={multClass(point)}
-              onClick={() => setModal('fairness')} title="Open fairness verifier">
+              onClick={() => setModal('fairness')} title={t('provablyFair')}>
               {point.toFixed(2)}x
             </button>
           ))}
       </div>
 
-      <FlightCanvas round={round} phase={livePhase} multiplier={multiplier} reduced={reduced} />
+      <FlightCanvas round={round} phase={livePhase} multiplier={multiplier}
+        reduced={reduced || !animations} t={t} />
 
       <div className="aviator-panels">
         {([1, 2] as const).map((index) => (
           <BetPanel key={index} index={index} round={round} phase={livePhase} multiplier={multiplier}
-            bet={betFor(index)} token={token} onRefresh={() => void refresh()} notify={notify} />
+            bet={betFor(index)} token={token} onRefresh={() => void refresh()} notify={notify}
+            t={t} money={money} onSound={playSound} limits={limits} />
         ))}
       </div>
 
       <div className="aviator-lower">
         <section className="aviator-card">
-          <header><h3>Live activity</h3><span>{bets.length} bets</span></header>
+          <header><h3>{t('liveActivity')}</h3><span>{t('betsCount', { count: bets.length })}</span></header>
           <div className="activity-list">
             {bets.slice(0, 6).map((bet) => (
               <div key={bet.id}>
                 <span className="masked">p***{bet.id.slice(-2)}</span>
-                <span>{Number(bet.amount).toFixed(2)}</span>
+                <span>{money(bet.amount)}</span>
                 <span className={bet.status === 'cashed_out' ? 'win' : ''}>
                   {bet.cashout_at ? `${Number(bet.cashout_at).toFixed(2)}x` : bet.status.replace('_', ' ')}
                 </span>
               </div>
             ))}
-            {bets.length === 0 && <em>No bets this round</em>}
+            {bets.length === 0 && <em>{t('noBets')}</em>}
           </div>
           <div className="auto-controls">
-            <button type="button" onClick={() => void stopAuto(1)}>Stop auto 1</button>
-            <button type="button" onClick={() => void stopAuto(2)}>Stop auto 2</button>
+            <button type="button" onClick={() => void stopAuto(1)}>{t('stopAuto', { panel: 1 })}</button>
+            <button type="button" onClick={() => void stopAuto(2)}>{t('stopAuto', { panel: 2 })}</button>
           </div>
         </section>
 
         <section className="aviator-card">
-          <header><h3>Top wins today</h3><span>day</span></header>
+          <header><h3>{t('topWins')}</h3><span>{t('periodDay')}</span></header>
           <div className="activity-list">
             {(top.topWins ?? []).slice(0, 6).map((entry, index) => (
               <div key={index}>
                 <span className="masked">{String(entry.user ?? '')}</span>
-                <span>{Number(entry.payout ?? 0).toFixed(2)}</span>
+                <span>{money(entry.payout ?? 0)}</span>
                 <span className="win">{String(entry.roundId ?? '').slice(0, 6)}</span>
               </div>
             ))}
-            {(top.topWins ?? []).length === 0 && <em>No settled wins yet</em>}
+            {(top.topWins ?? []).length === 0 && <em>{t('noWins')}</em>}
           </div>
         </section>
 
         <section className={`aviator-card chat-card ${chatOpen ? 'open' : ''}`}>
           <header>
-            <h3>Chat</h3>
-            <button type="button" aria-label="Toggle chat" onClick={() => setChatOpen((v) => !v)}>
-              {chatOpen ? 'Hide' : 'Show'}
+            <h3>{t('chatTitle')}</h3>
+            <button type="button" aria-label={t('toggleChat')} onClick={() => setChatOpen((v) => !v)}>
+              {chatOpen ? t('chatHide') : t('chatShow')}
             </button>
           </header>
           {chatOpen && (
             <>
               <div className="chat-log">
-                {messages.slice(-8).map((message, index) => (
-                  <p key={`${message.id}-${index}`}><strong>{String(message.username ?? message.user_id ?? 'player')}:</strong> {message.content}</p>
+                {messages.slice(-8).map((message) => (
+                  <p key={message.id}><strong>{String(message.username ?? message.user_id ?? 'player')}:</strong> {message.content}
+                    <time dateTime={message.created_at}>{formatDate(message.created_at, locale)}</time>
+                  </p>
                 ))}
-                {messages.length === 0 && <em>No messages yet</em>}
+                {messages.length === 0 && <em>{t('chatEmpty')}</em>}
               </div>
               <form onSubmit={(event) => {
                 event.preventDefault();
                 if (!chatText.trim()) return;
                 void sendMessage(room, chatText.trim()).then(() => setChatText('')).catch(() => undefined);
               }}>
-                <input aria-label="Chat message" maxLength={200} value={chatText}
-                  onChange={(event) => setChatText(event.target.value)} placeholder="Say something" />
-                <button type="submit">Send</button>
+                <input aria-label={t('chatMessage')} maxLength={200} value={chatText}
+                  onChange={(event) => setChatText(event.target.value)} placeholder={t('chatPlaceholder')} />
+                <button type="submit">{t('chatSend')}</button>
               </form>
             </>
           )}
@@ -723,8 +925,8 @@ export default function AviatorStage() {
         {toasts.map((toast) => <div key={toast.id} className={toast.kind}>{toast.message}</div>)}
       </div>
 
-      {modal === 'fairness' && <FairnessModal onClose={() => setModal(null)} notify={notify} />}
-      {modal === 'rules' && <RulesModal rules={rules} onClose={() => setModal(null)} />}
+      {modal === 'fairness' && <FairnessModal onClose={() => setModal(null)} notify={notify} t={t} />}
+      {modal === 'rules' && <RulesModal rules={rules} onClose={() => setModal(null)} t={t} />}
     </div>
   );
 }

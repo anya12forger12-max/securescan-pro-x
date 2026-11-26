@@ -21,4 +21,10 @@ export const config = {
   // Non-sensitive UI bookkeeping only: the last session/game a user opened.
   // Tokens and refresh cookies are never written to web storage.
   lastGameKey: "gp.last.game",
+  // Operator sites allowed to drive the embedded game through postMessage.
+  // Same-origin is always accepted; every other parent must be listed here.
+  operatorOrigins: (process.env.REACT_APP_OPERATOR_ORIGINS ?? "")
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/+$/, ""))
+    .filter(Boolean),
 } as const;

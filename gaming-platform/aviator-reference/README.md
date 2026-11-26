@@ -13,7 +13,7 @@ reference-only.
 
 | Reference component | Live implementation |
 | --- | --- |
-| `apps/web-client` | `frontend/src/components/crash/AviatorStage.tsx` + `aviator.scss` (canvas curve, two bet panels, auto tabs, fairness/rules modals) |
+| `apps/web-client` | `frontend/src/components/crash/AviatorStage.tsx` + `aviator.scss` (canvas curve, two bet panels, auto tabs, fairness/rules modals), `frontend/src/i18n/aviator.ts` (locales/formatters), `frontend/src/hooks/useSound.ts` (opt-in cues) |
 | `apps/admin` | `frontend/src/components/admin` and the operator REST surface in `services/crash/index.js` |
 | `services/gateway` | `services/gateway/index.js` (JWT, rate limits, CORS) and `services/gateway/aviator-ws.js` (protocol v1 socket) |
 | `services/game-engine` | `services/crash/index.js` round lifecycle (`WAITING → BETTING → FLYING → CRASHED → SETTLING`) |
@@ -23,7 +23,7 @@ reference-only.
 | `packages/protocol` | `packages/aviator/index.js` (message vocabulary) + `aviator-reference/packages/protocol/messages.schema.json` |
 | `packages/common` | `packages/config`, `packages/shared-types` |
 | `infra/*` | root `docker-compose.yml`, Dockerfiles, `.github/workflows` |
-| `tests/unit` | `packages/aviator/test/aviator.test.mjs` |
+| `tests/unit` | `packages/aviator/test/aviator.test.mjs`, `aviator-ws.test.mjs`, `frontend-i18n.test.mjs` (`node --test packages/aviator/test`) |
 | `tests/simulation` | `aviator-reference/tests/simulation/rtp.mjs` |
 | `tests/load` | `scripts/feature-check.mjs`, `scripts/security-suite.mjs` |
 | `docs` | this README, `docs/ARCHITECTURE.md`, `docs/OPERATOR.md` |

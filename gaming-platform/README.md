@@ -53,7 +53,11 @@ executed by the platform. Their playable ideas are now implemented natively:
   `startedAt`, while all outcomes, settlement and auto cash-outs stay
   authoritative in the service. It also consumes protocol v1 frames from
   `GET /v1/ws` (REST/SSE remain the fallback), including two independent bet
-  panels, auto-bet stop rules and the live fairness proof.
+  panels, auto-bet stop rules and the live fairness proof. Its strings live in
+  `frontend/src/i18n/aviator.ts` (English, Hindi and Arabic with RTL layout),
+  formatting uses `Intl`, sound is opt-in with a persisted preference, and an
+  iframe shell can exchange origin-checked `postMessage` events without ever
+  receiving a token.
 * `packages/aviator` holds the shared, pure crash-point/phase/protocol helpers;
   `migrations/0019_aviator_features.sql` adds panel uniqueness, auto-bet
   sessions and player/operator settings. Signed operator endpoints and the
@@ -396,8 +400,10 @@ npm start --prefix frontend       # http://localhost:4000, proxying to :3000
 ```
 
 `REACT_APP_API_URL` may be set at build time to an absolute gateway origin;
-leave it blank for the published Docker image. Copy `frontend/.env.example` if
-you need local overrides. Frontend dependencies and `frontend/build` are not
+leave it blank for the published Docker image. `REACT_APP_OPERATOR_ORIGINS`
+lists comma-separated parent origins allowed to send `postMessage` commands
+when the game is embedded; same-origin is always allowed. Copy
+`frontend/.env.example` if you need local overrides. Frontend dependencies and `frontend/build` are not
 committed; the Dockerfile reproduces both from `frontend/package-lock.json`.
 
 ## Calling the API

@@ -95,7 +95,9 @@ $pink: #ff5fb0;
     }
   }
 
-  .game-switch select {
+  .game-switch select,
+  .language-switch select {
+    min-height: 40px;
     padding: 7px 10px;
     border-radius: 8px;
     border: 1px solid $border;
@@ -123,6 +125,14 @@ $pink: #ff5fb0;
   strong {
     letter-spacing: 0.18em;
     font-size: 15px;
+  }
+
+  .operator-logo {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    object-fit: contain;
+    background: $surface-2;
   }
 }
 
@@ -552,4 +562,39 @@ $pink: #ff5fb0;
 @media (prefers-reduced-motion: reduce) {
   .countdown-bar { animation: none; }
   .aviator-stage button { transition: none; }
+}
+
+// Operator theming is limited to one safe colour token; layout stays ours.
+.aviator-stage {
+  .action,
+  .stake-row input,
+  .auto-settings input,
+  .auto-target input,
+  .panel-tabs button {
+    min-height: 44px;
+  }
+
+  .action {
+    border-color: var(--gp-primary, $blue);
+  }
+}
+
+.chat-log time {
+  margin-inline-start: 8px;
+  font-size: 10px;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+.aviator-stage[dir='rtl'] {
+  .history-strip,
+  .panel-tabs,
+  .quick-amounts,
+  .auto-controls {
+    flex-direction: row-reverse;
+  }
+
+  .activity-list > div {
+    direction: rtl;
+  }
 }
