@@ -89,6 +89,15 @@ export async function bearerActive(verifyToken, token, log) {
   return auth?.status === "valid";
 }
 
+/** Socket frames are privileged writes but bypass Fastify's onRequest hook.
+ * Use the same per-user write bucket as REST so one player cannot multiply
+ * their abuse budget by opening four sockets and streaming frames. `ping` is
+ * handled by the caller before this check. */
+export async function checkFrameRateLimit(rateLimiter, config, userId) {
+  if (!rateLimiter) return { allowed: true };
+  return rateLimiter.check(`user:${userId}:write`, config?.mutateMax ?? 30);
+}
+
 const multiplierFor = (flightStart, crashPoint, elapsed) => {
   const start = Date.parse(flightStart ?? "");
   if (!Number.isFinite(start) || elapsed < start) return 1;
@@ -163,7 +172,8 @@ function frameForEvent(event) {
 /**
  * Register GET /v1/ws on the gateway.
  *
- * deps: { verifyToken, allowedOrigin, upstream, realtimeToken, maxPerUser, log }
+ * deps: { verifyToken, allowedOrigin, upstream, realtimeToken, maxPerUser,
+ *         rateLimiter, rateLimitConfig, log }
  */
 export function registerAviatorSocket(app, deps) {
   const sockets = new Map();
@@ -392,6 +402,15 @@ export function registerAviatorSocket(app, deps) {
         if (!(await bearerActive(deps.verifyToken, state.token, deps.log))) {
           send({ t: "error", code: "UNAUTHORIZED", message: "session revoked" });
           close();
+          return;
+        }
+        const limit = await checkFrameRateLimit(deps.rateLimiter, deps.rateLimitConfig, userId);
+        if (!limit.allowed) {
+          send({
+            t: "error",
+            code: limit.unavailable ? "RATE_LIMIT_UNAVAILABLE" : "RATE_LIMITED",
+            message: limit.unavailable ? "rate limiter unavailable" : "too many requests",
+          });
           return;
         }
         if (msg.t === "bet") {

@@ -982,6 +982,8 @@ registerAviatorSocket(app, {
   upstream: (service, port) => `http://${upstreamHost(service)}:${port}`,
   realtimeToken: REALTIME_SERVICE_TOKEN,
   maxPerUser: 4,
+  rateLimiter,
+  rateLimitConfig,
   log: app.log,
 });
 
