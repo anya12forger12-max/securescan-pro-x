@@ -159,6 +159,17 @@ app.post("/v1/tournaments/:id/join", async (req, reply) => {
       await client.query("ROLLBACK");
       return deny(reply, 404, ERROR_CODES.NOT_FOUND, "tournament not found");
     }
+    // Check membership before status/capacity: a client replaying a successful
+    // join whose response was lost must get the same idempotent success even
+    // after registration closed or the last seat was taken.
+    const replay = await client.query(
+      `SELECT 1 FROM tournament_players WHERE tournament_id = $1 AND user_id = $2`,
+      [id, userId],
+    );
+    if (replay.rowCount) {
+      await client.query("COMMIT");
+      return ok(reply, 200, { joined: true, replay: true }, reqId(req));
+    }
     if (tournament.rows[0].status !== "registering") {
       await client.query("ROLLBACK");
       return deny(reply, 409, ERROR_CODES.CONFLICT, "registration is closed");

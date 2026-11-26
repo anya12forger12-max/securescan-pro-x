@@ -387,7 +387,12 @@ app.post("/v1/auth/refresh", async (req, reply) => {
     if (revokedAt) {
       // A revoked token was reused: assume theft and revoke every still-live
       // token in the family, including the one an attacker may have obtained
-      // from a previous rotation.
+      // from a previous rotation. Record the theft signal: without this, the
+      // only evidence of a replay is a silent 401.
+      req.log.warn(
+        { userId, familyId, ip: req.ip ?? req.socket?.remoteAddress ?? "unknown" },
+        "refresh token replay detected; revoked token family",
+      );
       await client.query(
         `UPDATE auth_refresh_tokens SET revoked_at = now()
           WHERE family_id = $1 AND revoked_at IS NULL`,

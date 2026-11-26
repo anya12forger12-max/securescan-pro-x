@@ -24,7 +24,13 @@ const SendMessageSchema = z.object({
   content: z.string().min(1).max(4000),
 });
 const CreateRoomSchema = z.object({
-  name: z.string().min(1).max(64),
+  // A room name is one URL path segment. Encoded separators and bare dot
+  // segments are rejected by the gateway/URL parser; other dots are fine.
+  name: z.string()
+    .min(1).max(64)
+    .refine((value) => !/[\\/]/.test(value) && value !== "." && value !== "..", {
+      message: "room name cannot be '.' or '..' or contain '/', '\\'",
+    }),
 });
 
 export async function buildChatService(env: ChatEnv) {

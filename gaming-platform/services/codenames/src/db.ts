@@ -371,14 +371,22 @@ export async function submitGuess(pool: PoolType, input: {
     // route is outside this transaction; without the lock, two winning guesses
     // could both commit and the last winner update would silently overwrite.
     const locked = await client.query<{
-      status: string; winner: string | null;
+      status: string; winner: string | null; current_team: Team | null;
       red_team_words: string[]; blue_team_words: string[];
     }>(
-      `SELECT status, winner, red_team_words, blue_team_words
+      `SELECT status, winner, current_team, red_team_words, blue_team_words
          FROM codenames_games WHERE id = $1 FOR UPDATE`,
       [input.game_id],
     );
     if (!locked.rowCount || locked.rows[0]!.status !== "active" || locked.rows[0]!.winner) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    // The route checks the turn before this transaction, so a concurrent guess
+    // can flip current_team between that check and this lock. Revalidate it
+    // while holding the row lock or a stale-team guess can reveal a word and
+    // even win after its turn has already ended.
+    if (locked.rows[0]!.current_team !== input.team) {
       await client.query("ROLLBACK");
       return null;
     }

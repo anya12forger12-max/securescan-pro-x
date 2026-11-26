@@ -193,7 +193,13 @@ export default function Bet() {
             </label>
             <button
               type="button"
-              disabled={crash.round?.status !== 'betting' || stake <= 0}
+              disabled={
+                crash.round?.status !== 'betting' ||
+                !Number.isFinite(stake) ||
+                stake < 1 ||
+                stake > 10000 ||
+                (autoCashout !== null && (!Number.isFinite(autoCashout) || autoCashout < 1.01))
+              }
               className="primary-button"
               onClick={() => void placeCrashBet(stake, autoCashout)}
             >
@@ -285,7 +291,13 @@ export default function Bet() {
             />
             <button
               type="button"
-              disabled={!activeGameId || !clueWord.trim()}
+              disabled={
+                !activeGameId ||
+                !clueWord.trim() ||
+                !Number.isInteger(clueNumber) ||
+                clueNumber < 1 ||
+                clueNumber > 100
+              }
               onClick={() => {
                 void clueCodenames(activeGameId, clueWord.trim(), clueNumber);
                 setClueWord('');
@@ -316,7 +328,11 @@ export default function Bet() {
               aria-label="Card to discard"
               className="control-input"
             />
-            <button type="button" disabled={!activeGameId || !card.trim()} onClick={() => void discardGinRummy(activeGameId, card)}>
+            <button
+              type="button"
+              disabled={!activeGameId || !card.trim()}
+              onClick={() => void discardGinRummy(activeGameId, card)}
+            >
               Discard
             </button>
           </div>
@@ -330,7 +346,7 @@ export default function Bet() {
             />
             <button
               type="button"
-              disabled={!activeGameId}
+              disabled={!activeGameId || !melds.trim()}
               onClick={() => {
                 const groups = melds
                   .split('|')

@@ -212,6 +212,16 @@ export async function buildPromotionsService(deps: PromotionsDeps): Promise<Fast
     // promotion has since ended, and it already occupies a cap slot.
     const existing = await repo.findClaimByUserAndPromo(userId, promo.id);
     if (existing) {
+      // A retained claim stays retryable, but the retry can still be the first
+      // wallet credit to commit. Apply the same responsible-gaming gate as a
+      // new claim so self-exclusion after an ambiguous response cannot be
+      // bypassed by replaying it.
+      if (deps.rg) {
+        const check = await deps.rg.check(userId, "deposit", existing.bonusAmount);
+        if (!check.allowed) {
+          return deny(reply, 403, ERROR_CODES.VALIDATION_ERROR, check.reason ?? "not eligible");
+        }
+      }
       if (deps.wallet) {
         try {
           await deps.wallet.credit({

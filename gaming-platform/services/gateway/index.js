@@ -391,6 +391,16 @@ async function recordAdminAudit(req, actorId, action, target, metadata) {
  */
 function auditedMutation(req, method, path, body) {
   const requestId = String(req.headers["x-request-id"] ?? "");
+  // The transparent proxy keeps JSON bodies as raw strings. Decode a copy for
+  // audit metadata only; the original bytes are still forwarded unchanged.
+  let auditedBody = body;
+  if (typeof body === "string") {
+    try {
+      auditedBody = JSON.parse(body);
+    } catch {
+      auditedBody = {};
+    }
+  }
   // `matchesRoute()` deliberately accepts one trailing slash for collection
   // routes. Audit detection must canonicalize the same way or a privileged
   // mutation can commit without a hash-chained audit entry.
@@ -400,7 +410,7 @@ function auditedMutation(req, method, path, body) {
     typeof value === "string" && value.trim().length > 0 ? value.trim() : `request:${requestId}`;
 
   if (method === "POST" && auditPath === "/internal/promotions") {
-    const bodyValue = body ?? {};
+    const bodyValue = auditedBody ?? {};
     const source = bodyValue.data?.promotion ?? bodyValue;
     return {
       action: "promotion.create",
@@ -412,7 +422,7 @@ function auditedMutation(req, method, path, body) {
     return { action: "promotion.update", target: auditPath.slice("/internal/promotions/".length) };
   }
   if (method === "POST" && auditPath === "/v1/tournaments") {
-    const source = body?.tournament ?? body;
+    const source = auditedBody?.tournament ?? auditedBody;
     return {
       action: "tournament.create",
       target: `tournament:${resourceId(source.title)}`,
@@ -888,36 +898,44 @@ async function proxy(req, reply) {
         ...(setCookies.length ? { "set-cookie": setCookies } : {}),
       });
       const reader = res.body.getReader();
+      // Register the close signal before pumping. `events.once` only reacts to
+      // a *future* event: a client that disconnected while the upstream fetch
+      // was in flight had already emitted "close", so racing once("drain")
+      // against once("close") parked forever after a destroyed write returned
+      // false, leaking the upstream stream and its MAX_STREAMS slot.
+      let clientClosed = false;
+      const closed = new Promise((resolve) => rawReply.once("close", resolve));
+      rawReply.on("close", () => {
+        clientClosed = true;
+        void reader.cancel().catch(() => undefined);
+      });
       const pump = async () => {
         try {
           for (;;) {
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done || clientClosed || rawReply.destroyed || rawReply.writableEnded) break;
             // Honour socket backpressure. Without this the gateway drains the
             // realtime hub as fast as it can and buffers Slowloris-style clients
             // in gateway memory instead of throttling the bounded upstream queue.
             if (!rawReply.write(value)) {
-              // A closed socket may never emit "drain" (e.g. MAX_STREAMS eviction),
-              // so race it with "close". Swallow loser rejections to avoid an
-              // unhandled rejection after one side wins.
+              // Swallow loser rejections to avoid an unhandled rejection after
+              // one side wins the race.
               const drained = once(rawReply, "drain").catch(() => undefined);
-              const closed = once(rawReply, "close").catch(() => undefined);
               await Promise.race([drained, closed]);
             }
-            if (rawReply.destroyed || rawReply.writableEnded) break;
+            if (clientClosed || rawReply.destroyed || rawReply.writableEnded) break;
           }
         } catch (err) {
           req.log.warn({ err }, "event stream closed");
         } finally {
+          // Always release the upstream reader, including when the client went
+          // away before the "close" listener above could be installed.
+          void reader.cancel().catch(() => undefined);
           rawReply.end();
           releaseStream();
         }
       };
       void pump();
-      // IncomingMessage "close" fires when the request body is complete, which
-      // for a GET SSE request can be immediate. The response/socket is the
-      // lifetime that matters for a hijacked stream.
-      rawReply.on("close", () => void reader.cancel().catch(() => undefined));
       return;
     }
 

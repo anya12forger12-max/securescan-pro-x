@@ -5,7 +5,7 @@ import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { randomUUID } from "node:crypto";
 import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, parseCorsOrigins, jwtVerifyEnvFields, jwtVerifyPluginOptions } from "@gp/config";
-import { ERROR_CODES, serviceTokenOk, toMoney } from "@gp/shared-types";
+import { ERROR_CODES, boundedInt, serviceTokenOk, toMoney } from "@gp/shared-types";
 
 /**
  * Wallet service (3011).
@@ -383,7 +383,7 @@ app.get("/v1/wallet/transactions", async (req, reply) => {
   if (!userId)
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
 
-  const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 100);
+  const limit = boundedInt(req.query.limit, 50, 1, 100);
   const result = await pool.query(
     `SELECT ${TX_COLUMNS} FROM wallet_transactions WHERE user_id = $1
      ORDER BY created_at DESC LIMIT $2`,

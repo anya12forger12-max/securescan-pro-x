@@ -303,6 +303,14 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
   // loader without re-running whenever unrelated state (e.g. crash history)
   // changes its identity.
   const restoreGameRef = useRef<(kind: GameKind, id: string) => Promise<void>>(async () => undefined);
+  // Chat room selection must survive unrelated dashboard reloads, and a slow
+  // response for a previously selected room must not overwrite the current one.
+  const selectedRoomRef = useRef<string | null>(null);
+  const chatRoomRequestRef = useRef(0);
+
+  React.useEffect(() => {
+    selectedRoomRef.current = state.room;
+  }, [state.room]);
 
   // tokenRef is written only by identity transitions and token rotation above;
   // it is deliberately not mirrored from state.token, because a state commit
@@ -558,6 +566,10 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     const stop = () => {
       if (retry) window.clearTimeout(retry);
       if (crashRefreshTimerRef.current) window.clearTimeout(crashRefreshTimerRef.current);
+      // A cleared timer never fires to reset the ref. Without this, the next
+      // stream's scheduleCrashRefresh() sees a truthy ref and returns forever,
+      // freezing the crash board while `streamReady` suppresses polling.
+      crashRefreshTimerRef.current = undefined;
       void reader?.cancel().catch(() => undefined);
       controller?.abort();
       if (streamAbortRef.current === controller) streamAbortRef.current = null;
@@ -689,10 +701,19 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       tournaments: tournaments.status === "fulfilled" ? tournaments.value.items : prev.tournaments,
     }));
     if (rooms.status === "fulfilled" && rooms.value.rooms.length) {
-      const room = rooms.value.rooms[0].name;
+      // Preserve the player's selection across dashboard refreshes; only fall
+      // back to the first room when the selected one no longer exists.
+      const available = rooms.value.rooms;
+      const previous = selectedRoomRef.current;
+      const room =
+        previous && available.some((entry) => entry.name === previous)
+          ? previous
+          : available[0].name;
+      const seq = ++chatRoomRequestRef.current;
       const messages = await call<{ messages: ChatMessage[] }>(
         `/chat/rooms/${encodeURIComponent(room)}/messages?limit=50`,
       ).catch(() => null);
+      if (!isCurrent(token, generation) || seq !== chatRoomRequestRef.current) return;
       updateIfCurrent(token, generation, (prev) => ({
         room,
         messages: messages ? messages.messages : prev.messages,
@@ -824,15 +845,16 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
         }),
       )) as { session: GameSession } | null;
       if (!result) return null;
-      updateIfCurrent(token, generation, {
+      updateIfCurrent(token, generation, (prev) => ({
         session: result.session,
-        sessions: [result.session, ...state.sessions],
-      });
+        // Build from the latest state: two quick creates must both appear.
+        sessions: [result.session, ...prev.sessions],
+      }));
       saveLastGame(state.user?.id, { sessionId: result.session.id, gameId: undefined });
       toast.success("Session created");
       return result.session;
     },
-    [call, guard, state.sessions, state.user?.id, updateIfCurrent],
+    [call, guard, state.user?.id, updateIfCurrent],
   );
 
   const joinSession = useCallback(
@@ -1179,8 +1201,17 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       const token = identityRef.current;
       const generation = authGenerationRef.current;
       if (!token) return;
+      // Room names become a single URL path segment. Encoded separators and
+      // bare dot segments are rejected by the gateway/URL parser, so reject
+      // them at creation time instead of creating an unopenable room. Other
+      // dots (e.g. "team.v2") remain perfectly valid path characters.
+      const trimmed = name.trim();
+      if (!trimmed || /[\\/]/.test(trimmed) || trimmed === "." || trimmed === "..") {
+        toast.error("Room name cannot be '.' or '..' or contain '/', '\\'");
+        return;
+      }
       await guard("Create room", () =>
-        call("/chat/rooms", { method: "POST", body: { name } }),
+        call("/chat/rooms", { method: "POST", body: { name: trimmed } }),
       );
       if (isCurrent(token, generation)) await loadRooms();
     },
@@ -1192,10 +1223,15 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
       const token = identityRef.current;
       const generation = authGenerationRef.current;
       if (!token) return;
+      // Only the most recently requested room may write selection + messages.
+      // Without this, a slow response for the previous room wins the race and
+      // silently switches the player back after they selected another room.
+      const seq = ++chatRoomRequestRef.current;
       const result = (await guard("Messages", () =>
         call<{ messages: ChatMessage[] }>(`/chat/rooms/${encodeURIComponent(room)}/messages?limit=50`),
       )) as { messages: ChatMessage[] } | null;
-      if (result) updateIfCurrent(token, generation, { room, messages: result.messages });
+      if (result && seq === chatRoomRequestRef.current)
+        updateIfCurrent(token, generation, { room, messages: result.messages });
     },
     [call, guard, updateIfCurrent],
   );
@@ -1288,11 +1324,15 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     const round = current.status === "fulfilled" ? current.value.round : null;
     let myBet: CrashBet | null | undefined;
     if (current.status === "fulfilled" && round) {
-      const detail = await call<{ myBet: CrashBet | null }>(`/crash/rounds/${round.id}`).catch(
-        () => null,
-      );
-      if (!isCurrent(token, generation)) return;
-      myBet = detail?.myBet ?? null;
+      try {
+        const detail = await call<{ myBet: CrashBet | null }>(`/crash/rounds/${round.id}`);
+        if (!isCurrent(token, generation)) return;
+        myBet = detail.myBet;
+      } catch {
+        // A failed detail fetch says nothing about the bet. Leaving `myBet`
+        // undefined keeps the last known stake visible (and cash-out enabled)
+        // instead of fabricating "no bet" during a transient 429/503.
+      }
     }
     // A failed poll is not authoritative state. Keep the last known round,
     // bet and history rather than showing a fabricated "no flight" screen.

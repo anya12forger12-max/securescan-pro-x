@@ -14,7 +14,7 @@ import {
   jwtVerifyEnvFields,
   jwtVerifyPluginOptions,
 } from "@gp/config";
-import { ERROR_CODES, moneyMul, serviceTokenOk, toMoney } from "@gp/shared-types";
+import { ERROR_CODES, boundedInt, moneyMul, serviceTokenOk, toMoney } from "@gp/shared-types";
 
 /**
  * Unified Aviator/crash service (3023).
@@ -1141,7 +1141,7 @@ app.get("/v1/crash/rounds/current", async (_req, reply) => {
 });
 
 app.get("/v1/crash/rounds/history", async (req, reply) => {
-  const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 100);
+  const limit = boundedInt(req.query.limit, 20, 1, 100);
   const result = await pool.query(
     `SELECT * FROM crash_rounds WHERE status IN ('finished','cancelled')
       ORDER BY finished_at DESC NULLS LAST, created_at DESC LIMIT $1`,
@@ -1318,7 +1318,7 @@ app.get("/v1/crash/me/bets", async (req, reply) => {
   const userId = await requestUserId(req);
   if (!userId)
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
-  const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 100);
+  const limit = boundedInt(req.query.limit, 50, 1, 100);
   const result = await pool.query(
     `SELECT id, round_id, amount, auto_cashout, cashout_at, payout, status, created_at, settled_at
       FROM crash_bets WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,

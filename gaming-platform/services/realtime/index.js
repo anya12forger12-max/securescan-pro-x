@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { randomUUID } from "node:crypto";
 import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, parseCorsOrigins } from "@gp/config";
-import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
+import { ERROR_CODES, boundedInt, serviceTokenOk } from "@gp/shared-types";
 
 /**
  * Realtime fan-out service (3010) -- the default REALTIME_URL of the game
@@ -391,8 +391,8 @@ app.post("/internal/events", async (req, reply) => {
 });
 
 app.get("/v1/events", async (req, reply) => {
-  const since = Math.max(0, Number(req.query.since ?? 0) || 0);
-  const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
+  const since = boundedInt(req.query.since, 0, 0, Number.MAX_SAFE_INTEGER);
+  const limit = boundedInt(req.query.limit, 50, 1, 200);
   // Keep `items` and `latest` unchanged for existing pollers; only add the
   // gap metadata when the cursor predates the oldest retained row. The query
   // still returns the earliest available events in seq order after the gap.
@@ -417,7 +417,8 @@ app.get("/v1/events", async (req, reply) => {
 
 app.get("/v1/events/stream", async (req, reply) => {
   const sinceParam = req.query.since;
-  const requested = sinceParam === undefined ? null : Math.max(0, Number(sinceParam) || 0);
+  const requested =
+    sinceParam === undefined ? null : boundedInt(sinceParam, 0, 0, Number.MAX_SAFE_INTEGER);
   // One snapshot supplies both the replay cursor and the retention check. A
   // request without `since` is explicitly live-only, so it has no gap to
   // report even if older rows have already been pruned.

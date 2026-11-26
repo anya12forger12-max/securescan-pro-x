@@ -5,7 +5,7 @@ import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { createHash, randomUUID } from "node:crypto";
 import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, registerErrorHandler, parseCorsOrigins, jwtVerifyEnvFields, jwtVerifyPluginOptions } from "@gp/config";
-import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
+import { ERROR_CODES, boundedInt, serviceTokenOk } from "@gp/shared-types";
 
 /**
  * Admin / risk service (3013).
@@ -246,7 +246,7 @@ app.get("/v1/internal/audit", async (req, reply) => {
   if (!serviceTokenOk(req.headers, env.ADMIN_SERVICE_TOKEN))
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
 
-  const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
+  const limit = boundedInt(req.query.limit, 50, 1, 200);
   const actor = headerString(req.query, "actor");
   try {
     const result = await pool.query(
