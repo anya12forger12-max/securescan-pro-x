@@ -880,6 +880,9 @@ async function proxy(req, reply) {
     const res = await fetch(upstream, { ...init, signal: controller.signal });
     const contentType = res.headers.get("content-type") ?? "";
     const requestId = res.headers.get("x-request-id");
+    // Money-affecting Aviator routes mark a cached replay so clients and
+    // support can distinguish it from a fresh wager without trusting the body.
+    const idempotentReplay = res.headers.get("x-idempotent-replay");
     // Auth's cookie refresh flow relies on the exact HttpOnly Set-Cookie value
     // surviving the proxy. Keep every value as a separate header: joining them
     // with commas would corrupt Expires attributes.
@@ -960,6 +963,7 @@ async function proxy(req, reply) {
     reply.code(res.status);
     if (contentType) reply.header("content-type", contentType);
     if (requestId) reply.header("x-request-id", requestId);
+    if (idempotentReplay === "1") reply.header("x-idempotent-replay", "1");
     if (setCookies.length) reply.header("set-cookie", setCookies);
     return reply.send(text);
   } catch (err) {

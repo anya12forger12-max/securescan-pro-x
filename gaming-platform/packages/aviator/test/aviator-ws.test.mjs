@@ -3,13 +3,29 @@ import assert from "node:assert/strict";
 import { decodeFrames, textFrame } from "../../../services/gateway/aviator-ws.js";
 
 /** Build a masked client frame the way a browser does. */
-function clientFrame(text) {
-  const payload = Buffer.from(text, "utf8");
+function maskedFrame(payload, opcode = 1, fin = true) {
+  const bytes = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload), "utf8");
+  const first = (fin ? 0x80 : 0) | opcode;
+  let header;
+  if (bytes.length < 126) {
+    header = Buffer.from([first, 0x80 | bytes.length]);
+  } else if (bytes.length <= 0xffff) {
+    header = Buffer.alloc(4);
+    header[0] = first;
+    header[1] = 0x80 | 126;
+    header.writeUInt16BE(bytes.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = first;
+    header[1] = 0x80 | 127;
+    header.writeBigUInt64BE(BigInt(bytes.length), 2);
+  }
   const mask = Buffer.from([0x11, 0x22, 0x33, 0x44]);
-  const masked = Buffer.alloc(payload.length);
-  for (let i = 0; i < payload.length; i++) masked[i] = payload[i] ^ mask[i % 4];
-  return Buffer.concat([Buffer.from([0x81, 0x80 | payload.length]), mask, masked]);
+  const masked = Buffer.alloc(bytes.length);
+  for (let i = 0; i < bytes.length; i++) masked[i] = bytes[i] ^ mask[i % 4];
+  return Buffer.concat([header, mask, masked]);
 }
+const clientFrame = (text) => maskedFrame(text);
 
 test("server text frames carry an unmasked length and exact payload", () => {
   const frame = textFrame(JSON.stringify({ t: "tick", mult: "2.37" }));
@@ -37,11 +53,30 @@ test("masked client frames decode incrementally across TCP chunks", () => {
   assert.deepEqual(JSON.parse(complete.frames[0].text), { t: "bet", panel: 2 });
 });
 
-test("unmasked and oversized client frames are rejected", () => {
+test("fragmented text messages are reassembled up to a bounded size", () => {
+  const first = maskedFrame(Buffer.from('{"t":"ping",'), 1, false);
+  const second = maskedFrame(Buffer.from('"ts":123}'), 0, true);
+  const decoded = decodeFrames(Buffer.concat([first, second]));
+  assert.equal(decoded.frames.length, 1);
+  assert.deepEqual(JSON.parse(decoded.frames[0].text), { t: "ping", ts: 123 });
+
+  const largeFirst = maskedFrame(Buffer.alloc(600_000, 0x61), 1, false);
+  const largeSecond = maskedFrame(Buffer.alloc(600_000, 0x62), 0, true);
+  assert.throws(
+    () => decodeFrames(Buffer.concat([largeFirst, largeSecond])),
+    /message too large/,
+  );
+});
+
+test("invalid frame shapes are rejected", () => {
   assert.throws(() => decodeFrames(Buffer.from([0x81, 0x02, 0x61, 0x62])), /unmasked/);
   const huge = Buffer.alloc(12);
   huge[0] = 0x81;
   huge[1] = 0xff;
   huge.writeBigUInt64BE(2n ** 40n, 2);
   assert.throws(() => decodeFrames(huge), /frame too large/);
+  assert.throws(() => decodeFrames(maskedFrame("x", 0)), /unexpected continuation/);
+  assert.throws(() => decodeFrames(maskedFrame("x", 8, false)), /invalid control frame/);
+  assert.throws(() => decodeFrames(Buffer.from([0xb1, 0x80, 0x00, 0x00, 0x00, 0x00])), /reserved/);
+  assert.throws(() => decodeFrames(maskedFrame(Buffer.from([0xff]))), /utf-8/i);
 });

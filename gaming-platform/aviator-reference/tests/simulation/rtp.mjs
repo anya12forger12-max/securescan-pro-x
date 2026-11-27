@@ -11,7 +11,7 @@
  * return of a fixed cash-out target: P(crash >= target) * target.
  */
 
-import { crashPoint, durationForPoint } from "../../../packages/aviator/index.js";
+import { crashPointFromRound, durationForPoint } from "../../../packages/aviator/index.js";
 
 const rounds = Math.max(1, Number(process.argv[2] ?? 100000));
 const edge = Number(process.argv[3] ?? 0.03);
@@ -26,7 +26,9 @@ let longest = 0;
 const survived = Object.fromEntries(targets.map((target) => [target, 0]));
 
 for (let i = 0; i < rounds; i++) {
-  const raw = crashPoint(`simulation-seed-${i}`, "client-seed", edge);
+  // Same construction as the live engine: HMAC(serverSeed, roundId) mapped
+  // through the shared heavy-tail curve with the published house edge.
+  const raw = crashPointFromRound("simulation-server-seed", `simulation-round-${i}`, edge, cap);
   const point = Math.min(raw, cap);
   if (raw === 1) instant++;
   if (raw > cap) capped++;

@@ -12,7 +12,13 @@
 import { createHash, createHmac } from "node:crypto";
 
 export const PROTOCOL_VERSION = 1;
+/** Live rounds are committed from (serverSeed, roundId) with the platform's
+ * house edge / ceiling. This is the algorithm published in /rules and verified
+ * by the public fairness endpoint. */
 export const FAIRNESS_ALGORITHM = "hmac-sha256-v1";
+/** Legacy/client-seed construction from the design document. Kept for clients
+ * that still supply an explicit client seed; it is NOT the live round algorithm. */
+export const CLIENT_SEED_ALGORITHM = "hmac-sha256-client-seed-v1";
 
 /** Canonical round lifecycle. A round may never skip SETTLING. */
 export const PHASES = Object.freeze([
@@ -72,7 +78,63 @@ export function crashPoint(serverSeed, clientSeed = "", edge = 0.03) {
   return Math.max(1, Math.round(scaled * 100) / 100);
 }
 
-/** Verify a revealed seed against the hash published before the round. */
+/**
+ * The live round construction. HMAC-SHA256(serverSeed, roundId) supplies a
+ * uniform 32-bit value; the same heavy-tail curve is then applied with the
+ * round's persisted house edge and ceiling. Keeping this here (rather than in
+ * the crash service alone) means the public verifier and the engine can never
+ * drift apart again.
+ */
+export function hmacUnit(serverSeed, roundId) {
+  return createHmac("sha256", String(serverSeed)).update(String(roundId)).digest().readUInt32BE(0) / 0x100000000;
+}
+
+export function pointFromUnit(u, houseEdge = 0.02, maxMultiplier = 100) {
+  const unit = Number(u);
+  if (!Number.isFinite(unit)) throw new Error("invalid fairness unit");
+  if (unit < houseEdge) return 1;
+  const normalised = (unit - houseEdge) / (1 - houseEdge);
+  const raw = Math.min(maxMultiplier, 1 / (1 - normalised * 0.99));
+  return Math.max(1, Math.floor(raw * 100) / 100);
+}
+
+export function crashPointFromRound(serverSeed, roundId, houseEdge = 0.02, maxMultiplier = 100) {
+  return pointFromUnit(hmacUnit(serverSeed, roundId), houseEdge, maxMultiplier);
+}
+
+/** Verify a revealed live round against its pre-committed hash and point. */
+export function verifyRoundFairness({
+  serverSeed, roundId, seedHash, crashPoint: published,
+  houseEdge = 0.02, maxMultiplier = 100,
+}) {
+  if (typeof serverSeed !== "string" || !serverSeed || !roundId) {
+    return { valid: false, reason: "MISSING_SEED_OR_ROUND" };
+  }
+  const computedHash = commitment(serverSeed);
+  const computedPoint = crashPointFromRound(serverSeed, roundId, houseEdge, maxMultiplier);
+  const hashMatches = typeof seedHash !== "string" || !seedHash
+    ? null
+    : computedHash === seedHash.toLowerCase();
+  const pointMatches = published === undefined || published === null
+    ? null
+    : Math.abs(Number(published) - computedPoint) < 0.001;
+  // Both the pre-committed hash and the published point must be checked. A
+  // partial verifier would give false assurance with nothing to compare.
+  const valid = hashMatches === true && pointMatches === true;
+  return {
+    valid,
+    reason: valid ? undefined : hashMatches === null ? "MISSING_SEED_HASH"
+      : pointMatches === null ? "MISSING_CRASH_POINT" : "MISMATCH",
+    seedHash: computedHash,
+    crashPoint: computedPoint,
+    hashMatches,
+    pointMatches,
+    algorithm: FAIRNESS_ALGORITHM,
+    inputs: { roundId: String(roundId), houseEdge, maxMultiplier },
+  };
+}
+
+/** Verify a client-seed round using the construction from the design docs. */
 export function verifyFairness({ serverSeed, clientSeed = "", seedHash, crashPoint: published, edge = 0.03 }) {
   if (typeof serverSeed !== "string" || !serverSeed) {
     return { valid: false, reason: "MISSING_SEED" };
@@ -85,13 +147,16 @@ export function verifyFairness({ serverSeed, clientSeed = "", seedHash, crashPoi
   const pointMatches = published === undefined || published === null
     ? null
     : Math.abs(Number(published) - computedPoint) < 0.001;
+  const valid = hashMatches === true && pointMatches === true;
   return {
-    valid: hashMatches !== false && pointMatches !== false,
+    valid,
+    reason: valid ? undefined : hashMatches === null ? "MISSING_SEED_HASH"
+      : pointMatches === null ? "MISSING_CRASH_POINT" : "MISMATCH",
     seedHash: computedHash,
     crashPoint: computedPoint,
     hashMatches,
     pointMatches,
-    algorithm: FAIRNESS_ALGORITHM,
+    algorithm: CLIENT_SEED_ALGORITHM,
   };
 }
 
@@ -134,6 +199,7 @@ export function phaseForRound(round, now = Date.now(), bettingWindowMs = 5000) {
 /** Server -> client frame names from the realtime protocol. */
 export const SERVER_MESSAGES = Object.freeze([
   "snapshot", "round_start", "betting_closed", "tick", "crash",
+  "round_settling", "round_voided",
   "bet_ok", "bet_err", "cashout_ok", "cashout_err", "balance",
   "feed", "chat_msg", "error", "pong",
 ]);
@@ -178,29 +244,64 @@ export function moneyString(value) {
 
 export function maskPlayer(name) {
   const text = String(name ?? "").trim();
-  if (text.length <= 2) return text ? `${text[0]}***` : "***";
+  if (text === "***" || text === "") return "***";
+  if (text.length <= 2) return `${text[0]}***`;
   return `${text[0]}***${text[text.length - 1]}`;
 }
 
-/** Build the snapshot frame a client receives on connect / reconnect. */
+/** Protocol timestamps are epoch milliseconds, matching `serverTime`. Accept
+ * already-numeric values and ISO strings so callers can pass either form. */
+export function epochMs(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.getTime();
+  if (typeof value === "number") return Number.isFinite(value) ? Math.trunc(value) : null;
+  const parsed = Date.parse(String(value));
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Build the snapshot frame a client receives on connect / reconnect.
+ *
+ * A snapshot may arrive while betting is still open, so it must never carry
+ * the committed outcome: including `crashPoint` before reveal lets a client
+ * bet at the exact peak. Only rounds that are already revealed (finished or
+ * cancelled) expose their point, and the server seed is never part of a
+ * snapshot at all.
+ */
 export function buildSnapshot({
   round, balance, myBets = [], history = [], limits = {},
   serverTime = Date.now(), bettingWindowMs = 5000,
 }) {
+  const status = round?.status ?? round?.state ?? null;
+  // A cancelled round was never played: its committed point stays sealed, so
+  // it must not be treated as a revealed round anywhere in the protocol.
+  const revealed = round?.revealed === true || status === "finished"
+    || (["CRASHED", "SETTLING"].includes(status) && round?.crashPoint !== null
+      && round?.crashPoint !== undefined);
+  const start = epochMs(round?.created_at ?? round?.createdAt);
+  const endsAt = round?.betting_ends_at ?? round?.bettingEndsAt
+    ?? (status === "betting" && start !== null ? start + bettingWindowMs : null);
+  const roundFrame = round
+    ? {
+        id: round.id,
+        state: phaseForRound(round, serverTime, bettingWindowMs),
+        seedHash: round.seed_hash ?? round.seedHash ?? null,
+        flightStart: epochMs(round.started_at ?? round.startedAt),
+        bettingEndsAt: epochMs(endsAt),
+        // Configuration, not outcome: clients need these to render the curve.
+        doublingSeconds: Number(round.doubling_seconds ?? round.doublingSeconds ?? 3),
+        maxMultiplier: Number(round.max_multiplier ?? round.maxMultiplier ?? 100),
+        ...(revealed
+          ? { crashPoint: round.crash_point === null || round.crash_point === undefined
+              ? null : Number(round.crash_point ?? round.crashPoint) }
+          : {}),
+      }
+    : null;
   return {
     t: "snapshot",
     v: PROTOCOL_VERSION,
     serverTime,
-    round: round
-      ? {
-          id: round.id,
-          state: phaseForRound(round, serverTime, bettingWindowMs),
-          seedHash: round.seed_hash ?? round.seedHash ?? null,
-          flightStart: round.started_at ?? round.startedAt ?? null,
-          bettingEndsAt: round.betting_ends_at ?? round.bettingEndsAt ?? null,
-          crashPoint: round.crash_point ?? round.crashPoint ?? null,
-        }
-      : null,
+    round: roundFrame,
     balance: balance
       ? { amount: moneyString(balance.amount), currency: balance.currency ?? "INR" }
       : null,
@@ -220,6 +321,26 @@ export function buildSnapshot({
       maxWin: moneyString(limits.maxWin ?? 50000),
     },
   };
+}
+
+/**
+ * Defensive filter applied again at the socket boundary. Even if an upstream
+ * snapshot accidentally includes a proof field, it must never reach a client
+ * before the outcome is revealed.
+ */
+export function sanitizeSnapshot(frame) {
+  if (!frame || frame.t !== "snapshot") return frame;
+  const out = { ...frame };
+  for (const field of ["seed", "serverSeed", "proof"]) delete out[field];
+  if (out.round && typeof out.round === "object") {
+    out.round = { ...out.round };
+    for (const field of ["seed", "serverSeed", "proof"]) delete out.round[field];
+    const revealed = out.round.revealed === true
+      || ["CRASHED", "SETTLING"].includes(out.round.state)
+      || out.round.status === "finished";
+    if (!revealed) delete out.round.crashPoint;
+  }
+  return out;
 }
 
 /** Batched live-feed frame. Identifiers are masked before fan-out. */

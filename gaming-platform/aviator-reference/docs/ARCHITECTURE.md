@@ -24,11 +24,23 @@ never turn a stale round into a free win.
 
 ## Fairness
 
-- Before betting, the service publishes `sha256(serverSeed)` as `seedHash`.
-- The crash point is `crashPoint(serverSeed, clientSeed, houseEdge)` using a
-  52-bit HMAC-SHA256 extraction.
-- After settlement the seed is revealed; `/v1/fairness/verify` recomputes both
-  the hash and the point. Any mismatch is reported as invalid.
+- Before betting, the service publishes `sha256(serverSeed)` as `seedHash`. A
+  round is committed from **both** the seed and its public UUID, so the seed
+  hash alone cannot be replayed against another round.
+- The live crash point is
+  `crashPointFromRound(serverSeed, roundId, houseEdge, maxMultiplier)`: the first
+  32 bits of `HMAC-SHA256(serverSeed, roundId)` are mapped through the same
+  heavy-tail curve in the engine, the public verifier and the round proof. The
+  published algorithm is `hmac-sha256-v1`.
+- The design document's client-seed construction is still available as
+  `hmac-sha256-client-seed-v1` for manually verifying legacy proofs, but it is
+  never used to generate a live round. `POST /v1/crash/fairness/verify` accepts
+  an explicit `algorithm` so the two paths cannot be confused.
+- After settlement the seed is revealed; `/v1/crash/fairness/verify` recomputes
+  both the hash and the point. Any mismatch is reported as invalid.
+- Snapshots and ticks are derived from `serverTime` and the configured ceiling,
+  never from the hidden outcome. `crashPoint` only appears once a round is
+  revealed, and the server seed is never part of a snapshot.
 
 ## Money
 
@@ -57,9 +69,9 @@ fallback when the protocol v1 socket is unavailable.
   `Intl.NumberFormat` and `Intl.DateTimeFormat` handle currency, number and
   date formatting, and Arabic switches the stage to `dir="rtl"`.
 * Sound is off until the player opts in. `frontend/src/hooks/useSound.ts`
-  creates a Web Audio context only after a user gesture and stores the
-  preference locally; signed-in players also persist it via
-  `PUT /v1/crash/settings`.
+  creates a Web Audio context only after a user gesture. The saved server
+  preference wins on load; local storage is only a fallback before sign-in.
+  Every toggle is persisted via `PUT /v1/crash/settings` when signed in.
 * Accessibility: buttons and inputs have visible focus rings and 44 px touch
   targets, `C` cashes out the first live panel, a polite live region announces
   phase changes (never ticks), and `prefers-reduced-motion` plus an in-game

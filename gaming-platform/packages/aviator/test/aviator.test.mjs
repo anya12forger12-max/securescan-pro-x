@@ -1,9 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  PHASES, assertTransition, canTransition, commitment, crashPoint,
-  verifyFairness, multiplierAt, durationForPoint, phaseForRound,
-  buildSnapshot, buildFeed, maskPlayer, normalisePanel, moneyString,
+  CLIENT_SEED_ALGORITHM, FAIRNESS_ALGORITHM, PHASES, assertTransition, canTransition,
+  commitment, crashPoint, crashPointFromRound, verifyFairness, verifyRoundFairness,
+  multiplierAt, durationForPoint, phaseForRound, buildSnapshot, sanitizeSnapshot,
+  buildFeed, maskPlayer, normalisePanel, moneyString,
 } from "../index.js";
 
 test("commitment is sha256 of the server seed", () => {
@@ -25,9 +26,73 @@ test("crash point is deterministic and verifiable", () => {
     crashPoint: point,
   });
   assert.equal(verified.valid, true);
-  assert.equal(verified.algorithm, "hmac-sha256-v1");
+  assert.equal(verified.algorithm, CLIENT_SEED_ALGORITHM);
   assert.equal(verified.hashMatches, true);
   assert.equal(verified.pointMatches, true);
+});
+
+test("live rounds use the same verifiable construction as the public endpoint", () => {
+  const seed = "server-seed-live";
+  const roundId = "11111111-2222-3333-4444-555555555555";
+  const point = crashPointFromRound(seed, roundId, 0.02, 100);
+  const verified = verifyRoundFairness({
+    serverSeed: seed,
+    roundId,
+    seedHash: commitment(seed),
+    crashPoint: point,
+    houseEdge: 0.02,
+    maxMultiplier: 100,
+  });
+  assert.equal(verified.valid, true);
+  assert.equal(verified.algorithm, FAIRNESS_ALGORITHM);
+  assert.equal(verified.crashPoint, point);
+  assert.equal(verifyRoundFairness({
+    serverSeed: seed, roundId, seedHash: commitment(seed), crashPoint: point + 1,
+  }).valid, false);
+});
+
+test("snapshots never expose an unrevealed outcome or seed", () => {
+  const secret = {
+    crash_point: 9.5,
+    server_seed: "hidden-seed",
+    proof: { serverSeed: "hidden-seed" },
+  };
+  const frame = buildSnapshot({
+    round: {
+      id: "r1", status: "running", seed_hash: commitment("seed"),
+      created_at: "2026-01-01T00:00:00Z",
+      betting_ends_at: "2026-01-01T00:00:05Z",
+      started_at: "2026-01-01T00:00:05Z",
+      ...secret,
+    },
+    history: [],
+    serverTime: Date.parse("2026-01-01T00:00:06Z"),
+    bettingWindowMs: 5000,
+  });
+  assert.equal(frame.round.state, "FLYING");
+  assert.equal(frame.round.bettingEndsAt, Date.parse("2026-01-01T00:00:05Z"));
+  assert.equal("crashPoint" in frame.round, false);
+  assert.equal("server_seed" in frame.round, false);
+  assert.equal("proof" in frame.round, false);
+  assert.equal("serverSeed" in sanitizeSnapshot(frame).round, false);
+
+  const revealed = buildSnapshot({ round: { id: "r2", status: "finished", ...secret }, history: [] });
+  assert.equal(revealed.round.crashPoint, 9.5);
+
+  // A voided/cancelled round was never played; replaying its point would
+  // disclose an outcome no wager could ever have used.
+  const cancelled = buildSnapshot({ round: { id: "r3", status: "cancelled", ...secret }, history: [] });
+  assert.equal("crashPoint" in cancelled.round, false);
+  assert.equal("crashPoint" in sanitizeSnapshot(cancelled).round, false);
+});
+
+test("a verifier without both published values never reports success", () => {
+  const seed = "seed-with-partial-proof";
+  const roundId = "round-partial";
+  const point = crashPointFromRound(seed, roundId);
+  assert.equal(verifyRoundFairness({ serverSeed: seed, roundId, crashPoint: point }).valid, false);
+  assert.equal(verifyRoundFairness({ serverSeed: seed, roundId, seedHash: commitment(seed) }).valid, false);
+  assert.equal(verifyFairness({ serverSeed: seed, crashPoint: point }).valid, false);
 });
 
 test("tampering with the revealed seed or point fails verification", () => {

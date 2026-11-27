@@ -13,6 +13,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { epochMs, maskPlayer, PROTOCOL_VERSION, sanitizeSnapshot } from "../../packages/aviator/index.js";
 
 const WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -41,7 +42,7 @@ export function textFrame(text) {
 /** Incremental RFC 6455 frame decoder. Client frames are always masked.
  * Returns `{ frames, rest }`; control frames (close/ping) are returned with
  * their opcode so the caller can answer a ping or close the socket. */
-export function decodeFrames(buffer) {
+export function decodeFrames(buffer, fragments = [], fragmentState = { opcode: null, bytes: 0 }) {
   const frames = [];
   let offset = 0;
   for (;;) {
@@ -49,7 +50,14 @@ export function decodeFrames(buffer) {
     const first = buffer[offset];
     const second = buffer[offset + 1];
     const opcode = first & 0x0f;
+    const fin = (first & 0x80) !== 0;
     const masked = (second & 0x80) !== 0;
+    // Reserved bits and fragmented/oversized control frames are protocol
+    // errors. No extension is negotiated, so any RSV bit is invalid.
+    if ((first & 0x70) !== 0) throw new Error("reserved frame bits set");
+    if (opcode >= 8 && (!fin || (second & 0x7f) > 125)) throw new Error("invalid control frame");
+    if (opcode === 0 && !fragmentState.opcode) throw new Error("unexpected continuation frame");
+    if ((opcode === 1 || opcode === 2) && fragmentState.opcode) throw new Error("unfinished fragmented message");
     if (!masked) throw new Error("unmasked client frame");
     let length = second & 0x7f;
     offset += 2;
@@ -70,23 +78,54 @@ export function decodeFrames(buffer) {
     const payload = Buffer.alloc(length);
     for (let i = 0; i < length; i++) payload[i] = buffer[offset + 4 + i] ^ mask[i % 4];
     offset += length + 4;
-    frames.push({ opcode, text: opcode === 1 ? payload.toString("utf8") : "" });
+    // Continuation frames (opcode 0) are legal RFC 6455 messages. Reassemble
+    // them here so a standards-compliant client is not silently dropped.
+    if (opcode === 1 || opcode === 0 || opcode === 2) {
+      if (opcode !== 0) {
+        fragments.length = 0;
+        fragmentState.opcode = opcode;
+        fragmentState.bytes = 0;
+      }
+      fragmentState.bytes += payload.length;
+      // The per-frame cap alone is not enough: unbounded continuation frames
+      // could still exhaust memory. Bound the whole reassembled message too.
+      if (fragmentState.bytes > 1024 * 1024) throw new Error("message too large");
+      fragments.push(payload);
+      if (fin) {
+        const messageOpcode = fragmentState.opcode;
+        const text = messageOpcode === 2
+          ? ""
+          : new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(fragments));
+        frames.push({ opcode: messageOpcode, text });
+        fragments.length = 0;
+        fragmentState.opcode = null;
+        fragmentState.bytes = 0;
+      }
+      continue;
+    }
+    frames.push({ opcode, text: "" });
   }
   return { frames, rest: buffer.subarray(offset) };
 }
 
-const multiplierFor = (flightStart, crashPoint, elapsed) => {
-  const start = Date.parse(flightStart ?? "");
-  if (!Number.isFinite(start) || elapsed < start) return 1;
-  const doubling = 3000;
-  const cap = Number(crashPoint) > 0 ? Number(crashPoint) : 100;
+/** Render the public flight curve from the configured ceiling only. Reading
+ * the hidden crash point here would plateau the tick at the outcome and leak
+ * it before betting closes. */
+const multiplierFor = (flightStart, elapsed, doublingSeconds = 3, maxMultiplier = 100) => {
+  const start = epochMs(flightStart);
+  if (start === null || elapsed < start) return 1;
+  const doubling = Math.max(0.001, Number(doublingSeconds) || 3) * 1000;
+  const cap = Number(maxMultiplier) > 0 ? Number(maxMultiplier) : 100;
   return Math.max(1, Math.min(cap, Math.pow(2, (elapsed - start) / doubling)));
 };
 
-/** Map a realtime event topic to the documented server message names. */
+/** Map a realtime event topic to the documented server message names. All
+ * protocol timestamps are epoch milliseconds; realtime/DB ISO strings are
+ * converted at this boundary. */
 function frameForEvent(event) {
   const payload = event?.payload ?? {};
   const roundId = payload.roundId ?? payload.round?.id ?? payload.id ?? null;
+  const money = (value) => value === null || value === undefined ? null : Number(value).toFixed(2);
   switch (event?.topic) {
     case "crash.round_created":
     case "crash.round_start":
@@ -94,39 +133,49 @@ function frameForEvent(event) {
         t: "round_start",
         roundId,
         seedHash: payload.seedHash ?? null,
-        bettingEndsAt: payload.bettingEndsAt
-          ?? new Date(Date.now() + (Number(payload.bettingMs) || 8000)).toISOString(),
+        bettingEndsAt: epochMs(payload.bettingEndsAt)
+          ?? Date.now() + (Number(payload.bettingMs) || 8000),
       };
     case "crash.round_started":
     case "crash.round_flight":
       return {
         t: "betting_closed",
         roundId,
-        flightStart: payload.flightStart ?? new Date().toISOString(),
+        flightStart: epochMs(payload.flightStart) ?? Date.now(),
       };
     case "crash.round_finished":
-    case "crash.round_cancelled":
     case "crash.round_crash":
       return {
         t: "crash",
         roundId,
-        mult: payload.crashPoint ?? payload.mult ?? null,
+        mult: money(payload.crashPoint ?? payload.mult),
         seed: payload.serverSeed ?? null,
+      };
+    case "crash.round_settling":
+      return { t: "round_settling", roundId, state: "SETTLING" };
+    case "crash.round_cancelled":
+      return {
+        t: "round_voided",
+        roundId,
+        reason: payload.reason ?? "round_cancelled",
       };
     case "crash.bet":
       return payload.status === "cancelled" ? null : {
         t: "feed",
         list: [{
-          type: "bet", betId: payload.id, user: payload.user ?? "***",
-          stake: payload.amount ?? null, mult: null, payout: null,
+          type: "bet", betId: payload.betId ?? payload.id ?? null,
+          user: maskPlayer(payload.user ?? payload.username ?? "***"),
+          stake: money(payload.stake ?? payload.amount), mult: null, payout: null,
         }],
       };
     case "crash.cashout":
       return {
         t: "feed",
         list: [{
-          type: "cashout", betId: payload.betId ?? null, user: payload.user ?? "***",
-          stake: payload.stake ?? null, mult: payload.mult ?? null, payout: payload.payout ?? null,
+          type: "cashout", betId: payload.betId ?? payload.id ?? null,
+          user: maskPlayer(payload.user ?? payload.username ?? "***"),
+          stake: money(payload.stake), mult: money(payload.mult ?? payload.multiplier),
+          payout: money(payload.payout),
         }],
       };
     case "crash.auto_stopped":
@@ -136,9 +185,9 @@ function frameForEvent(event) {
       return {
         t: "chat_msg",
         id: message.id ?? null,
-        user: message.username ?? "***",
+        user: maskPlayer(message.username ?? message.user ?? "***"),
         text: message.content ?? "",
-        time: message.created_at ?? null,
+        time: epochMs(message.created_at) ?? Date.now(),
       };
     }
     default:
@@ -185,6 +234,19 @@ export function registerAviatorSocket(app, deps) {
     }
     if (url.pathname !== "/v1/ws") {
       socket.destroy();
+      return;
+    }
+    const versionParam = url.searchParams.get("v");
+    if (versionParam !== null && versionParam !== String(PROTOCOL_VERSION)) {
+      const body = JSON.stringify({
+        error: "UNSUPPORTED_VERSION",
+        message: `only Aviator protocol v${PROTOCOL_VERSION} is supported`,
+      });
+      socket.write(
+        `HTTP/1.1 400 Bad Request\r\nContent-Type: application/json; charset=utf-8\r\n` +
+        `Content-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`,
+      );
+      socket.end();
       return;
     }
     const STATUS = {
@@ -247,10 +309,18 @@ export function registerAviatorSocket(app, deps) {
       : null;
     const state = {
       userId, token: queryToken ?? bearer, round: null,
+      version: versionParam === null ? PROTOCOL_VERSION : Number(versionParam),
+      fragments: [], fragment: { opcode: null, bytes: 0 }, idle: null, lastActivity: Date.now(),
       closed: false, tick: null, stream: null,
     };
     known.add(state);
     sockets.set(userId, known);
+    // Silent sockets are closed after 45s. A client that pings every 15s stays
+    // open; dead connections stop consuming a per-user slot.
+    state.idle = setInterval(() => {
+      if (Date.now() - state.lastActivity > 45_000) close();
+    }, 5000);
+    state.idle.unref?.();
     const send = (frame) => {
       if (state.closed || !socket.writable) return;
       try { socket.write(textFrame(JSON.stringify(frame))); } catch { close(); }
@@ -285,8 +355,11 @@ export function registerAviatorSocket(app, deps) {
       state.tick = setInterval(() => {
         const round = state.round;
         if (!round || round.state !== "FLYING" || !round.flightStart) return;
-        const mult = multiplierFor(round.flightStart, round.crashPoint, Date.now());
-        send({ t: "tick", roundId: round.id, mult: mult.toFixed(2) });
+        const mult = multiplierFor(
+          round.flightStart, Date.now(),
+          round.doublingSeconds ?? 3, round.maxMultiplier ?? 100,
+        );
+        send({ t: "tick", roundId: round.id, mult: mult.toFixed(2), serverTime: Date.now() });
       }, 120);
       state.tick.unref?.();
     };
@@ -296,10 +369,14 @@ export function registerAviatorSocket(app, deps) {
         const result = await api("/v1/crash/snapshot");
         // The crash REST endpoint returns an envelope; the socket protocol
         // carries the inner frame itself.
-        const snapshot = result?.snapshot ?? result;
+        const snapshot = sanitizeSnapshot(result?.snapshot ?? result);
         state.round = snapshot?.round ?? null;
         send(snapshot);
         startTicks();
+        if (state.round?.state === "CRASHED" && state.tick) {
+          clearInterval(state.tick);
+          state.tick = null;
+        }
       } catch (err) {
         send({ t: "error", code: err.code ?? "INTERNAL", message: err.message });
       }
@@ -347,6 +424,13 @@ export function registerAviatorSocket(app, deps) {
                 state.round = { ...state.round, state: "CRASHED", crashPoint: frame.mult, mult: frame.mult };
                 if (state.tick) { clearInterval(state.tick); state.tick = null; }
               }
+              if (frame.t === "round_settling" && state.round) {
+                state.round = { ...state.round, state: "SETTLING" };
+              }
+              if (frame.t === "round_voided" && state.round) {
+                state.round = { ...state.round, state: "SETTLING", crashPoint: null, mult: null };
+                if (state.tick) { clearInterval(state.tick); state.tick = null; }
+              }
               send(frame);
             } catch { /* Ignore a malformed event; never drop the stream. */ }
           }
@@ -370,6 +454,15 @@ export function registerAviatorSocket(app, deps) {
         code: err.code ?? "INTERNAL",
         message: err.message,
       });
+      // Balance is per-player: fetch it for this socket instead of broadcasting
+      // it through the shared realtime hub, where other players would see it.
+      const sendBalance = async () => {
+        try {
+          const me = await api("/v1/crash/me");
+          if (me?.balance)
+            send({ t: "balance", ...me.balance, ...(reqId ? { reqId } : {}) });
+        } catch { /* A failed balance refresh never invalidates a paid bet. */ }
+      };
       try {
         if (msg.t === "ping") {
           send({ t: "pong", ts: msg.ts ?? null, serverTime: Date.now() });
@@ -388,26 +481,37 @@ export function registerAviatorSocket(app, deps) {
           });
           replyOk("bet_ok", {
             reqId: reqId ?? null, betId: bet.bet?.betId ?? bet.bet?.id ?? null,
-            panel: msg.panel ?? 1, amount: msg.amount,
+            panel: msg.panel ?? 1,
+            amount: Number.isFinite(Number(msg.amount)) ? Number(msg.amount).toFixed(2) : null,
           });
+          void sendBalance();
           return;
         }
         if (msg.t === "cancel_bet") {
           const roundId = msg.roundId ?? state.round?.id;
-          await api(`/v1/crash/rounds/${encodeURIComponent(roundId)}/bets/${encodeURIComponent(msg.betId)}/cancel`, { method: "POST" });
+          await api(`/v1/crash/rounds/${encodeURIComponent(roundId)}/bets/${encodeURIComponent(msg.betId)}/cancel`, {
+            method: "POST", body: { requestId: reqId ?? undefined },
+          });
           replyOk("bet_ok", { reqId: reqId ?? null, betId: msg.betId, cancelled: true });
+          void sendBalance();
           return;
         }
         if (msg.t === "cashout") {
           const roundId = msg.roundId ?? state.round?.id;
+          const body = { requestId: reqId ?? undefined };
+          if (msg.betId) body.betId = msg.betId;
+          if (msg.panel !== undefined) body.panel = Number(msg.panel) === 2 ? 2 : 1;
           const result = await api(`/v1/crash/rounds/${encodeURIComponent(roundId)}/cashout`, {
-            method: "POST", body: { betId: msg.betId, requestId: reqId ?? undefined },
+            method: "POST", body,
           });
+          const settledPanel = Number(result.panel);
           replyOk("cashout_ok", {
-            betId: msg.betId,
+            betId: result.betId ?? msg.betId ?? null,
+            ...(settledPanel === 1 || settledPanel === 2 ? { panel: settledPanel } : {}),
             mult: String(result.multiplier ?? ""),
             payout: String(result.payout ?? ""),
           });
+          void sendBalance();
           return;
         }
         if (msg.t === "auto_start") {
@@ -418,12 +522,14 @@ export function registerAviatorSocket(app, deps) {
               rounds: msg.rounds, stopRules: msg.stopRules ?? {},
             },
           });
-          replyOk("bet_ok", { reqId: reqId ?? null, auto: true, panel: msg.panel ?? 1 });
+          replyOk("bet_ok", {
+            reqId: reqId ?? null, betId: null, auto: true, panel: msg.panel ?? 1,
+          });
           return;
         }
         if (msg.t === "auto_stop") {
           await api(`/v1/crash/auto/${Number(msg.panel) === 2 ? 2 : 1}/stop`, { method: "POST" });
-          replyOk("bet_ok", { reqId: reqId ?? null, auto: false });
+          replyOk("bet_ok", { reqId: reqId ?? null, betId: null, auto: false });
           return;
         }
         if (msg.t === "chat") {
@@ -438,7 +544,7 @@ export function registerAviatorSocket(app, deps) {
             body: JSON.stringify({ content: String(msg.text ?? "").slice(0, 200) }),
           });
           if (!response.ok) throw Object.assign(new Error("chat rejected"), { code: "VALIDATION_FAILED" });
-          replyOk("chat_msg", { user: "***", text: String(msg.text ?? "").slice(0, 200), time: new Date().toISOString() });
+          replyOk("chat_msg", { user: "***", text: String(msg.text ?? "").slice(0, 200), time: Date.now() });
           return;
         }
         send({ t: "error", code: "VALIDATION_FAILED", message: `unknown message type ${msg.t}` });
@@ -453,6 +559,7 @@ export function registerAviatorSocket(app, deps) {
       if (state.closed) return;
       state.closed = true;
       if (state.tick) clearInterval(state.tick);
+      if (state.idle) clearInterval(state.idle);
       state.stream?.abort?.();
       known.delete(state);
       if (!known.size) sockets.delete(userId);
@@ -464,8 +571,9 @@ export function registerAviatorSocket(app, deps) {
       } catch { /* already gone */ }
     };
     const onData = (chunk) => {
+      state.lastActivity = Date.now();
       try {
-        const decoded = decodeFrames(Buffer.concat([pending, chunk]));
+        const decoded = decodeFrames(Buffer.concat([pending, chunk]), state.fragments, state.fragment);
         pending = Buffer.from(decoded.rest);
         for (const frame of decoded.frames) {
           if (frame.opcode === 8) { close(); return; }

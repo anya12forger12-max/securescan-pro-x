@@ -14,19 +14,28 @@ const CUES: Record<SoundCue, Cue> = {
 };
 
 /** Short Web Audio cues. Audio starts disabled and is only created after a
- * user gesture, in line with browser autoplay policies. The preference is
- * stored locally; no account or server state is involved. */
-export function useSound() {
-  const [enabled, setEnabled] = useState(false);
+ * user gesture, in line with browser autoplay policies. A saved server
+ * preference wins once it loads; local storage is only a fallback for signed-out
+ * players. */
+export function useSound(serverEnabled?: boolean) {
+  const [enabled, setEnabledState] = useState(false);
   const contextRef = useRef<AudioContext | null>(null);
+  const serverResolved = useRef(serverEnabled !== undefined);
 
   useEffect(() => {
-    try {
-      setEnabled(window.localStorage.getItem(STORAGE_KEY) === '1');
-    } catch {
-      setEnabled(false);
+    if (serverEnabled !== undefined) {
+      serverResolved.current = true;
+      setEnabledState(serverEnabled);
+      return;
     }
-  }, []);
+    if (serverResolved.current) return;
+    serverResolved.current = true;
+    try {
+      setEnabledState(window.localStorage.getItem(STORAGE_KEY) === '1');
+    } catch {
+      setEnabledState(false);
+    }
+  }, [serverEnabled]);
 
   useEffect(() => () => {
     const context = contextRef.current;
@@ -36,7 +45,7 @@ export function useSound() {
 
   const toggle = useCallback(() => {
     const next = !enabled;
-    setEnabled(next);
+    setEnabledState(next);
     try { window.localStorage.setItem(STORAGE_KEY, next ? '1' : '0'); } catch { /* storage blocked */ }
     // Create/resume the context inside the user gesture that enabled sound.
     // Without this, a later frame-driven cue can be blocked by autoplay rules.
@@ -83,5 +92,5 @@ export function useSound() {
     }
   }, [enabled]);
 
-  return { enabled, toggle, play };
+  return { enabled, setEnabled: setEnabledState, toggle, play };
 }

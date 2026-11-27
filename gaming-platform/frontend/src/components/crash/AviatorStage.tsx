@@ -28,13 +28,22 @@ interface AviatorRound {
   status: string;
   state?: Phase;
   seedHash: string;
-  createdAt: string;
-  startedAt: string | null;
-  bettingEndsAt?: string | null;
+  createdAt: string | number;
+  startedAt: string | number | null;
+  bettingEndsAt?: string | number | null;
   crashPoint?: number | null;
   doublingSeconds?: number;
   maxMultiplier?: number;
   houseEdge?: number;
+}
+
+interface FeedRow {
+  type: 'bet' | 'cashout';
+  betId: string | null;
+  user: string;
+  stake: string | null;
+  mult: string | null;
+  payout: string | null;
 }
 
 interface AviatorBet {
@@ -69,6 +78,15 @@ const DEFAULT_PANEL: PanelSettings = {
   stake: '100', autoCashout: '2.00', rounds: '5', stopLoss: '500', stopWin: '1000', tab: 'bet',
 };
 
+/** Protocol v1 sends epoch milliseconds; legacy REST/SSE frames send ISO
+ * strings. Both are accepted so the stage stays usable during a rolling
+ * deploy where different services use different encodings. */
+const timeMs = (value: string | number | null | undefined): number => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : NaN;
+  if (!value) return NaN;
+  return Date.parse(value);
+};
+
 const phaseOf = (round: AviatorRound | null, now: number): Phase => {
   if (!round) return 'WAITING';
   if (round.state && ['WAITING', 'BETTING', 'FLYING', 'CRASHED', 'SETTLING'].includes(round.state)) {
@@ -76,7 +94,7 @@ const phaseOf = (round: AviatorRound | null, now: number): Phase => {
   }
   if (round.status === 'finished' || round.status === 'cancelled') return 'CRASHED';
   if (round.status === 'running') {
-    const started = round.startedAt ? Date.parse(round.startedAt) : NaN;
+    const started = timeMs(round.startedAt);
     const point = Number(round.crashPoint);
     const doubling = Number(round.doublingSeconds) || 3;
     const end = Number.isFinite(started) && Number.isFinite(point) && point > 0
@@ -104,8 +122,8 @@ function useTick(active: boolean) {
   return now;
 }
 
-function FlightCanvas({ round, phase, multiplier, reduced, t }: {
-  round: AviatorRound | null; phase: Phase; multiplier: number; reduced: boolean; t: Translator;
+function FlightCanvas({ round, phase, multiplier, reduced, t, now }: {
+  round: AviatorRound | null; phase: Phase; multiplier: number; reduced: boolean; t: Translator; now: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -153,12 +171,12 @@ function FlightCanvas({ round, phase, multiplier, reduced, t }: {
     });
 
     const elapsed = round?.startedAt
-      ? Math.max(0, Date.now() - Date.parse(round.startedAt))
+      ? Math.max(0, now - timeMs(round.startedAt))
       : 0;
     const doubling = Number(round?.doublingSeconds) || 3;
-    const cap = Number(round?.crashPoint) && phase === 'CRASHED'
-      ? Number(round?.crashPoint)
-      : Number(round?.maxMultiplier) || 100;
+    const revealed = Number(round?.crashPoint);
+    const cap = Number.isFinite(revealed) && revealed > 0
+      ? revealed : Number(round?.maxMultiplier) || 100;
     const span = Math.max(4000, elapsed * 1.05);
     const samples = 80;
     const points: Array<[number, number]> = [];
@@ -207,7 +225,7 @@ function FlightCanvas({ round, phase, multiplier, reduced, t }: {
       context.fill();
       context.restore();
     }
-  }, [round, phase, multiplier, reduced]);
+  }, [round, phase, multiplier, reduced, now]);
 
   return (
     <div className="aviator-canvas-wrap">
@@ -223,7 +241,7 @@ function FlightCanvas({ round, phase, multiplier, reduced, t }: {
       </div>
       {phase === 'BETTING' && round?.bettingEndsAt && (
         <div className="countdown">
-          <span>{Math.max(0, Math.ceil((Date.parse(round.bettingEndsAt) - Date.now()) / 1000))}s</span>
+          <span>{Math.max(0, Math.ceil((timeMs(round.bettingEndsAt) - now) / 1000))}s</span>
           <div className="countdown-bar" />
         </div>
       )}
@@ -232,7 +250,7 @@ function FlightCanvas({ round, phase, multiplier, reduced, t }: {
 }
 
 function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, notify,
-  t, money, onSound, limits }: {
+  t, money, onSound, limits, queued, onQueue, onRegisterPlace }: {
   index: 1 | 2;
   round: AviatorRound | null;
   phase: Phase;
@@ -245,6 +263,9 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
   money: (value: number | string) => string;
   onSound: (cue: SoundCue) => void;
   limits: OperatorLimits;
+  queued: boolean;
+  onQueue: (panel: 1 | 2, next: boolean) => void;
+  onRegisterPlace: (panel: 1 | 2, place: (() => Promise<void>) | null) => void;
 }) {
   const [settings, setSettings] = useState<PanelSettings>(DEFAULT_PANEL);
   const [busy, setBusy] = useState(false);
@@ -297,6 +318,13 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
     }
   };
 
+  const placeRef = useRef(placeBet);
+  placeRef.current = placeBet;
+  useEffect(() => {
+    onRegisterPlace(index, () => placeRef.current());
+    return () => onRegisterPlace(index, null);
+  }, [index, onRegisterPlace]);
+
   const cashOut = useCallback(async () => {
     if (!round || !token || !bet || busy) return;
     setBusy(true);
@@ -330,13 +358,21 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
   };
 
   const live = bet && phase === 'FLYING';
+  // Outside the betting window the button queues the current stake for the
+  // next round; it is a local intent, never a wager or wallet call.
   const label = phase === 'BETTING'
     ? (bet ? t('actionCancel') : t('actionBet'))
-    : live ? t('actionCashout', { amount: money(liveWin) })
-      : phase === 'FLYING' ? t('actionWait') : t('actionBet');
-  const action = phase === 'BETTING' ? (bet ? cancel : placeBet) : live ? cashOut : () => undefined;
-  const disabled = busy || !token || phase === 'CRASHED' || phase === 'SETTLING'
-    || (phase === 'FLYING' && !live) || (!validStake && phase === 'BETTING' && !bet);
+    : queued ? t('actionQueued')
+      : live ? t('actionCashout', { amount: money(liveWin) })
+        : t('actionBetNext');
+  const action = phase === 'BETTING' ? (bet ? cancel : placeBet)
+    : queued ? () => onQueue(index, false)
+      : live ? cashOut : () => onQueue(index, true);
+  // Never disable an existing bet's cancel/cash-out because the stake field
+  // was edited: those actions use the persisted bet, not the current input.
+  const disabled = busy || !token || (queued ? false
+    : phase === 'BETTING' ? (!bet && !validStake)
+      : live ? false : !validStake);
 
   // Keyboard cash-out: `C` while a panel has a live bet. Panel 1 owns the
   // shortcut so two open bets never race on one key press.
@@ -409,19 +445,23 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
       <button type="button" className={`action ${live ? 'cashout' : bet ? 'cancel' : 'bet'}`}
         disabled={disabled} onClick={action}>
         <strong>{label}</strong>
-        <small>{phase === 'BETTING' ? (validStake ? money(stake) : '—') : `${multiplier.toFixed(2)}x`}</small>
+        <small>{queued ? '—'
+          : phase === 'BETTING' ? (validStake ? money(stake) : '—') : `${multiplier.toFixed(2)}x`}</small>
       </button>
     </section>
   );
 }
 
-function FairnessModal({ onClose, notify, t }: {
+function FairnessModal({ onClose, notify, t, roundId, houseEdge }: {
   onClose: () => void; notify: (m: string, k?: 'ok' | 'error') => void; t: Translator;
+  roundId: string; houseEdge: number;
 }) {
   const [seed, setSeed] = useState('');
   const [clientSeed, setClientSeed] = useState('');
   const [hash, setHash] = useState('');
   const [point, setPoint] = useState('');
+  const [round, setRound] = useState(roundId);
+  const [edge, setEdge] = useState(String(houseEdge));
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const verify = async () => {
     try {
@@ -429,6 +469,8 @@ function FairnessModal({ onClose, notify, t }: {
         method: 'POST',
         body: {
           serverSeed: seed, clientSeed,
+          ...(round ? { roundId: round } : {}),
+          houseEdge: Number(edge),
           ...(hash ? { seedHash: hash } : {}),
           ...(point ? { crashPoint: Number(point) } : {}),
         },
@@ -445,6 +487,8 @@ function FairnessModal({ onClose, notify, t }: {
         <p>{t('fairnessDescription')}</p>
         <label>{t('serverSeed')}<input value={seed} onChange={(e) => setSeed(e.target.value)} /></label>
         <label>{t('clientSeed')}<input value={clientSeed} onChange={(e) => setClientSeed(e.target.value)} /></label>
+        <label>{t('roundId')}<input value={round} onChange={(e) => setRound(e.target.value)} /></label>
+        <label>{t('houseEdge')}<input value={edge} inputMode="decimal" onChange={(e) => setEdge(e.target.value)} /></label>
         <label>{t('publishedHash')}<input value={hash} onChange={(e) => setHash(e.target.value)} /></label>
         <label>{t('crashPoint')}<input value={point} onChange={(e) => setPoint(e.target.value)} /></label>
         <button type="button" className="verify" onClick={() => void verify()}>{t('verify')}</button>
@@ -478,17 +522,29 @@ function RulesModal({ rules, onClose, t }: {
 export default function AviatorStage() {
   const {
     token, balance, crash, messages, room, sendMessage,
-    update, forgetLastGame, loadDashboard, gameKind,
+    update, forgetLastGame, loadDashboard, gameKind, operatorLanguage,
   } = useGamingContext();
   const contextRound = (crash.round as AviatorRound | null) ?? null;
   // Protocol v1 frames refine the server-clock view between REST refreshes.
   // Context/SSE remains authoritative when the socket is unavailable.
   const [socketRound, setSocketRound] = useState<AviatorRound | null>(null);
   const [serverMult, setServerMult] = useState<number | null>(null);
+  const [feed, setFeed] = useState<FeedRow[]>([]);
+  const [socketBalance, setSocketBalance] = useState<{ amount: string; currency: string } | null>(null);
+  const [queued, setQueued] = useState<Record<1 | 2, boolean>>({ 1: false, 2: false });
   const socketRef = useRef<WebSocket | null>(null);
+  const clockOffsetRef = useRef(0);
+  const placeRefs = useRef<Record<number, (() => Promise<void>) | null>>({ 1: null, 2: null });
+  const queuedRoundsRef = useRef(new Set<string>());
+  const registerPlace = useCallback((panel: 1 | 2, place: (() => Promise<void>) | null) => {
+    placeRefs.current[panel] = place;
+  }, []);
+  const serverNow = useCallback(() => Date.now() + clockOffsetRef.current, []);
   const round = socketRound ?? contextRound;
-  const phase = phaseOf(round, Date.now());
-  const now = useTick(phase === 'BETTING' || phase === 'FLYING');
+  const clock = useTick(['BETTING', 'FLYING'].includes(phaseOf(round, serverNow())));
+  const timing = clock + clockOffsetRef.current;
+  const phase = phaseOf(round, timing);
+  const now = timing;
   const livePhase = phaseOf(round, now);
 
   const [bets, setBets] = useState<AviatorBet[]>([]);
@@ -498,7 +554,8 @@ export default function AviatorStage() {
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; kind: string }>>([]);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatText, setChatText] = useState('');
-  const { enabled: sound, toggle: toggleSound, play: playSound } = useSound();
+  const [serverSound, setServerSound] = useState<boolean | undefined>(undefined);
+  const { enabled: sound, toggle: toggleSound, play: playSound } = useSound(serverSound);
   const [reduced, setReduced] = useState(false);
   const [animations, setAnimations] = useState(true);
   const [locale, setLocale] = useState<Locale>('en');
@@ -548,15 +605,18 @@ export default function AviatorStage() {
     if (!token) return;
     let active = true;
     void Promise.allSettled([
-      apiRequest<{ settings?: { language?: string; currency?: string; animations?: boolean } }>('/crash/settings', { token }),
+      apiRequest<{ settings?: { language?: string; currency?: string; animations?: boolean; sound?: boolean } }>('/crash/settings', { token }),
       apiRequest<{ rules?: { minBet?: number | string; maxBet?: number | string } }>('/crash/rules', { token }),
     ]).then(([settingsResult, rulesResult]) => {
       if (!active) return;
       if (settingsResult.status === 'fulfilled') {
         const settings = settingsResult.value.settings;
-        if (isLocale(settings?.language)) setLocale(settings.language);
+        // The launch URL's language is an explicit operator choice and wins
+        // over the account's saved preference for this session.
+        if (!operatorLanguage && isLocale(settings?.language)) setLocale(settings.language);
         if (settings?.currency) setCurrency(settings.currency.slice(0, 8));
         if (typeof settings?.animations === 'boolean') setAnimations(settings.animations);
+        if (typeof settings?.sound === 'boolean') setServerSound(settings.sound);
       }
       if (rulesResult.status === 'fulfilled') {
         const minBet = Number(rulesResult.value.rules?.minBet);
@@ -566,7 +626,11 @@ export default function AviatorStage() {
       }
     });
     return () => { active = false; };
-  }, [token]);
+  }, [token, operatorLanguage]);
+
+  useEffect(() => {
+    if (isLocale(operatorLanguage)) setLocale(operatorLanguage);
+  }, [operatorLanguage]);
 
   // Screen-reader announcements for state changes only — never for ticks.
   useEffect(() => {
@@ -603,6 +667,11 @@ export default function AviatorStage() {
   useEffect(() => {
     setSocketRound(null);
     setServerMult(null);
+    setFeed([]);
+    setSocketBalance(null);
+    setQueued({ 1: false, 2: false });
+    clockOffsetRef.current = 0;
+    queuedRoundsRef.current.clear();
   }, [token]);
 
   useEffect(() => {
@@ -611,24 +680,39 @@ export default function AviatorStage() {
     let backoff = 0;
     let timer: number | undefined;
     const frameRound = (frame: Record<string, unknown>, state: Phase): AviatorRound => ({
-      id: String(frame.roundId ?? ''),
+      id: String(frame.roundId ?? frame.id ?? ''),
       state,
       status: state === 'CRASHED' ? 'finished' : state === 'FLYING' ? 'running' : 'betting',
       seedHash: String(frame.seedHash ?? ''),
-      createdAt: new Date().toISOString(),
-      startedAt: typeof frame.flightStart === 'string' ? frame.flightStart : null,
+      createdAt: serverNow(),
+      startedAt: frame.flightStart === undefined || frame.flightStart === null
+        ? null : frame.flightStart as string | number,
+      bettingEndsAt: frame.bettingEndsAt === undefined || frame.bettingEndsAt === null
+        ? null : frame.bettingEndsAt as string | number,
+      doublingSeconds: Number(frame.doublingSeconds) || 3,
+      maxMultiplier: Number(frame.maxMultiplier) || 100,
       crashPoint: frame.crashPoint === undefined ? null : Number(frame.crashPoint),
     });
     const connect = () => {
       const socket = new WebSocket(`${config.socket}?token=${encodeURIComponent(token)}&v=1`);
+      let heartbeat: number | undefined;
       socketRef.current = socket;
-      socket.onopen = () => { backoff = 0; };
+      socket.onopen = () => {
+        backoff = 0;
+        // The server closes sockets silent for 45s; keep the connection warm
+        // and let pong.serverTime correct client clock drift.
+        heartbeat = window.setInterval(() => {
+          if (socket.readyState === WebSocket.OPEN)
+            socket.send(JSON.stringify({ t: 'ping', ts: Date.now() }));
+        }, 15_000);
+      };
       socket.onmessage = (event) => {
         let frame: Record<string, unknown>;
         try { frame = JSON.parse(String(event.data)); } catch { return; }
         if (!frame || typeof frame.t !== 'string') return;
         switch (frame.t) {
           case 'snapshot': {
+            if (typeof frame.serverTime === 'number') clockOffsetRef.current = frame.serverTime - Date.now();
             const incoming = frame.round as Record<string, unknown> | null;
             setSocketRound(incoming ? frameRound(incoming, (incoming.state as Phase) ?? 'BETTING') : null);
             setServerMult(null);
@@ -645,6 +729,7 @@ export default function AviatorStage() {
             setServerMult(1);
             break;
           case 'tick': {
+            if (typeof frame.serverTime === 'number') clockOffsetRef.current = frame.serverTime - Date.now();
             const value = Number(frame.mult);
             if (Number.isFinite(value)) setServerMult(value);
             break;
@@ -656,6 +741,30 @@ export default function AviatorStage() {
             setServerMult(null);
             playSound('crash');
             void refresh();
+            break;
+          case 'round_settling':
+            setSocketRound((previous) => previous ? { ...previous, state: 'SETTLING' } : previous);
+            break;
+          case 'round_voided':
+            setSocketRound((previous) => previous
+              ? { ...previous, state: 'SETTLING', crashPoint: null } : previous);
+            setServerMult(null);
+            break;
+          case 'feed': {
+            const rows = (Array.isArray(frame.list) ? frame.list : []).filter((row): row is FeedRow => {
+              const item = row as FeedRow | null;
+              return item?.type === 'bet' || item?.type === 'cashout';
+            });
+            setFeed((previous) => [...rows, ...previous].slice(0, 12));
+            break;
+          }
+          case 'balance': {
+            const amount = frame.amount === undefined ? null : String(frame.amount);
+            if (amount) setSocketBalance({ amount, currency: String(frame.currency ?? currency) });
+            break;
+          }
+          case 'pong':
+            if (typeof frame.serverTime === 'number') clockOffsetRef.current = frame.serverTime - Date.now();
             break;
           case 'bet_ok':
           case 'cashout_ok':
@@ -675,6 +784,7 @@ export default function AviatorStage() {
       };
       socket.onerror = () => socket.close();
       socket.onclose = () => {
+        if (heartbeat) window.clearInterval(heartbeat);
         if (closed) return;
         timer = window.setTimeout(connect, Math.min(500 * 2 ** backoff++, 8000));
       };
@@ -686,7 +796,21 @@ export default function AviatorStage() {
       socketRef.current?.close();
       socketRef.current = null;
     };
-  }, [token, refresh, notify, playSound, t]);
+  }, [token, refresh, notify, playSound, t, serverNow, currency]);
+
+  // A queued stake is a local intent only. Fire it exactly once per panel and
+  // round when BETTING opens; a failed HTTP call is reported by placeBet.
+  useEffect(() => {
+    if (phase !== 'BETTING' || !round?.id) return;
+    ([1, 2] as const).forEach((panel) => {
+      if (!queued[panel]) return;
+      const key = `${round.id}:${panel}`;
+      if (queuedRoundsRef.current.has(key)) return;
+      queuedRoundsRef.current.add(key);
+      setQueued((previous) => ({ ...previous, [panel]: false }));
+      void placeRefs.current[panel]?.();
+    });
+  }, [phase, round?.id, queued]);
 
   useEffect(() => {
     if (!token || modal !== 'rules') return;
@@ -766,10 +890,11 @@ export default function AviatorStage() {
       && ['pending', 'active', 'cashing_out'].includes(bet.status)) ?? null,
   [bets, round?.id]);
 
-  const elapsed = round?.startedAt ? Math.max(0, now - Date.parse(round.startedAt)) : 0;
+  const elapsed = round?.startedAt ? Math.max(0, now - timeMs(round.startedAt)) : 0;
   const doubling = Number(round?.doublingSeconds) || 3;
-  const cap = Number(round?.crashPoint) && livePhase === 'CRASHED'
-    ? Number(round?.crashPoint) : Number(round?.maxMultiplier) || 100;
+  const revealedPoint = Number(round?.crashPoint);
+  const cap = Number.isFinite(revealedPoint) && revealedPoint > 0
+    ? revealedPoint : Number(round?.maxMultiplier) || 100;
   const interpolated = Number.isFinite(elapsed) ? multiplierFor(elapsed, doubling, cap) : 1;
   const multiplier = serverMult !== null && livePhase === 'FLYING'
     ? Math.min(serverMult, cap) : interpolated;
@@ -800,7 +925,7 @@ export default function AviatorStage() {
         </div>
         <div className="aviator-balance">
           <small>{t('balance')}</small>
-          <strong>{money(balance || 0)}</strong>
+          <strong>{money(socketBalance?.amount ?? balance ?? 0)}</strong>
         </div>
         <nav>
           <label className="game-switch">
@@ -845,13 +970,15 @@ export default function AviatorStage() {
       </div>
 
       <FlightCanvas round={round} phase={livePhase} multiplier={multiplier}
-        reduced={reduced || !animations} t={t} />
+        reduced={reduced || !animations} t={t} now={now} />
 
       <div className="aviator-panels">
         {([1, 2] as const).map((index) => (
           <BetPanel key={index} index={index} round={round} phase={livePhase} multiplier={multiplier}
             bet={betFor(index)} token={token} onRefresh={() => void refresh()} notify={notify}
-            t={t} money={money} onSound={playSound} limits={limits} />
+            t={t} money={money} onSound={playSound} limits={limits}
+            queued={queued[index]} onQueue={(panel, next) => setQueued((previous) => ({ ...previous, [panel]: next }))}
+            onRegisterPlace={registerPlace} />
         ))}
       </div>
 
@@ -870,6 +997,19 @@ export default function AviatorStage() {
             ))}
             {bets.length === 0 && <em>{t('noBets')}</em>}
           </div>
+          {feed.length > 0 && <div className="activity-list" aria-label={t('liveFeed')}>
+            {feed.slice(0, 5).map((row, index) => (
+              <div key={`${row.betId ?? 'feed'}-${index}`}>
+                <span className="masked">{row.user}</span>
+                <span>{row.stake ? money(row.stake) : '—'}</span>
+                <span className={row.type === 'cashout' ? 'win' : ''}>
+                  {row.type === 'cashout'
+                    ? `${row.mult ?? '1.00'}x → ${row.payout ? money(row.payout) : '—'}`
+                    : t('actionBet')}
+                </span>
+              </div>
+            ))}
+          </div>}
           <div className="auto-controls">
             <button type="button" onClick={() => void stopAuto(1)}>{t('stopAuto', { panel: 1 })}</button>
             <button type="button" onClick={() => void stopAuto(2)}>{t('stopAuto', { panel: 2 })}</button>
@@ -925,7 +1065,8 @@ export default function AviatorStage() {
         {toasts.map((toast) => <div key={toast.id} className={toast.kind}>{toast.message}</div>)}
       </div>
 
-      {modal === 'fairness' && <FairnessModal onClose={() => setModal(null)} notify={notify} t={t} />}
+      {modal === 'fairness' && <FairnessModal onClose={() => setModal(null)} notify={notify} t={t}
+        roundId={round?.id ?? ''} houseEdge={Number(rules?.houseEdge ?? round?.houseEdge ?? 0.02)} />}
       {modal === 'rules' && <RulesModal rules={rules} onClose={() => setModal(null)} t={t} />}
     </div>
   );

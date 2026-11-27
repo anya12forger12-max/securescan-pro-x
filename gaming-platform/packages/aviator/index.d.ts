@@ -18,6 +18,7 @@ export interface BetValidation {
 
 export const PROTOCOL_VERSION: number;
 export const FAIRNESS_ALGORITHM: string;
+export const CLIENT_SEED_ALGORITHM: string;
 export const PHASES: readonly Phase[];
 export const SERVER_MESSAGES: readonly string[];
 export const CLIENT_MESSAGES: readonly string[];
@@ -27,6 +28,19 @@ export function canTransition(from: Phase, to: Phase): boolean;
 export function assertTransition(from: Phase, to: Phase): true;
 export function commitment(serverSeed: string): string;
 export function crashPoint(serverSeed: string, clientSeed?: string, edge?: number): number;
+export function hmacUnit(serverSeed: string, roundId: string): number;
+export function pointFromUnit(unit: number, houseEdge?: number, maxMultiplier?: number): number;
+export function crashPointFromRound(serverSeed: string, roundId: string, houseEdge?: number, maxMultiplier?: number): number;
+export function verifyRoundFairness(input: {
+  serverSeed: string;
+  roundId: string;
+  seedHash?: string | null;
+  crashPoint?: number | string | null;
+  houseEdge?: number;
+  maxMultiplier?: number;
+}): FairnessResult;
+export function epochMs(value: unknown): number | null;
+export function sanitizeSnapshot(frame: Record<string, unknown>): Record<string, unknown>;
 export function verifyFairness(input: {
   serverSeed: string;
   clientSeed?: string;

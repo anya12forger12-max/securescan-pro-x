@@ -112,26 +112,36 @@ const SENSITIVE_KEYS = new Set([
   "username",
 ]);
 
+/** Crash feed rows are public by design, but only in their masked, rounded
+ * form. Allowing these exact keys on these exact topics keeps the Aviator
+ * history strip useful without reopening the generic payout/identity leak. */
+const FEED_TOPICS = new Set(["crash.bet", "crash.cashout"]);
+const FEED_PUBLIC_KEYS = new Set(["betId", "stake", "mult", "payout", "user"]);
+
 /** Recursive, idempotent redaction for public-broadcast payloads. Dates are
  * returned untouched so JSON.stringify can serialize them normally. */
-function sanitizeEventData(value) {
+function sanitizeEventData(value, topic, depth = 0) {
   if (value instanceof Date) return value;
-  if (Array.isArray(value)) return value.map(sanitizeEventData);
+  if (Array.isArray(value)) return value.map((item) => sanitizeEventData(item, topic, depth + 1));
   if (value === null || typeof value !== "object") return value;
+  const feedTopic = FEED_TOPICS.has(topic);
   const clean = {};
   for (const [key, item] of Object.entries(value)) {
-    if (SENSITIVE_KEYS.has(key) || key === "__proto__") continue;
-    clean[key] = sanitizeEventData(item);
+    if (key === "__proto__") continue;
+    // Feed whitelists are top-level only. A nested `user` object or `payout`
+    // must not slip through just because a parent happens to be a feed row.
+    if (SENSITIVE_KEYS.has(key) && !(feedTopic && depth === 0 && FEED_PUBLIC_KEYS.has(key))) continue;
+    clean[key] = sanitizeEventData(item, topic, depth + 1);
   }
   return clean;
 }
 
 /** Applied on write and on every read so older rows cannot leak either. */
-const sanitizePayload = (payload) => sanitizeEventData(payload ?? {});
+const sanitizePayload = (payload, topic) => sanitizeEventData(payload ?? {}, topic);
 
 function publicEvent(event) {
   if (event === null || typeof event !== "object" || Array.isArray(event)) return event;
-  return { ...event, payload: sanitizePayload(event.payload) };
+  return { ...event, payload: sanitizePayload(event.payload, event.topic) };
 }
 
 /** SSE `event:` is a single line: a topic containing CR/LF would start forged
@@ -369,7 +379,7 @@ app.post("/internal/events", async (req, reply) => {
   if (!parsed.success)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
 
-  const payload = sanitizePayload(parsed.data.payload ?? {});
+  const payload = sanitizePayload(parsed.data.payload ?? {}, parsed.data.topic);
   const client = await pool.connect();
   try {
     const result = await client.query(
