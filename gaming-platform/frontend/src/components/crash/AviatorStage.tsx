@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { apiRequest, errorMessage } from '../../api';
+import { ApiError, apiRequest, errorMessage } from '../../api';
 import { config } from '../../config';
 import { useGamingContext } from '../../context';
 import { useSound, type SoundCue } from '../../hooks/useSound';
@@ -12,6 +12,15 @@ import './aviator.scss';
 type Phase = 'WAITING' | 'BETTING' | 'FLYING' | 'CRASHED' | 'SETTLING';
 type PanelTab = 'bet' | 'auto';
 type Translator = (key: string, vars?: Record<string, string | number>) => string;
+type SocketStatus = 'connecting' | 'live' | 'reconnecting';
+
+/** Live chat frames arrive on the game socket; REST only supplies history. */
+interface SocketChatMessage {
+  id: string;
+  user: string;
+  text: string;
+  time: number;
+}
 
 /** Messages exchanged with an operator shell that embeds the game in an iframe.
  * Every envelope carries `gp: 1` and is accepted only from an allowed parent. */
@@ -20,8 +29,45 @@ interface BridgeEnvelope {
   type: string;
   payload?: Record<string, unknown>;
 }
-interface OperatorLimits { minBet: number; maxBet: number }
+interface OperatorLimits { minBet: number; maxBet: number; maxWin?: number }
 interface OperatorTheme { primaryColor?: string; logo?: string; language?: Locale }
+
+/** Keep keyboard focus inside an open dialog and restore it to the trigger. */
+function useModalFocus(onClose: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusable = () => Array.from(ref.current?.querySelectorAll<HTMLElement>(
+      'button, input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    ) ?? []).filter((element) => !element.hasAttribute('disabled'));
+    focusable()[0]?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      previous?.focus();
+    };
+  }, [onClose]);
+  return ref;
+}
 
 interface AviatorRound {
   id: string;
@@ -116,16 +162,31 @@ function useTick(active: boolean) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 80);
-    return () => window.clearInterval(timer);
+    // The curve is animated with requestAnimationFrame, throttled to ~30fps
+    // so React never redraws the whole stage on every display refresh.
+    let frame = 0;
+    let last = 0;
+    const step = (timestamp: number) => {
+      if (timestamp - last >= 32) {
+        last = timestamp;
+        setNow(Date.now());
+      }
+      frame = window.requestAnimationFrame(step);
+    };
+    frame = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(frame);
   }, [active]);
   return now;
 }
 
-function FlightCanvas({ round, phase, multiplier, reduced, t, now }: {
-  round: AviatorRound | null; phase: Phase; multiplier: number; reduced: boolean; t: Translator; now: number;
+function FlightCanvas({ round, phase, multiplier, reduced, status, t, now }: {
+  round: AviatorRound | null; phase: Phase; multiplier: number; reduced: boolean;
+  status: SocketStatus; t: Translator; now: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const bettingRemaining = round?.bettingEndsAt ? Math.max(0, timeMs(round.bettingEndsAt) - now) : 0;
+  const bettingTotal = round?.bettingEndsAt
+    ? Math.max(1, timeMs(round.bettingEndsAt) - timeMs(round.createdAt)) : 1;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -157,17 +218,25 @@ function FlightCanvas({ round, phase, multiplier, reduced, t, now }: {
       }
     }
 
+    const doublingForGrid = Number(round?.doublingSeconds) || 3;
+    const revealedForGrid = Number(round?.crashPoint);
+    const capForGrid = Number.isFinite(revealedForGrid) && revealedForGrid > 0
+      ? revealedForGrid : Number(round?.maxMultiplier) || 100;
+    const maxLog = Math.max(1, Math.log2(capForGrid));
     context.strokeStyle = 'rgba(139,148,167,0.12)';
     context.fillStyle = 'rgba(139,148,167,0.65)';
     context.font = '10px ui-monospace, monospace';
-    [1, 2, 5, 10, 25].forEach((level) => {
-      const y = height - 12 - Math.log2(level) * (height - 30) / 5;
+    const levels = [1, 2, 5, 10, 25, 50, 100]
+      .filter((level) => level <= capForGrid);
+    if (!levels.some((level) => Math.abs(level - capForGrid) < 0.01)) levels.push(capForGrid);
+    levels.forEach((level) => {
+      const y = height - 12 - Math.log2(level) * (height - 30) / maxLog;
       if (y < 8) return;
       context.beginPath();
       context.moveTo(0, y);
       context.lineTo(width, y);
       context.stroke();
-      context.fillText(`${level}x`, 4, Math.max(10, y - 3));
+      context.fillText(`${level.toFixed(level < 10 ? 0 : 1)}x`, 4, Math.max(10, y - 3));
     });
 
     const elapsed = round?.startedAt
@@ -185,8 +254,21 @@ function FlightCanvas({ round, phase, multiplier, reduced, t, now }: {
       const value = multiplierFor(t, doubling, cap);
       points.push([
         (i / samples) * width,
-        height - 12 - Math.min(5, Math.log2(value)) * (height - 30) / 5,
+        height - 12 - Math.min(maxLog, Math.log2(value)) * (height - 30) / maxLog,
       ]);
+    }
+
+    // Time axis: each tick is one doubling period, so the grid remains
+    // meaningful when a round lasts longer than the initial viewport.
+    context.fillStyle = 'rgba(139,148,167,0.45)';
+    for (let seconds = doublingForGrid; seconds * 1000 <= span; seconds += doublingForGrid) {
+      const x = (seconds * 1000 / span) * width;
+      if (x <= 4 || x >= width - 4) continue;
+      context.beginPath();
+      context.moveTo(x, height - 12);
+      context.lineTo(x, height - 6);
+      context.stroke();
+      context.fillText(`${seconds.toFixed(0)}s`, x + 3, height - 16);
     }
 
     const fill = context.createLinearGradient(0, 0, 0, height);
@@ -202,9 +284,31 @@ function FlightCanvas({ round, phase, multiplier, reduced, t, now }: {
 
     context.beginPath();
     points.forEach(([x, y], index) => (index ? context.lineTo(x, y) : context.moveTo(x, y)));
-    context.strokeStyle = phase === 'CRASHED' ? '#e0334a' : multiplier >= 10 ? '#ff5fb0' : '#4aa3ff';
+    context.strokeStyle = phase === 'CRASHED' ? '#e0334a'
+      : multiplier >= 10 ? '#ff5fb0' : multiplier >= 2 ? '#b58cff' : '#4aa3ff';
     context.lineWidth = 2.5;
     context.stroke();
+
+    // Waiting/betting visuals: a pulsing ring on the pad and a plane waiting
+    // on the runway make the phase readable before take-off.
+    if (phase === 'WAITING' || phase === 'BETTING') {
+      context.beginPath();
+      context.arc(width / 2, height / 2, 18, 0, Math.PI * 2);
+      context.strokeStyle = 'rgba(74,163,255,0.5)';
+      context.lineWidth = 2;
+      context.stroke();
+      context.save();
+      context.translate(30, height - 34);
+      context.fillStyle = '#e8ecf3';
+      context.beginPath();
+      context.moveTo(18, 0);
+      context.lineTo(-12, -7);
+      context.lineTo(-8, 0);
+      context.lineTo(-12, 7);
+      context.closePath();
+      context.fill();
+      context.restore();
+    }
 
     const nose = points[Math.min(points.length - 1, Math.round((elapsed / span) * samples))];
     if (phase === 'FLYING' || phase === 'CRASHED') {
@@ -239,10 +343,15 @@ function FlightCanvas({ round, phase, multiplier, reduced, t, now }: {
                 : phase === 'SETTLING' ? t('phaseSettling') : t('phaseWaiting')}
         </small>
       </div>
+      {status !== 'live' && <div className="canvas-status" role="status">
+        {t(status === 'connecting' ? 'socketConnecting' : 'socketReconnecting')}
+      </div>}
       {phase === 'BETTING' && round?.bettingEndsAt && (
-        <div className="countdown">
-          <span>{Math.max(0, Math.ceil((timeMs(round.bettingEndsAt) - now) / 1000))}s</span>
-          <div className="countdown-bar" />
+        <div className={`countdown ${bettingRemaining < 3000 ? 'urgent' : ''}`}>
+          <span>{Math.ceil(bettingRemaining / 1000)}s</span>
+          <div className="countdown-bar">
+            <i style={{ width: `${Math.max(0, Math.min(100, bettingRemaining / bettingTotal * 100))}%` }} />
+          </div>
         </div>
       )}
     </div>
@@ -250,7 +359,7 @@ function FlightCanvas({ round, phase, multiplier, reduced, t, now }: {
 }
 
 function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, notify,
-  t, money, onSound, limits, queued, onQueue, onRegisterPlace }: {
+  t, money, onSound, limits, queued, onQueue, onRegisterPlace, connected, availableBalance }: {
   index: 1 | 2;
   round: AviatorRound | null;
   phase: Phase;
@@ -266,12 +375,19 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
   queued: boolean;
   onQueue: (panel: 1 | 2, next: boolean) => void;
   onRegisterPlace: (panel: 1 | 2, place: (() => Promise<void>) | null) => void;
+  connected: boolean;
+  availableBalance: number;
 }) {
   const [settings, setSettings] = useState<PanelSettings>(DEFAULT_PANEL);
   const [busy, setBusy] = useState(false);
-  const patch = (next: Partial<PanelSettings>) => setSettings((prev) => ({ ...prev, ...next }));
+  const [error, setError] = useState('');
+  const patch = (next: Partial<PanelSettings>) => {
+    setError('');
+    setSettings((prev) => ({ ...prev, ...next }));
+  };
   const stake = Number(settings.stake);
-  const validStake = Number.isFinite(stake) && stake >= limits.minBet && stake <= limits.maxBet;
+  const validStake = Number.isFinite(stake) && stake >= limits.minBet
+    && stake <= limits.maxBet && stake <= availableBalance;
   const liveWin = bet && phase === 'FLYING'
     ? Number(bet.amount) * multiplier
     : bet?.payout ? Number(bet.payout) : 0;
@@ -310,9 +426,11 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
         });
         notify(t('notifyAutoStarted', { panel: index }));
       }
+      setError('');
       onRefresh();
-    } catch (error) {
-      notify(errorMessage(error), 'error');
+    } catch (err) {
+      setError(errorMessage(err));
+      notify(errorMessage(err), 'error');
     } finally {
       setBusy(false);
     }
@@ -331,13 +449,18 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
     try {
       const result = await apiRequest<{ payout?: number; multiplier?: number }>(
         `/crash/rounds/${round.id}/cashout`,
-        { method: 'POST', token, body: { panel: index, betId: bet.id } },
+        {
+          method: 'POST', token,
+          body: { panel: index, betId: bet.id, requestId: `cashout-${bet.id}` },
+        },
       );
       onSound('cashout');
       notify(t('notifyCashedOut', { panel: index, amount: money(result?.payout ?? liveWin) }));
+      setError('');
       onRefresh();
-    } catch (error) {
-      notify(errorMessage(error), 'error');
+    } catch (err) {
+      setError(errorMessage(err));
+      notify(errorMessage(err), 'error');
     } finally {
       setBusy(false);
     }
@@ -347,11 +470,15 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
     if (!round || !token || !bet || busy) return;
     setBusy(true);
     try {
-      await apiRequest(`/crash/rounds/${round.id}/bets/${bet.id}/cancel`, { method: 'POST', token });
+      await apiRequest(`/crash/rounds/${round.id}/bets/${bet.id}/cancel`, {
+        method: 'POST', token, body: { requestId: `cancel-${bet.id}` },
+      });
       notify(t('notifyCancelled', { panel: index }));
+      setError('');
       onRefresh();
-    } catch (error) {
-      notify(errorMessage(error), 'error');
+    } catch (err) {
+      setError(errorMessage(err));
+      notify(errorMessage(err), 'error');
     } finally {
       setBusy(false);
     }
@@ -364,15 +491,16 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
     ? (bet ? t('actionCancel') : t('actionBet'))
     : queued ? t('actionQueued')
       : live ? t('actionCashout', { amount: money(liveWin) })
-        : t('actionBetNext');
+        : phase === 'CRASHED' || phase === 'SETTLING' ? t('actionWait') : t('actionBetNext');
   const action = phase === 'BETTING' ? (bet ? cancel : placeBet)
     : queued ? () => onQueue(index, false)
       : live ? cashOut : () => onQueue(index, true);
-  // Never disable an existing bet's cancel/cash-out because the stake field
-  // was edited: those actions use the persisted bet, not the current input.
-  const disabled = busy || !token || (queued ? false
-    : phase === 'BETTING' ? (!bet && !validStake)
-      : live ? false : !validStake);
+  // Cancel/cash-out use the persisted bet, so editing the stake must not
+  // disable them. Crashed/settling rounds cannot accept a queued intent.
+  const disabled = busy || !token || !connected || (queued ? false
+    : phase === 'BETTING' ? !bet && !validStake
+      : live ? false
+        : phase === 'CRASHED' || phase === 'SETTLING' || !validStake);
 
   // Keyboard cash-out: `C` while a panel has a live bet. Panel 1 owns the
   // shortcut so two open bets never race on one key press.
@@ -442,20 +570,22 @@ function BetPanel({ index, round, phase, multiplier, bet, token, onRefresh, noti
         </label>
       )}
 
-      <button type="button" className={`action ${live ? 'cashout' : bet ? 'cancel' : 'bet'}`}
+      <button type="button" className={`action ${live ? 'cashout' : bet ? 'cancel' : queued ? 'queued' : 'bet'}`}
         disabled={disabled} onClick={action}>
         <strong>{label}</strong>
         <small>{queued ? '—'
           : phase === 'BETTING' ? (validStake ? money(stake) : '—') : `${multiplier.toFixed(2)}x`}</small>
       </button>
+      {error && <p className="panel-error" role="alert">{error}</p>}
     </section>
   );
 }
 
-function FairnessModal({ onClose, notify, t, roundId, houseEdge }: {
+function FairnessModal({ onClose, notify, t, token, roundId, houseEdge }: {
   onClose: () => void; notify: (m: string, k?: 'ok' | 'error') => void; t: Translator;
-  roundId: string; houseEdge: number;
+  token: string | null; roundId: string; houseEdge: number;
 }) {
+  const modalRef = useModalFocus(onClose);
   const [seed, setSeed] = useState('');
   const [clientSeed, setClientSeed] = useState('');
   const [hash, setHash] = useState('');
@@ -463,6 +593,26 @@ function FairnessModal({ onClose, notify, t, roundId, houseEdge }: {
   const [round, setRound] = useState(roundId);
   const [edge, setEdge] = useState(String(houseEdge));
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  // A history chip carries a round ID: load that round's published hash and,
+  // once revealed, its proof so the player can self-verify without copying
+  // values by hand. Live rounds only have the pre-committed hash.
+  useEffect(() => {
+    if (!token || !roundId) return;
+    let active = true;
+    void apiRequest<{ round?: Record<string, unknown> }>(
+      `/crash/rounds/${encodeURIComponent(roundId)}`, { token },
+    ).then((response) => {
+      if (!active || !response?.round) return;
+      const row = response.round;
+      const proof = row.proof as Record<string, unknown> | undefined;
+      setRound(String(row.id ?? roundId));
+      if (proof?.serverSeed) setSeed(String(proof.serverSeed));
+      if (row.seedHash ?? proof?.seedHash) setHash(String(row.seedHash ?? proof?.seedHash));
+      if (row.crashPoint ?? proof?.crashPoint) setPoint(String(row.crashPoint ?? proof?.crashPoint));
+      if (row.houseEdge) setEdge(String(row.houseEdge));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [token, roundId]);
   const verify = async () => {
     try {
       const response = await apiRequest<{ verification: Record<string, unknown> }>('/crash/fairness/verify', {
@@ -482,7 +632,7 @@ function FairnessModal({ onClose, notify, t, roundId, houseEdge }: {
   };
   return (
     <div className="aviator-modal-backdrop" role="presentation" onClick={onClose}>
-      <div className="aviator-modal" role="dialog" aria-modal="true" aria-label={t('fairnessTitle')} onClick={(e) => e.stopPropagation()}>
+      <div ref={modalRef} className="aviator-modal" role="dialog" aria-modal="true" aria-label={t('fairnessTitle')} onClick={(e) => e.stopPropagation()}>
         <header><h2>{t('fairnessTitle')}</h2><button type="button" aria-label={t('close')} onClick={onClose}>×</button></header>
         <p>{t('fairnessDescription')}</p>
         <label>{t('serverSeed')}<input value={seed} onChange={(e) => setSeed(e.target.value)} /></label>
@@ -501,9 +651,10 @@ function FairnessModal({ onClose, notify, t, roundId, houseEdge }: {
 function RulesModal({ rules, onClose, t }: {
   rules: Record<string, unknown> | null; onClose: () => void; t: Translator;
 }) {
+  const modalRef = useModalFocus(onClose);
   return (
     <div className="aviator-modal-backdrop" role="presentation" onClick={onClose}>
-      <div className="aviator-modal" role="dialog" aria-modal="true" aria-label={t('rules')} onClick={(e) => e.stopPropagation()}>
+      <div ref={modalRef} className="aviator-modal" role="dialog" aria-modal="true" aria-label={t('rules')} onClick={(e) => e.stopPropagation()}>
         <header><h2>{t('rulesTitle')}</h2><button type="button" aria-label={t('close')} onClick={onClose}>×</button></header>
         {rules ? (
           <ul>
@@ -521,7 +672,7 @@ function RulesModal({ rules, onClose, t }: {
 
 export default function AviatorStage() {
   const {
-    token, balance, crash, messages, room, sendMessage,
+    token, balance, crash, messages, room,
     update, forgetLastGame, loadDashboard, gameKind, operatorLanguage,
   } = useGamingContext();
   const contextRound = (crash.round as AviatorRound | null) ?? null;
@@ -530,6 +681,9 @@ export default function AviatorStage() {
   const [socketRound, setSocketRound] = useState<AviatorRound | null>(null);
   const [serverMult, setServerMult] = useState<number | null>(null);
   const [feed, setFeed] = useState<FeedRow[]>([]);
+  const [socketStatus, setSocketStatus] = useState<SocketStatus>('connecting');
+  const [socketMessages, setSocketMessages] = useState<SocketChatMessage[]>([]);
+  const [socketHistory, setSocketHistory] = useState<string[]>([]);
   const [socketBalance, setSocketBalance] = useState<{ amount: string; currency: string } | null>(null);
   const [queued, setQueued] = useState<Record<1 | 2, boolean>>({ 1: false, 2: false });
   const socketRef = useRef<WebSocket | null>(null);
@@ -549,11 +703,17 @@ export default function AviatorStage() {
 
   const [bets, setBets] = useState<AviatorBet[]>([]);
   const [top, setTop] = useState<Record<string, TopEntry[]>>({ topWins: [], topMultipliers: [] });
+  const [activityTab, setActivityTab] = useState<'mine' | 'all' | 'top'>('all');
+  const [period, setPeriod] = useState<'day' | 'month' | 'year'>('day');
   const [rules, setRules] = useState<Record<string, unknown> | null>(null);
   const [modal, setModal] = useState<'fairness' | 'rules' | null>(null);
+  const [modalRoundId, setModalRoundId] = useState('');
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; kind: string }>>([]);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatText, setChatText] = useState('');
+  const [chatError, setChatError] = useState('');
+  const chatLogRef = useRef<HTMLDivElement>(null);
+  const chatSentAtRef = useRef(0);
   const [serverSound, setServerSound] = useState<boolean | undefined>(undefined);
   const { enabled: sound, toggle: toggleSound, play: playSound } = useSound(serverSound);
   const [reduced, setReduced] = useState(false);
@@ -567,6 +727,7 @@ export default function AviatorStage() {
 
   const t = useCallback<Translator>((key, vars) => translate(locale, key, vars), [locale]);
   const money = useCallback((value: number | string) => formatAmount(value, locale, currency), [locale, currency]);
+  const availableBalance = Number(socketBalance?.amount ?? balance ?? 0);
 
   // Player-facing preferences are saved server-side when signed in so they
   // follow the account; local storage keeps sound usable before sign-in.
@@ -647,15 +808,46 @@ export default function AviatorStage() {
     window.setTimeout(() => setToasts((prev) => prev.filter((toast) => toast.id !== id)), 4000);
   }, []);
 
+  const closeModal = useCallback(() => setModal(null), []);
+  const openFairness = useCallback((roundId = '') => {
+    setModalRoundId(roundId);
+    setModal('fairness');
+  }, []);
+
+  // Chat is public and fanned out to every player, so the gateway throttles it.
+  // Mirror that limit locally and surface the server's code inline instead of
+  // silently swallowing a rejected message.
+  const submitChat = useCallback(async () => {
+    const text = chatText.trim().slice(0, 200);
+    if (!text) return;
+    const sentAt = Date.now();
+    if (sentAt - chatSentAtRef.current < 1000) {
+      setChatError(t('chatTooFast'));
+      return;
+    }
+    chatSentAtRef.current = sentAt;
+    setChatError('');
+    try {
+      await apiRequest(`/chat/rooms/${encodeURIComponent(room)}/messages`, {
+        method: 'POST', token, body: { content: text },
+      });
+      setChatText('');
+    } catch (err) {
+      chatSentAtRef.current = 0;
+      setChatError(err instanceof ApiError && err.code === 'RATE_LIMITED'
+        ? t('chatTooFast') : errorMessage(err));
+    }
+  }, [chatText, t, room, token]);
+
   const refresh = useCallback(async () => {
     if (!token) return;
     const [myBets, topStats] = await Promise.allSettled([
       apiRequest<{ items: AviatorBet[] }>('/crash/bets?limit=20', { token }),
-      apiRequest<Record<string, TopEntry[]>>('/crash/stats/top?period=day', { token }),
+      apiRequest<Record<string, TopEntry[]>>(`/crash/stats/top?period=${period}`, { token }),
     ]);
     if (myBets.status === 'fulfilled') setBets(myBets.value.items ?? []);
     if (topStats.status === 'fulfilled') setTop(topStats.value);
-  }, [token]);
+  }, [token, period]);
 
   useEffect(() => { void refresh(); }, [refresh, round?.id, round?.status]);
   useEffect(() => {
@@ -668,6 +860,9 @@ export default function AviatorStage() {
     setSocketRound(null);
     setServerMult(null);
     setFeed([]);
+    setSocketStatus('connecting');
+    setSocketMessages([]);
+    setSocketHistory([]);
     setSocketBalance(null);
     setQueued({ 1: false, 2: false });
     clockOffsetRef.current = 0;
@@ -699,6 +894,10 @@ export default function AviatorStage() {
       socketRef.current = socket;
       socket.onopen = () => {
         backoff = 0;
+        setSocketStatus('live');
+        // REST is still authoritative for top wins and full bet history; the
+        // snapshot restores the round, balance, open bets and limits.
+        void refresh();
         // The server closes sockets silent for 45s; keep the connection warm
         // and let pong.serverTime correct client clock drift.
         heartbeat = window.setInterval(() => {
@@ -716,6 +915,44 @@ export default function AviatorStage() {
             const incoming = frame.round as Record<string, unknown> | null;
             setSocketRound(incoming ? frameRound(incoming, (incoming.state as Phase) ?? 'BETTING') : null);
             setServerMult(null);
+            // A reconnect snapshot is authoritative. Restore every field the
+            // player needs instead of waiting for the next REST poll.
+            const frameBalance = frame.balance as { amount?: unknown; currency?: unknown } | null | undefined;
+            if (frameBalance?.amount != null) {
+              setSocketBalance({
+                amount: String(frameBalance.amount),
+                currency: String(frameBalance.currency ?? currency),
+              });
+            }
+            if (Array.isArray(frame.history)) setSocketHistory(frame.history.map(String));
+            const frameLimits = frame.limits as Record<string, unknown> | undefined;
+            if (frameLimits) {
+              const minBet = Number(frameLimits.minBet);
+              const maxBet = Number(frameLimits.maxBet);
+              const maxWin = Number(frameLimits.maxWin);
+              setLimits((previous) => ({
+                minBet: Number.isFinite(minBet) && minBet > 0 ? minBet : previous.minBet,
+                maxBet: Number.isFinite(maxBet) && maxBet > 0 ? maxBet : previous.maxBet,
+                maxWin: Number.isFinite(maxWin) && maxWin > 0 ? maxWin : previous.maxWin,
+              }));
+            }
+            if (Array.isArray(frame.myBets)) {
+              const restored: AviatorBet[] = frame.myBets.map((row) => {
+                const item = row as Record<string, unknown>;
+                return {
+                  id: String(item.betId ?? ''),
+                  round_id: String(incoming?.id ?? ''),
+                  panel: Number(item.panel) === 2 ? 2 : 1,
+                  amount: String(item.amount ?? '0'),
+                  auto_cashout: item.autoCashout == null ? null : String(item.autoCashout),
+                  cashout_at: null,
+                  payout: null,
+                  status: String(item.status ?? 'active'),
+                  created_at: new Date(serverNow()).toISOString(),
+                };
+              }).filter((item) => item.id);
+              setBets(restored);
+            }
             break;
           }
           case 'round_start':
@@ -763,6 +1000,18 @@ export default function AviatorStage() {
             if (amount) setSocketBalance({ amount, currency: String(frame.currency ?? currency) });
             break;
           }
+          case 'chat_msg': {
+            const id = String(frame.id ?? `${frame.time}-${frame.user}`);
+            const text = String(frame.text ?? '');
+            if (!text) break;
+            setSocketMessages((previous) => previous.some((item) => item.id === id)
+              ? previous
+              : [...previous.slice(-49), {
+                  id, user: String(frame.user ?? 'player'), text,
+                  time: Number(frame.time) || Date.now(),
+                }]);
+            break;
+          }
           case 'pong':
             if (typeof frame.serverTime === 'number') clockOffsetRef.current = frame.serverTime - Date.now();
             break;
@@ -786,6 +1035,7 @@ export default function AviatorStage() {
       socket.onclose = () => {
         if (heartbeat) window.clearInterval(heartbeat);
         if (closed) return;
+        setSocketStatus('reconnecting');
         timer = window.setTimeout(connect, Math.min(500 * 2 ** backoff++, 8000));
       };
     };
@@ -898,10 +1148,40 @@ export default function AviatorStage() {
   const interpolated = Number.isFinite(elapsed) ? multiplierFor(elapsed, doubling, cap) : 1;
   const multiplier = serverMult !== null && livePhase === 'FLYING'
     ? Math.min(serverMult, cap) : interpolated;
+  const recentHistory = useMemo(() => {
+    const source = socketHistory.length
+      ? socketHistory.map((point, index) => ({ id: crash.history[index]?.id ?? '', point: Number(point) }))
+      : crash.history.map((item) => ({ id: item.id, point: Number(item.crashPoint ?? 0) }));
+    return source.filter((item) => Number.isFinite(item.point)).slice(0, 12);
+  }, [socketHistory, crash.history]);
 
-  const recentHistory = useMemo(() =>
-    crash.history.map((item) => Number(item.crashPoint ?? 0)).filter((n) => Number.isFinite(n)).slice(0, 12),
-  [crash.history]);
+  const liveMessages = useMemo(() => {
+    const seen = new Set(messages.map((message) => message.id));
+    return socketMessages.filter((message) => !seen.has(message.id));
+  }, [messages, socketMessages]);
+
+  const chatRows = useMemo(() => [
+    ...messages.slice(-8).map((message) => ({
+      id: message.id,
+      user: String(message.username ?? message.user_id ?? 'player'),
+      text: message.content,
+      time: Date.parse(message.created_at) || Date.now(),
+    })),
+    ...liveMessages.map((message) => ({
+      id: message.id, user: message.user, text: message.text, time: message.time,
+    })),
+  ].slice(-8), [messages, liveMessages]);
+
+  useEffect(() => {
+    if (!chatOpen) return;
+    const log = chatLogRef.current;
+    if (log) log.scrollTop = log.scrollHeight;
+  }, [chatRows, chatOpen]);
+
+  const visibleStake = useMemo(() => {
+    if (activityTab === 'mine') return bets.reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+    return feed.reduce((sum, row) => sum + Number(row.stake ?? 0), 0);
+  }, [activityTab, bets, feed]);
 
   const stopAuto = async (panel: number) => {
     if (!token) return;
@@ -916,6 +1196,11 @@ export default function AviatorStage() {
     <div className="aviator-stage" dir={localeDirection(locale)}
       style={themeColor ? ({ '--gp-primary': themeColor } as CSSProperties) : undefined}>
       <span className="sr-only" aria-live="polite">{announcement}</span>
+      {socketStatus !== 'live' && (
+        <div className="socket-status" role="status">
+          {t(socketStatus === 'connecting' ? 'socketConnecting' : 'socketReconnecting')}
+        </div>
+      )}
       <header className="aviator-header">
         <div className="aviator-brand">
           {themeLogo
@@ -947,7 +1232,7 @@ export default function AviatorStage() {
               {LOCALES.map((option) => <option key={option} value={option}>{option.toUpperCase()}</option>)}
             </select>
           </label>
-          <button type="button" onClick={() => setModal('fairness')}>{t('provablyFair')}</button>
+          <button type="button" onClick={() => openFairness(round?.id ?? '')}>{t('provablyFair')}</button>
           <button type="button" onClick={() => setModal('rules')}>{t('rules')}</button>
           <button type="button" aria-label={t('toggleSound')} aria-pressed={sound} onClick={toggleSoundWithSettings}>
             {sound ? t('soundOn') : t('soundOff')}
@@ -961,16 +1246,16 @@ export default function AviatorStage() {
 
       <div className="history-strip" aria-label={t('recentCrashes')}>
         {recentHistory.length === 0 ? <span className="empty">{t('noHistory')}</span>
-          : recentHistory.map((point, index) => (
-            <button key={`${point}-${index}`} type="button" className={multClass(point)}
-              onClick={() => setModal('fairness')} title={t('provablyFair')}>
+          : recentHistory.map(({ id, point }, index) => (
+            <button key={`${id || point}-${index}`} type="button" className={multClass(point)}
+              onClick={() => openFairness(id)} title={t('provablyFair')}>
               {point.toFixed(2)}x
             </button>
           ))}
       </div>
 
       <FlightCanvas round={round} phase={livePhase} multiplier={multiplier}
-        reduced={reduced || !animations} t={t} now={now} />
+        reduced={reduced || !animations} status={socketStatus} t={t} now={now} />
 
       <div className="aviator-panels">
         {([1, 2] as const).map((index) => (
@@ -978,38 +1263,67 @@ export default function AviatorStage() {
             bet={betFor(index)} token={token} onRefresh={() => void refresh()} notify={notify}
             t={t} money={money} onSound={playSound} limits={limits}
             queued={queued[index]} onQueue={(panel, next) => setQueued((previous) => ({ ...previous, [panel]: next }))}
-            onRegisterPlace={registerPlace} />
+            onRegisterPlace={registerPlace} connected={socketStatus === 'live'}
+            availableBalance={availableBalance} />
         ))}
       </div>
 
       <div className="aviator-lower">
         <section className="aviator-card">
-          <header><h3>{t('liveActivity')}</h3><span>{t('betsCount', { count: bets.length })}</span></header>
-          <div className="activity-list">
-            {bets.slice(0, 6).map((bet) => (
-              <div key={bet.id}>
-                <span className="masked">p***{bet.id.slice(-2)}</span>
-                <span>{money(bet.amount)}</span>
-                <span className={bet.status === 'cashed_out' ? 'win' : ''}>
-                  {bet.cashout_at ? `${Number(bet.cashout_at).toFixed(2)}x` : bet.status.replace('_', ' ')}
-                </span>
-              </div>
+          <header>
+            <h3>{t('liveActivity')}</h3>
+            <span>{t('betsCount', { count: activityTab === 'mine' ? bets.length : feed.length })}
+              {' · '}{t('totalStake', { amount: money(visibleStake) })}</span>
+          </header>
+          <div className="activity-tabs" role="tablist">
+            {(['all', 'mine', 'top'] as const).map((tab) => (
+              <button key={tab} type="button" role="tab" aria-selected={activityTab === tab}
+                className={activityTab === tab ? 'active' : ''}
+                onClick={() => setActivityTab(tab)}>
+                {t(tab === 'all' ? 'tabAllBets' : tab === 'mine' ? 'tabMyBets' : 'tabTop')}
+              </button>
             ))}
-            {bets.length === 0 && <em>{t('noBets')}</em>}
           </div>
-          {feed.length > 0 && <div className="activity-list" aria-label={t('liveFeed')}>
-            {feed.slice(0, 5).map((row, index) => (
-              <div key={`${row.betId ?? 'feed'}-${index}`}>
-                <span className="masked">{row.user}</span>
-                <span>{row.stake ? money(row.stake) : '—'}</span>
-                <span className={row.type === 'cashout' ? 'win' : ''}>
-                  {row.type === 'cashout'
-                    ? `${row.mult ?? '1.00'}x → ${row.payout ? money(row.payout) : '—'}`
-                    : t('actionBet')}
-                </span>
-              </div>
-            ))}
-          </div>}
+          {activityTab === 'top' ? (
+            <div className="activity-list">
+              {(top.topMultipliers ?? []).slice(0, 6).map((entry, index) => (
+                <div key={index}>
+                  <span className="masked">{String(entry.user ?? '')}</span>
+                  <span>{Number(entry.mult ?? 0).toFixed(2)}x</span>
+                  <span>{money(entry.payout ?? 0)}</span>
+                </div>
+              ))}
+              {(top.topMultipliers ?? []).length === 0 && <em>{t('noWins')}</em>}
+            </div>
+          ) : activityTab === 'mine' ? (
+            <div className="activity-list">
+              {bets.slice(0, 6).map((bet) => (
+                <div key={bet.id}>
+                  <span className="masked">p***{bet.id.slice(-2)}</span>
+                  <span>{money(bet.amount)}</span>
+                  <span className={bet.status === 'cashed_out' ? 'win' : ''}>
+                    {bet.cashout_at ? `${Number(bet.cashout_at).toFixed(2)}x` : bet.status.replace('_', ' ')}
+                  </span>
+                </div>
+              ))}
+              {bets.length === 0 && <em>{t('noBets')}</em>}
+            </div>
+          ) : (
+            <div className="activity-list" aria-label={t('liveFeed')}>
+              {feed.slice(0, 6).map((row, index) => (
+                <div key={`${row.betId ?? 'feed'}-${index}`}>
+                  <span className="masked">{row.user}</span>
+                  <span>{row.stake ? money(row.stake) : '—'}</span>
+                  <span className={row.type === 'cashout' ? 'win' : ''}>
+                    {row.type === 'cashout'
+                      ? `${row.mult ?? '1.00'}x → ${row.payout ? money(row.payout) : '—'}`
+                      : t('actionBet')}
+                  </span>
+                </div>
+              ))}
+              {feed.length === 0 && <em>{t('noBets')}</em>}
+            </div>
+          )}
           <div className="auto-controls">
             <button type="button" onClick={() => void stopAuto(1)}>{t('stopAuto', { panel: 1 })}</button>
             <button type="button" onClick={() => void stopAuto(2)}>{t('stopAuto', { panel: 2 })}</button>
@@ -1017,7 +1331,17 @@ export default function AviatorStage() {
         </section>
 
         <section className="aviator-card">
-          <header><h3>{t('topWins')}</h3><span>{t('periodDay')}</span></header>
+          <header>
+            <h3>{t('topWins')}</h3>
+            <label className="period-switch">
+              <span className="sr-only">{t('period')}</span>
+              <select value={period} onChange={(event) => setPeriod(event.target.value as typeof period)}>
+                <option value="day">{t('periodDay')}</option>
+                <option value="month">{t('periodMonth')}</option>
+                <option value="year">{t('periodYear')}</option>
+              </select>
+            </label>
+          </header>
           <div className="activity-list">
             {(top.topWins ?? []).slice(0, 6).map((entry, index) => (
               <div key={index}>
@@ -1039,23 +1363,26 @@ export default function AviatorStage() {
           </header>
           {chatOpen && (
             <>
-              <div className="chat-log">
-                {messages.slice(-8).map((message) => (
-                  <p key={message.id}><strong>{String(message.username ?? message.user_id ?? 'player')}:</strong> {message.content}
-                    <time dateTime={message.created_at}>{formatDate(message.created_at, locale)}</time>
+              <div className="chat-log" ref={chatLogRef}>
+                {chatRows.map((message) => (
+                  <p key={message.id}><strong>{message.user}:</strong> {message.text}
+                    <time dateTime={new Date(message.time).toISOString()}>
+                      {formatDate(new Date(message.time).toISOString(), locale)}
+                    </time>
                   </p>
                 ))}
-                {messages.length === 0 && <em>{t('chatEmpty')}</em>}
+                {chatRows.length === 0 && <em>{t('chatEmpty')}</em>}
               </div>
               <form onSubmit={(event) => {
                 event.preventDefault();
-                if (!chatText.trim()) return;
-                void sendMessage(room, chatText.trim()).then(() => setChatText('')).catch(() => undefined);
+                void submitChat();
               }}>
                 <input aria-label={t('chatMessage')} maxLength={200} value={chatText}
-                  onChange={(event) => setChatText(event.target.value)} placeholder={t('chatPlaceholder')} />
-                <button type="submit">{t('chatSend')}</button>
+                  onChange={(event) => { setChatText(event.target.value); setChatError(''); }}
+                  placeholder={t('chatPlaceholder')} />
+                <button type="submit" disabled={!chatText.trim()}>{t('chatSend')}</button>
               </form>
+              {chatError && <p className="panel-error" role="alert">{chatError}</p>}
             </>
           )}
         </section>
@@ -1065,9 +1392,10 @@ export default function AviatorStage() {
         {toasts.map((toast) => <div key={toast.id} className={toast.kind}>{toast.message}</div>)}
       </div>
 
-      {modal === 'fairness' && <FairnessModal onClose={() => setModal(null)} notify={notify} t={t}
-        roundId={round?.id ?? ''} houseEdge={Number(rules?.houseEdge ?? round?.houseEdge ?? 0.02)} />}
-      {modal === 'rules' && <RulesModal rules={rules} onClose={() => setModal(null)} t={t} />}
+      {modal === 'fairness' && <FairnessModal onClose={closeModal} notify={notify} t={t}
+        token={token} roundId={modalRoundId || round?.id || ''}
+        houseEdge={Number(rules?.houseEdge ?? round?.houseEdge ?? 0.02)} />}
+      {modal === 'rules' && <RulesModal rules={rules} onClose={closeModal} t={t} />}
     </div>
   );
 }
