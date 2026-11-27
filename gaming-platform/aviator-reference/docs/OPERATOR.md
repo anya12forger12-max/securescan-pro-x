@@ -17,6 +17,17 @@ the literal `{}`. Canonical/compact JSON signatures from older integrators are
 still accepted so an in-flight integration is not broken. All comparisons are
 constant time; a missing key or signature fails closed.
 
+For replay protection, add `X-Timestamp` (epoch milliseconds) and `X-Nonce`
+(unique per request) and sign the envelope
+`"<timestamp>\n<nonce>\n<raw_request_body>"`. A supplied timestamp outside
+`OPERATOR_TIMESTAMP_SKEW_MS` or a reused nonce is rejected. Set
+`OPERATOR_TIMESTAMP_REQUIRED=true` on the crash service to require this envelope
+for every call; until then, legacy body-only signatures keep working. Set
+`OPERATOR_IP_ALLOWLIST` to a comma-separated list of IPs/CIDRs to restrict
+operator calls; the gateway forwards the proxy-resolved client IP and strips
+any client-supplied value. Operator calls also have their own
+`RATE_LIMIT_OPERATOR_MAX` quota at the gateway.
+
 Upgrading an existing deployment requires a new scoped credential,
 `AUTH_SESSION_SERVICE_TOKEN`, in `.env`. Generate it with `openssl rand -hex 32`
 (or re-run `npm run env:init` and merge the new value); Compose intentionally
@@ -31,7 +42,7 @@ support or other privileged account.
 | POST | `/v1/operator/launch` | Issue a short-lived launch URL/token (5 minutes) that the gateway accepts as a real session |
 | GET | `/v1/operator/rounds?from=&to=&limit=` | Round report for a time range |
 | GET | `/v1/operator/players/{id}/bets?limit=` | One player's settled and active bets |
-| POST | `/v1/operator/limits` | Per-player or per-currency bet limits (`minBet`/`maxBet` are enforced on every wager; `maxWin` is reported to clients) |
+| POST | `/v1/operator/limits` | Per-player or per-currency bet limits (`minBet`/`maxBet` gate every wager; `maxWin` caps every cash-out) |
 | POST | `/v1/operator/players/{id}/block` | Operator block / self-exclusion signal |
 | GET | `/v1/operator/config` | Currencies, limits, RTP, enabled features |
 | POST | `/v1/operator/freebets` | Record a promotional grant (no wallet credit) |
@@ -66,13 +77,16 @@ To let the operator hold funds, set `OPERATOR_WALLET_URL` (HTTPS) and
 
 | Path | Body (signed with `X-Signature`) |
 | --- | --- |
-| `/wallet/balance` | `txId`, `playerId`, `currency` |
-| `/wallet/debit` | `txId`, `playerId`, `roundId`, `betId`, `amount`, `currency` |
-| `/wallet/credit` | `txId`, `playerId`, `roundId`, `betId`, `amount`, `currency` |
-| `/wallet/rollback` | `txId`, `originalTxId`, `reason: ROUND_VOIDED` |
+| `/wallet/balance` | `txId`, `playerId`, `currency`, `timestamp`, `nonce` |
+| `/wallet/debit` | `txId`, `playerId`, `roundId`, `betId`, `amount`, `currency`, `timestamp`, `nonce` |
+| `/wallet/credit` | `txId`, `playerId`, `roundId`, `betId`, `amount`, `currency`, `timestamp`, `nonce` |
+| `/wallet/rollback` | `txId`, `originalTxId`, `reason`, `currency`, `timestamp`, `nonce` |
 
-`X-Signature` is `hmac_sha256(raw body, OPERATOR_WALLET_SECRET)`; a response
-signature, when present, is checked against the same secret. `txId` is the
+The same values are sent as `X-Timestamp` and `X-Nonce` headers. `X-Signature`
+is `hmac_sha256(raw body, OPERATOR_WALLET_SECRET)`; the operator can reject a
+stale timestamp using the same `OPERATOR_TIMESTAMP_SKEW_MS` window. A response
+signature, when present, is checked against the same secret, and a response
+`X-Timestamp`, when present, must be fresh. `txId` is the
 existing deterministic claim key, so retries never move money twice. A debit
 that times out is replayed with the same `txId`; a refund uses rollback rather
 than a fresh credit so a late debit cannot be applied afterwards.
@@ -95,9 +109,11 @@ never contains the hidden crash point or server seed.
 
 The stage can be served in an iframe using the launch URL from
 `POST /v1/operator/launch`. Add the embedding origin to the build-time
-`REACT_APP_OPERATOR_ORIGINS` list (comma separated). Same-origin parents are
-always accepted; every other parent is rejected unless listed. The game never
-sends an access or refresh token over `postMessage`.
+`REACT_APP_OPERATOR_ORIGINS` list (comma separated) **and** to the gateway's
+runtime `FRAME_ANCESTORS_ORIGINS` list, otherwise the browser will refuse to
+frame the page because the shell sends `frame-ancestors 'none'`. Same-origin
+parents are always accepted; every other parent is rejected unless listed in
+both places. The game never sends an access or refresh token over `postMessage`.
 
 Every message is an envelope `{ gp: 1, type, payload? }`. Replies are addressed
 to the exact verified `event.origin`, never to `*`.

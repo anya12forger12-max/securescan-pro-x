@@ -312,6 +312,7 @@ export function registerAviatorSocket(app, deps) {
       version: versionParam === null ? PROTOCOL_VERSION : Number(versionParam),
       fragments: [], fragment: { opcode: null, bytes: 0 }, idle: null, lastActivity: Date.now(),
       closed: false, tick: null, stream: null,
+      intentLast: new Map(), replies: new Map(),
     };
     known.add(state);
     sockets.set(userId, known);
@@ -446,8 +447,44 @@ export function registerAviatorSocket(app, deps) {
         send({ t: "error", code: "VALIDATION_FAILED", message: "invalid JSON frame" });
         return;
       }
-      const reqId = msg.reqId ?? null;
-      const replyOk = (frameName, fields) => send({ t: frameName, ...(reqId ? { reqId } : {}), ...fields });
+      const reqId = typeof msg.reqId === "string" && msg.reqId.length <= 128 ? msg.reqId : null;
+      const replyKey = reqId ? `${msg.t}:${reqId}` : null;
+      const cached = replyKey ? state.replies.get(replyKey) : null;
+      if (cached) {
+        send(cached.frame);
+        return;
+      }
+      const replyOk = (frameName, fields) => {
+        const frame = { t: frameName, ...(reqId ? { reqId } : {}), ...fields };
+        if (replyKey) {
+          const now = Date.now();
+          for (const [key, entry] of state.replies) {
+            if (now - entry.at > 60_000) state.replies.delete(key);
+          }
+          if (state.replies.size >= 200) state.replies.delete(state.replies.keys().next().value);
+          state.replies.set(replyKey, { frame, at: now });
+        }
+        send(frame);
+      };
+      // Socket intents reach the money handlers directly, bypassing the REST
+      // limiter. Bound each intent type per connection; chat is deliberately
+      // the slowest because it is public and fanned out to every player.
+      const INTENT_MIN_MS = {
+        bet: 120, cancel_bet: 120, cashout: 120,
+        auto_start: 300, auto_stop: 300, chat: 1000,
+      };
+      const minimum = INTENT_MIN_MS[msg.t];
+      if (minimum) {
+        const now = Date.now();
+        if (now - (state.intentLast.get(msg.t) ?? 0) < minimum) {
+          send({
+            t: "error", code: "RATE_LIMITED", ...(reqId ? { reqId } : {}),
+            message: `${msg.t} too fast; retry shortly`,
+          });
+          return;
+        }
+        state.intentLast.set(msg.t, now);
+      }
       const replyErr = (frameName, err) => send({
         t: frameName,
         ...(reqId ? { reqId } : {}),
@@ -562,7 +599,24 @@ export function registerAviatorSocket(app, deps) {
       if (state.idle) clearInterval(state.idle);
       state.stream?.abort?.();
       known.delete(state);
-      if (!known.size) sockets.delete(userId);
+      if (!known.size) {
+        sockets.delete(userId);
+        // No socket means no player to manage an auto session. Stop it engine
+        // side so it cannot keep staking while the client is disconnected.
+        if (deps.crashToken) {
+          void fetch(
+            `${deps.upstream("crash", 3023)}/internal/crash/auto/${encodeURIComponent(userId)}/stop`,
+            {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-service-token": deps.crashToken,
+              },
+              signal: AbortSignal.timeout(2000),
+            },
+          ).catch(() => undefined);
+        }
+      }
       // Echo an empty close frame before ending the TCP stream so clients see
       // a normal 1000/1005 closure instead of an abnormal 1006.
       try {

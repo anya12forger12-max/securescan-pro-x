@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 import pg from "pg";
 import { z } from "zod";
 import Fastify from "fastify";
@@ -91,6 +92,16 @@ const envSchema = baseEnvSchema.extend({
   OPERATOR_API_KEY: z.preprocess((v) => v || undefined, z.string().min(32).optional()),
   OPERATOR_API_SECRET: z.preprocess((v) => v || undefined, z.string().min(32).optional()),
   OPERATOR_LAUNCH_URL: z.preprocess((v) => v || undefined, z.string().url().optional()),
+  // Optional replay window. Strict mode requires fresh x-timestamp/x-nonce
+  // headers on every signed operator call; legacy deployments keep working
+  // until they opt in. Nonces are also tracked when headers are supplied.
+  OPERATOR_TIMESTAMP_REQUIRED: z.preprocess(
+    (v) => v === true || v === "true" || v === "1", z.boolean(),
+  ).default(false),
+  OPERATOR_TIMESTAMP_SKEW_MS: z.coerce.number().int().min(1000).max(3_600_000).default(300_000),
+  // Optional IP/CIDR allow-list. Empty means no network restriction; when set,
+  // the gateway-forwarded client IP must match one entry.
+  OPERATOR_IP_ALLOWLIST: z.preprocess((v) => v || undefined, z.string().max(2048).optional()),
   // External operator wallet. Both values are required or neither is used;
   // a single configured value is rejected at boot so calls cannot fall back to
   // the internal ledger with an unsigned request.
@@ -215,6 +226,77 @@ const canonical = (value) => {
   return JSON.stringify(value ?? null);
 };
 
+/** IP/CIDR matching is deliberately dependency-free. IPv4-mapped IPv6 peers
+ * are normalised to IPv4 so a gateway on ::ffff:127.0.0.1 still matches a
+ * plain 127.0.0.1 allow-list entry. */
+function ipToBigInt(ip, version) {
+  if (version === 4) {
+    return ip.split(".").reduce((value, part) => (value << 8n) | BigInt(part), 0n);
+  }
+  const [left = "", right = ""] = ip.split("::");
+  const leftParts = left ? left.split(":") : [];
+  const rightParts = right ? right.split(":") : [];
+  const missing = 8 - leftParts.length - rightParts.length;
+  if (missing < 0) return null;
+  return [...leftParts, ...Array(missing).fill("0"), ...rightParts]
+    .reduce((value, group) => (value << 16n) | BigInt(`0x${group || "0"}`), 0n);
+}
+
+function normaliseIp(raw) {
+  let ip = String(raw ?? "").trim().replace(/^\[|\]$/g, "");
+  if (/^::ffff:/i.test(ip) && isIP(ip.slice(7)) === 4) ip = ip.slice(7);
+  const version = isIP(ip);
+  if (!version) return null;
+  const value = ipToBigInt(ip, version);
+  return value === null ? null : { version, value };
+}
+
+function parseOperatorAllowlist(raw) {
+  if (!raw) return [];
+  const entries = raw.split(",").map((item) => item.trim()).filter(Boolean).flatMap((entry) => {
+    const [address, bitsRaw] = entry.split("/");
+    const parsed = normaliseIp(address);
+    if (!parsed) return [];
+    const width = parsed.version === 4 ? 32 : 128;
+    const bits = bitsRaw === undefined ? width : Number(bitsRaw);
+    if (!Number.isInteger(bits) || bits < 0 || bits > width) return [];
+    return [{ ...parsed, bits, width }];
+  });
+  if (!entries.length) throw new Error("OPERATOR_IP_ALLOWLIST contains no valid IP or CIDR entry");
+  return entries;
+}
+
+const OPERATOR_IP_ALLOWLIST = parseOperatorAllowlist(env.OPERATOR_IP_ALLOWLIST);
+
+function operatorIpAllowed(req) {
+  if (!OPERATOR_IP_ALLOWLIST.length) return true;
+  const forwarded = headerString(req.headers, "x-forwarded-for");
+  const candidate = forwarded?.split(",")[0]?.trim() || req.ip;
+  const peer = normaliseIp(candidate);
+  if (!peer) return false;
+  return OPERATOR_IP_ALLOWLIST.some((entry) => {
+    if (entry.version !== peer.version) return false;
+    const shift = BigInt(entry.width - entry.bits);
+    return (entry.value >> shift) === (peer.value >> shift);
+  });
+}
+
+// Nonces are bounded and short-lived. A retry after a lost HTTP reply within
+// the replay window is rejected rather than moving money twice; retries after
+// the window must be signed again with a fresh timestamp.
+const operatorNonces = new Map();
+function pruneOperatorNonces(now) {
+  for (const [nonce, expires] of operatorNonces) {
+    if (expires <= now) operatorNonces.delete(nonce);
+  }
+}
+function reserveOperatorNonce(nonce, now) {
+  pruneOperatorNonces(now);
+  if (operatorNonces.has(nonce)) return false;
+  operatorNonces.set(nonce, now + env.OPERATOR_TIMESTAMP_SKEW_MS + 1000);
+  return true;
+}
+
 function operatorAuthorised(req) {
   // The PDF sends `Authorization: Bearer <key>`; older deployments used
   // `x-api-key`. Accept both, but never a wrong key under either header.
@@ -224,24 +306,47 @@ function operatorAuthorised(req) {
   const key = headerString(req.headers, "x-api-key") ?? bearer;
   const signature = headerString(req.headers, "x-signature");
   if (!env.OPERATOR_API_KEY || !env.OPERATOR_API_SECRET) return false;
-  if (!key || !signature) return false;
+  if (!key || !signature || !operatorIpAllowed(req)) return false;
   const keyA = Buffer.from(key);
   const keyB = Buffer.from(env.OPERATOR_API_KEY);
   if (keyA.length !== keyB.length || !timingSafeEqual(keyA, keyB)) return false;
+
+  // A timestamp/nonce pair turns the body HMAC into a replay-proof signature.
+  // Deployments opt into strict mode with OPERATOR_TIMESTAMP_REQUIRED=true;
+  // once either header appears it is validated even in legacy mode, so a
+  // stale timestamp can never be passed through as an unsigned body.
+  const timestampRaw = headerString(req.headers, "x-timestamp");
+  const nonce = headerString(req.headers, "x-nonce");
+  const suppliedReplayHeaders = Boolean(timestampRaw || nonce);
+  const now = Date.now();
+  let fresh = false;
+  if (timestampRaw && nonce && /^\d{1,16}$/.test(timestampRaw) && nonce.length <= 128) {
+    const timestamp = Number(timestampRaw);
+    if (Math.abs(now - timestamp) <= env.OPERATOR_TIMESTAMP_SKEW_MS
+      && reserveOperatorNonce(nonce, now)) fresh = true;
+  }
+  if (suppliedReplayHeaders && !fresh) return false;
+  if (env.OPERATOR_TIMESTAMP_REQUIRED && !fresh) return false;
+
   // Raw-body HMAC is the documented contract. Canonical/compact JSON are also
   // accepted for existing integrators; all comparisons are constant time.
-  const candidates = [
+  const bodies = [
     typeof req.rawBody === "string" ? req.rawBody : null,
     canonical(req.body ?? {}),
     JSON.stringify(req.body ?? {}),
-  ];
+  ].filter((body) => body !== null);
+  const prefix = fresh ? `${timestampRaw}\n${nonce}\n` : "";
+  const candidates = fresh
+    ? [...bodies.map((body) => `${prefix}${body}`), ...bodies]
+    : bodies;
   for (const body of candidates) {
-    if (body === null) continue;
     const expected = createHmac("sha256", env.OPERATOR_API_SECRET).update(body).digest("hex");
     const sigA = Buffer.from(signature.toLowerCase());
     const sigB = Buffer.from(expected);
     if (sigA.length === sigB.length && timingSafeEqual(sigA, sigB)) return true;
   }
+  // A bad signature must not burn a nonce permanently inside the window.
+  if (fresh) operatorNonces.delete(nonce);
   return false;
 }
 
@@ -558,7 +663,12 @@ function operatorWalletCall(path, body) {
 async function operatorWalletRequest(path, body) {
   const call = operatorWalletCall(path, body);
   if (!call) throw new WalletRequestError("unsupported operator wallet call", 400, "VALIDATION_FAILED");
-  const raw = JSON.stringify(call.payload);
+  // The timestamp and nonce travel both as headers and inside the signed
+  // body. The operator can reject stale callbacks without sharing replay
+  // state with us, and the deterministic txId still governs money movement.
+  const timestamp = String(Date.now());
+  const nonce = String(body.idempotencyKey ?? randomUUID());
+  const raw = JSON.stringify({ ...call.payload, timestamp, nonce });
   const signature = createHmac("sha256", env.OPERATOR_WALLET_SECRET).update(raw).digest("hex");
   let response;
   try {
@@ -568,6 +678,8 @@ async function operatorWalletRequest(path, body) {
         method: "POST",
         headers: {
           "content-type": "application/json",
+          "x-timestamp": timestamp,
+          "x-nonce": nonce,
           "x-signature": signature,
         },
         body: raw,
@@ -583,6 +695,12 @@ async function operatorWalletRequest(path, body) {
   if (!response.ok) {
     const ErrorClass = response.status >= 500 ? WalletAmbiguousError : WalletRequestError;
     throw new ErrorClass(`operator wallet returned ${response.status}`, response.status);
+  }
+  const responseTime = response.headers.get("x-timestamp");
+  if (responseTime
+    && (!/^\d{1,16}$/.test(responseTime)
+      || Math.abs(Date.now() - Number(responseTime)) > env.OPERATOR_TIMESTAMP_SKEW_MS)) {
+    throw new WalletRequestError("operator wallet response timestamp is stale", 400, "STALE_TIMESTAMP");
   }
   const supplied = response.headers.get("x-signature");
   if (supplied) {
@@ -1289,12 +1407,19 @@ async function cashoutBet(bet, requestedMultiplier, { userId } = {}) {
       return { error: [409, ERROR_CODES.CONFLICT, "cash-out is not available"] };
     }
     // A manual cash-out uses the live multiplier; auto cash-outs pass their
-    // configured trigger. Never pay more than the live value or crash point.
+    // configured trigger. Never pay more than the live value or crash point,
+    // and honour the operator's per-player/per-currency maxWin cap.
     const requested = requestedMultiplier === undefined ? live : Number(requestedMultiplier);
-    multiplier = Math.round(Math.min(requested, live, Number(round.crash_point)) * 100) / 100;
+    const limits = await effectiveLimits(userId ?? current.user_id);
+    const winCapMultiplier = Math.floor(
+      (Number(limits.maxWin) / Math.max(Number(current.amount), 0.01)) * 100,
+    ) / 100;
+    multiplier = Math.round(
+      Math.min(requested, live, Number(round.crash_point), winCapMultiplier) * 100,
+    ) / 100;
     if (multiplier < 1) {
       await client.query("ROLLBACK");
-      return { error: [409, ERROR_CODES.CONFLICT, "cash-out is not available"] };
+      return { error: [422, AV.BET_LIMIT_EXCEEDED, "max win limit reached"] };
     }
     payout = Number(toMoney(moneyMul(current.amount, multiplier.toFixed(2))));
     const claimed = await client.query(
@@ -2161,7 +2286,7 @@ app.put("/v1/crash/settings", async (req, reply) => {
     currency: z.string().max(8).optional(),
   }).safeParse(req.body);
   if (!parsed.success)
-    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+    return deny(reply, 422, AV.VALIDATION_FAILED, JSON.stringify(parsed.error.flatten()));
   await pool.query(
     `INSERT INTO crash_player_settings (user_id, settings) VALUES ($1, $2)
       ON CONFLICT (user_id) DO UPDATE SET settings = crash_player_settings.settings || $2`,
@@ -2240,7 +2365,7 @@ app.post("/v1/crash/auto", async (req, reply) => {
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
   const parsed = AutoSchema.safeParse(req.body);
   if (!parsed.success)
-    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+    return deny(reply, 422, AV.VALIDATION_FAILED, JSON.stringify(parsed.error.flatten()));
   const { panel, amount, autoCashout, rounds, stopRules } = parsed.data;
   const limits = await effectiveLimits(userId);
   if (amount < limits.minBet || amount > limits.maxBet)
@@ -2275,6 +2400,26 @@ app.post("/v1/crash/auto/:panel/stop", async (req, reply) => {
   );
   await publish("crash.auto_stopped", { userId, panel, reason: "player" });
   return ok(reply, 200, { stopped: result.rowCount > 0 });
+});
+
+/** The gateway calls this when the player's last live socket closes. Auto-bet
+ * sessions are engine-side state, so a disconnect must stop them explicitly
+ * instead of letting them keep staking after the client has gone away. */
+app.post("/internal/crash/auto/:userId/stop", async (req, reply) => {
+  if (!serviceTokenOk(req.headers, env.CRASH_SERVICE_TOKEN)) {
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
+  }
+  const result = await pool.query(
+    `UPDATE crash_auto_sessions SET status = 'stopped',
+       stop_reason = 'disconnected', updated_at = now()
+      WHERE user_id = $1 AND status = 'active'`, [req.params.userId],
+  );
+  if (result.rowCount) {
+    await publish("crash.auto_stopped", {
+      userId: req.params.userId, panel: null, reason: "disconnected",
+    });
+  }
+  return ok(reply, 200, { stopped: result.rowCount });
 });
 
 // ---------------------------------------------------------------------------
@@ -2362,7 +2507,7 @@ app.get("/v1/crash/operator/rounds", async (req, reply) => {
   const from = req.query.from ? new Date(String(req.query.from)) : new Date(Date.now() - 24 * 3600_000);
   const to = req.query.to ? new Date(String(req.query.to)) : new Date();
   if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()))
-    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "invalid time range");
+    return deny(reply, 422, AV.VALIDATION_FAILED, "invalid time range");
   const result = await pool.query(
     `SELECT * FROM crash_rounds WHERE created_at BETWEEN $1 AND $2
       ORDER BY created_at DESC LIMIT $3`, [from.toISOString(), to.toISOString(), limit],
@@ -2391,7 +2536,7 @@ app.post("/v1/crash/operator/limits", async (req, reply) => {
     maxWin: z.coerce.number().positive().optional(),
   }).safeParse(req.body);
   if (!parsed.success)
-    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+    return deny(reply, 422, AV.VALIDATION_FAILED, JSON.stringify(parsed.error.flatten()));
   const limits = Object.fromEntries(
     Object.entries(parsed.data).filter(([key]) => ["minBet", "maxBet", "maxWin"].includes(key)),
   );
@@ -2412,7 +2557,7 @@ app.post("/v1/crash/operator/players/:playerId/block", async (req, reply) => {
     reason: z.string().max(200).optional(),
   }).safeParse(req.body ?? {});
   if (!parsed.success)
-    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+    return deny(reply, 422, AV.VALIDATION_FAILED, JSON.stringify(parsed.error.flatten()));
   await pool.query(
     `INSERT INTO crash_player_settings (user_id, settings) VALUES ($1, $2)
       ON CONFLICT (user_id) DO UPDATE SET settings = crash_player_settings.settings || $2,
@@ -2451,7 +2596,7 @@ app.post("/v1/crash/operator/freebets", async (req, reply) => {
     grantId: z.string().min(1).max(128),
   }).safeParse(req.body);
   if (!parsed.success)
-    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+    return deny(reply, 422, AV.VALIDATION_FAILED, JSON.stringify(parsed.error.flatten()));
   await publish("crash.operator_freebet", parsed.data);
   return ok(reply, 201, { ...parsed.data, credited: false, currency: "INR" });
 });
@@ -2526,7 +2671,7 @@ app.post("/v1/crash/strategy-lab/run", async (req, reply) => {
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
   const parsed = LabSchema.safeParse(req.body);
   if (!parsed.success)
-    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+    return deny(reply, 422, AV.VALIDATION_FAILED, JSON.stringify(parsed.error.flatten()));
   const { seed, rounds, stake, target, strategies } = parsed.data;
   const seedNumber = createHash("sha256").update(`${userId}:${seed}`).digest().readUInt32BE(0);
   const results = strategies.map((strategy) =>
@@ -2605,6 +2750,11 @@ app.get("/ready", async (_req, reply) => {
     return reply.code(503).send({ status: "error", message: err.message });
   }
 });
+
+// Upstream 404s reach clients through the gateway, so they need the same
+// structured envelope as every other crash-service rejection.
+app.setNotFoundHandler((req, reply) =>
+  deny(reply, 404, ERROR_CODES.NOT_FOUND, `unknown route ${req.method} ${req.url.split(/[?#]/, 1)[0]}`));
 
 try {
   await app.listen({ port: env.PORT, host: process.env.HOST ?? "0.0.0.0" });

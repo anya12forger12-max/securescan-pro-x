@@ -121,6 +121,8 @@ AUTH_SESSION_SERVICE_TOKEN=${authSessionServiceToken}
 # One-time secret for claiming the first admin role via the gateway.
 ADMIN_BOOTSTRAP_TOKEN=${bootstrapToken}
 CORS_ORIGIN=${origin}
+# Optional: comma-separated operator origins allowed to embed the game.
+FRAME_ANCESTORS_ORIGINS=
 LOG_LEVEL=info
 # Edge abuse controls. Fail closed if the shared limiter is unavailable.
 RATE_LIMIT_ENABLED=true
@@ -130,6 +132,7 @@ RATE_LIMIT_USER_MAX=120
 RATE_LIMIT_MUTATE_MAX=30
 RATE_LIMIT_FAIL_CLOSED=true
 RATE_LIMIT_STREAM_MAX=20
+RATE_LIMIT_OPERATOR_MAX=120
 TRUST_PROXY_HOPS=1
 UPSTREAM_TIMEOUT_MS=30000
 # Gateway cache for access-token jti/version checks; revocation takes effect
