@@ -14,6 +14,7 @@ import {
 import { promisify } from "node:util";
 import {
   baseEnvSchema,
+  capabilityFields,
   dbPoolOptions,
   jwtSignEnvFields,
   jwtVerifyOptions,
@@ -23,7 +24,7 @@ import {
   parseCorsOrigins,
   registerErrorHandler,
 } from "@gp/config";
-import { ERROR_CODES } from "@gp/shared-types";
+import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
 
 /**
  * Auth service (3015).
@@ -36,6 +37,7 @@ import { ERROR_CODES } from "@gp/shared-types";
 const envSchema = baseEnvSchema.extend({
   PORT: z.coerce.number().int().positive().default(3015),
   DATABASE_URL: z.string().min(1).url(),
+  ...capabilityFields("AUTH_SESSION_SERVICE_TOKEN"),
   ...jwtSignEnvFields,
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
@@ -134,7 +136,7 @@ const DUMMY_PASSWORD_HASH = await hashPassword("timing-equalizer-password");
 // ---------------------------------------------------------------------------
 // Token helpers
 // ---------------------------------------------------------------------------
-const mintAccessToken = (user) => {
+const mintAccessToken = (user, ttlSeconds = env.JWT_EXPIRES_IN) => {
   const jti = randomUUID();
   const ver = Number(user.token_version ?? 1);
   const token = jsonwebtoken.sign(
@@ -142,7 +144,7 @@ const mintAccessToken = (user) => {
     normalizePem(env.JWT_PRIVATE_KEY),
     {
       algorithm: "RS256",
-      expiresIn: env.JWT_EXPIRES_IN,
+      expiresIn: ttlSeconds,
       issuer: env.JWT_ISSUER,
       audience: env.JWT_AUDIENCE,
       jwtid: jti,
@@ -152,14 +154,14 @@ const mintAccessToken = (user) => {
     token,
     jti,
     ver,
-    expiresAt: new Date(Date.now() + env.JWT_EXPIRES_IN * 1000),
+    expiresAt: new Date(Date.now() + ttlSeconds * 1000),
   };
 };
 
 /** Persist the jti before returning the token. The gateway refuses any signed
  * token without a matching, unrevoked record at the current generation. */
-async function issueAccessToken(user, executor = pool) {
-  const issued = mintAccessToken(user);
+async function issueAccessToken(user, executor = pool, ttlSeconds = env.JWT_EXPIRES_IN) {
+  const issued = mintAccessToken(user, ttlSeconds);
   await executor.query(
     `INSERT INTO auth_access_tokens (jti, user_id, token_version, expires_at)
      VALUES ($1, $2, $3, $4)`,
@@ -548,6 +550,48 @@ app.get("/v1/auth/me", async (req, reply) => {
     req.log.error({ err }, "user lookup failed");
     return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "could not load user");
   }
+});
+
+/**
+ * Operator launch sessions. The crash service verifies the operator's API key
+ * and signature, then asks auth (the only holder of JWT_PRIVATE_KEY) to mint a
+ * normal RS256 access token. It is registered in auth_access_tokens with a jti
+ * and generation, so the gateway accepts it exactly like a login token and can
+ * revoke it. No operator-supplied claim is trusted as identity.
+ */
+app.post("/internal/auth/session", async (req, reply) => {
+  if (!serviceTokenOk(req.headers, env.AUTH_SESSION_SERVICE_TOKEN))
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
+  const parsed = z.object({
+    userId: z.string().min(1).max(128),
+    // Operator launches are short-lived; never mint a full-length login token
+    // from an internal session endpoint.
+    ttlSeconds: z.coerce.number().int().min(60).max(300).default(300),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  }).safeParse(req.body);
+  if (!parsed.success) return validationError(reply, parsed);
+  const result = await pool.query(
+    `SELECT id, username, token_version FROM auth_users WHERE id = $1`,
+    [parsed.data.userId],
+  );
+  if (!result.rowCount) return deny(reply, 404, ERROR_CODES.NOT_FOUND, "player not found");
+  // An operator may launch only an ordinary player session. Without this
+  // check, anyone holding the operator key could mint a token for an admin
+  // and inherit privileged roles on the platform.
+  const privileged = await pool.query(
+    `SELECT role FROM admin_user_roles WHERE user_id = $1 AND role <> 'player'`,
+    [parsed.data.userId],
+  );
+  if (privileged.rowCount)
+    return deny(reply, 403, ERROR_CODES.FORBIDDEN, "operator sessions cannot target a privileged account");
+  const issued = await issueAccessToken(result.rows[0], pool, parsed.data.ttlSeconds);
+  return ok(reply, 201, {
+    token: issued.token,
+    jti: issued.jti,
+    expiresAt: issued.expiresAt.toISOString(),
+    userId: String(result.rows[0].id),
+    metadata: parsed.data.metadata ?? {},
+  }, reqId(req));
 });
 
 app.get("/health", async () => ({ status: "ok", service: "auth" }));

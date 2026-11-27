@@ -69,6 +69,9 @@ export interface ContextDataType {
   crash: CrashState;
   audit: AuditReport | null;
   permissions: string[];
+  // Language requested by an operator launch URL. Non-sensitive UI state; the
+  // launch token itself is never persisted or mirrored into context.
+  operatorLanguage: string | null;
   ready: boolean;
   streamReady: boolean;
   lastSeq: number;
@@ -142,6 +145,7 @@ const initialState: ContextDataType = {
   crash: { round: null, myBet: null, history: [] },
   audit: null,
   permissions: [],
+  operatorLanguage: null,
   ready: false,
   streamReady: false,
   lastSeq: 0,
@@ -517,6 +521,41 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     let cancelled = false;
     const generation = authGenerationRef.current;
     clearLegacyTokens();
+
+    // An operator launch carries a short-lived, gateway-valid access token in
+    // the URL. Strip it before any fetch or navigation so it never reaches
+    // browser history or a Referer header, then verify it through /auth/me.
+    // Operator-supplied identity claims are never trusted: only auth's own
+    // validation can establish the session.
+    const params = new URLSearchParams(window.location.search);
+    const launchToken = params.get('token');
+    if (launchToken) {
+      const language = params.get('lang')?.slice(0, 16) ?? null;
+      params.delete('token');
+      params.delete('v');
+      params.delete('lang');
+      const query = params.toString();
+      window.history.replaceState(
+        null, '',
+        `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`,
+      );
+      void (async () => {
+        try {
+          const identity = await apiRequest<{ user: User }>('/auth/me', { token: launchToken });
+          if (cancelled || !isCurrent(null, generation) || !identity?.user) return;
+          const nextGeneration = setIdentity(launchToken, identity.user);
+          if (language) updateIfCurrent(launchToken, nextGeneration, { operatorLanguage: language });
+        } catch {
+          // An expired or forged launch fails closed to the anonymous view.
+        } finally {
+          // setIdentity starts a new generation, so the bootstrap generation is
+          // intentionally not checked here: the launch session is ready now.
+          if (!cancelled) update({ ready: true });
+        }
+      })();
+      return () => { cancelled = true; };
+    }
+
     if (!hasSessionHint()) {
       update({ ready: true });
       return;
@@ -533,7 +572,7 @@ export const Provider = ({ children }: { children: React.ReactNode }) => {
     return () => {
       cancelled = true;
     };
-  }, [isCurrent, refreshSession, setIdentity, update]);
+  }, [isCurrent, refreshSession, setIdentity, update, updateIfCurrent]);
 
   // Durable event stream. Fetch is used instead of EventSource because the
   // gateway requires an Authorization header on every event request.

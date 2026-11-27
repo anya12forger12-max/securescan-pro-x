@@ -324,7 +324,7 @@ app.post("/internal/events", async (req, reply) => {
   if (!parsed.success)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
 
-  const payload = sanitizePayload(parsed.data.payload ?? {});
+  const payload = sanitizePayload(parsed.data.payload ?? {}, parsed.data.topic);
   const client = await pool.connect();
   try {
     const result = await client.query(

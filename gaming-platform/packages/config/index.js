@@ -24,6 +24,8 @@ export const capabilityTokenFields = {
   REALTIME_SERVICE_TOKEN: internalToken("REALTIME_SERVICE_TOKEN"),
   PROMOTIONS_SERVICE_TOKEN: internalToken("PROMOTIONS_SERVICE_TOKEN"),
   CRASH_SERVICE_TOKEN: internalToken("CRASH_SERVICE_TOKEN"),
+  // Only the crash service may ask auth to mint an operator-launch session.
+  AUTH_SESSION_SERVICE_TOKEN: internalToken("AUTH_SESSION_SERVICE_TOKEN"),
   ADMIN_BOOTSTRAP_TOKEN: internalToken("ADMIN_BOOTSTRAP_TOKEN"),
 };
 

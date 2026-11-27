@@ -28,3 +28,34 @@ test("publicEvent redacts stored payloads on read", () => {
   });
   assert.deepEqual(event.payload, { mode: "real" });
 });
+
+test("session identifiers are redacted from operator launch events", () => {
+  const payload = sanitizePayload({
+    operatorId: "op-1",
+    playerId: "victim",
+    jti: "session-jti",
+    token: "signed-token",
+    accessToken: "another-token",
+    mode: "real",
+  }, "crash.operator_launch");
+  assert.deepEqual(payload, { mode: "real" });
+});
+
+test("masked crash feed rows keep only their public top-level fields", () => {
+  const payload = sanitizePayload({
+    betId: "bet-1",
+    stake: "10",
+    mult: 1.5,
+    payout: "15",
+    user: "v***",
+    nested: { payout: "secret", referenceId: "ref-1" },
+  }, "crash.bet");
+  assert.deepEqual(payload, {
+    betId: "bet-1",
+    stake: "10",
+    mult: 1.5,
+    payout: "15",
+    user: "v***",
+    nested: {},
+  });
+});

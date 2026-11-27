@@ -16,13 +16,21 @@ import {
 } from "@gp/config";
 import { ERROR_CODES, boundedInt, moneyMul, serviceTokenOk, toMoney } from "@gp/shared-types";
 import {
+  CLIENT_SEED_ALGORITHM,
+  FAIRNESS_ALGORITHM,
   PHASES,
+  PROTOCOL_VERSION,
   buildFeed,
   buildSnapshot,
+  crashPointFromRound,
+  epochMs,
   maskPlayer,
   normalisePanel,
   phaseForRound,
+  pointFromUnit,
+  sanitizeSnapshot,
   verifyFairness,
+  verifyRoundFairness,
 } from "@gp/aviator";
 import {
   NONCE_TTL_SECONDS,
@@ -31,6 +39,12 @@ import {
   operatorRoute,
   verifyOperatorSignatureV2,
 } from "./operator-auth.js";
+
+// Re-exported for the strategy-lab tests and for scripts that import the
+// generator directly. The implementation now lives in @gp/aviator so the
+// engine and the public verifier share one formula.
+export { pointFromUnit };
+const crashPointFor = crashPointFromRound;
 
 /**
  * Unified Aviator/crash service (3023).
@@ -57,6 +71,7 @@ const envSchema = baseEnvSchema.extend({
   // Production injects capability-scoped wallet tokens only. The full-access
   // token stays optional purely as a mixed-version local-run fallback and is
   // never sent on the wire when a scoped credential is available.
+  ...capabilityFields("AUTH_SESSION_SERVICE_TOKEN"),
   WALLET_SERVICE_TOKEN: z.string().min(32).optional(),
   WALLET_DEBIT_SERVICE_TOKEN: z.string().min(32).optional(),
   WALLET_WIN_SERVICE_TOKEN: z.string().min(32).optional(),
@@ -68,6 +83,7 @@ const envSchema = baseEnvSchema.extend({
   WALLET_INTERNAL_URL: z.string().url().default("http://wallet:3011"),
   REALTIME_INTERNAL_URL: z.string().url().default("http://realtime:3010"),
   RESPONSIBLE_GAMING_URL: z.string().url().default("http://responsible-gaming:3012"),
+  AUTH_INTERNAL_URL: z.string().url().default("http://auth:3015"),
   BETTING_WINDOW_MS: z.coerce.number().int().min(1000).max(120000).default(8000),
   ROUND_GAP_MS: z.coerce.number().int().min(250).max(60000).default(2500),
   DOUBLING_SECONDS: z.coerce.number().positive().min(0.5).max(30).default(3),
@@ -85,8 +101,19 @@ const envSchema = baseEnvSchema.extend({
   // Temporary migration switch for operators still sending the old
   // body-only `x-signature`. It is opt-in: new deployments require v2.
   OPERATOR_ALLOW_LEGACY_SIGNATURES: z.string().optional().default("false"),
+  // External operator wallet. Both values are required or neither is used;
+  // a single configured value is rejected at boot so calls cannot fall back to
+  // the internal ledger with an unsigned request.
+  OPERATOR_WALLET_URL: z.preprocess((v) => v || undefined, z.string().url().optional()),
+  OPERATOR_WALLET_SECRET: z.preprocess((v) => v || undefined, z.string().min(32).optional()),
 });
 const env = loadEnv(envSchema);
+if (Boolean(env.OPERATOR_WALLET_URL) !== Boolean(env.OPERATOR_WALLET_SECRET)) {
+  throw new Error("OPERATOR_WALLET_URL and OPERATOR_WALLET_SECRET must be configured together");
+}
+if (env.OPERATOR_WALLET_URL && new URL(env.OPERATOR_WALLET_URL).protocol !== "https:") {
+  throw new Error("OPERATOR_WALLET_URL must use https");
+}
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 
 // Deadlines are derived from persisted timestamps, never from process timers
@@ -97,6 +124,16 @@ const UNSETTLED_RECONCILE_MS = 2000;
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
 await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
 await app.register(jwt, jwtVerifyPluginOptions(env));
+
+// Keep the exact JSON bytes for operator signature verification. The spec
+// signs the raw body; the local canonical form remains accepted for clients
+// that already use it. An empty body is treated as `{}` rather than a parse
+// error so optional-body routes keep working.
+app.addContentTypeParser("application/json", { parseAs: "string" }, (req, body, done) => {
+  req.rawBody = body;
+  if (!body.trim()) { done(null, {}); return; }
+  try { done(null, JSON.parse(body)); } catch (err) { done(err); }
+});
 
 app.addHook("onRequest", async (req, reply) => {
   const requestId = req.headers["x-request-id"] ?? randomUUID();
@@ -112,20 +149,85 @@ const headerString = (headers, name) =>
 const reqId = (req) => String(req.headers["x-request-id"] ?? "");
 const ok = (reply, status, data) =>
   reply.code(status).send({ request_id: String(reply.getHeader("x-request-id") ?? ""), success: true, data });
-const deny = (reply, status, code, message, details) =>
-  reply.code(status).send({
-    request_id: String(reply.getHeader("x-request-id") ?? ""),
-    error: details === undefined ? { code, message } : { code, message, details },
+const deny = (reply, status, code, message, details) => {
+  const requestId = String(reply.getHeader("x-request-id") ?? "");
+  return reply.code(status).send({
+    request_id: requestId,
+    error: {
+      code,
+      message,
+      requestId,
+      ...(details === undefined ? {} : { details }),
+    },
   });
+};
+
+/** Money-affecting requests carry a client reqId. Persisting the first
+ * response lets a retry after a lost HTTP reply return the original result
+ * instead of a misleading "already bet"/"already cashed out" error. */
+async function replayRequest(userId, requestId, kind) {
+  if (!requestId || !userId) return null;
+  const result = await pool.query(
+    `SELECT status, body FROM crash_requests
+      WHERE user_id = $1 AND req_id = $2 AND kind = $3`,
+    [userId, requestId, kind],
+  );
+  if (!result.rowCount) return null;
+  // Status 0 is a committed placeholder written before any wallet call. A
+  // retry must continue into the existing claim, never short-circuit on it.
+  if (result.rows[0].status === 0) return { pending: true };
+  return { status: result.rows[0].status, body: result.rows[0].body };
+}
+
+/** Claim the reqId before moving money. If the process dies after a wallet
+ * debit/credit but before the success response is cached, a retry sees the
+ * placeholder and replays the same persisted claim instead of a fresh wager. */
+async function markRequestPending(userId, requestId, kind) {
+  if (!requestId || !userId) return;
+  await pool.query(
+    `INSERT INTO crash_requests (user_id, req_id, kind, status, body)
+      VALUES ($1, $2, $3, 0, '{}'::jsonb) ON CONFLICT (user_id, req_id, kind) DO NOTHING`,
+    [userId, requestId, kind],
+  );
+}
+
+async function rememberRequest(userId, requestId, kind, status, body) {
+  if (!requestId || !userId) return;
+  await pool.query(
+    `INSERT INTO crash_requests (user_id, req_id, kind, status, body)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (user_id, req_id, kind) DO UPDATE SET status = EXCLUDED.status, body = EXCLUDED.body`,
+    [userId, requestId, kind, status, JSON.stringify(body)],
+  );
+}
+
+/** Aviator protocol error vocabulary from the API design document. Shared
+ * ERROR_CODES stay in place for non-game routes and for backwards compatibility. */
+const AV = Object.freeze({
+  NOT_IN_BETTING_PHASE: "NOT_IN_BETTING_PHASE",
+  INSUFFICIENT_FUNDS: "INSUFFICIENT_FUNDS",
+  BET_LIMIT_EXCEEDED: "BET_LIMIT_EXCEEDED",
+  DUPLICATE_REQUEST: "DUPLICATE_REQUEST",
+  ROUND_CRASHED: "ROUND_CRASHED",
+  PLAYER_BLOCKED: "PLAYER_BLOCKED",
+  WALLET_UNAVAILABLE: "WALLET_UNAVAILABLE",
+  VALIDATION_FAILED: "VALIDATION_FAILED",
+});
 
 /** Operator calls carry an API key and a v2 signature over method, route,
  * parameters, timestamp and nonce. Nonces are consumed atomically in the
- * database so a captured request cannot be replayed. */
+ * database so a captured request cannot be replayed. The PDF's Bearer key
+ * header is accepted alongside `x-api-key`; both must match the configured
+ * key exactly. */
 async function operatorAuthorised(req) {
-  const key = req.headers["x-api-key"];
-  const legacySignature = req.headers["x-signature"];
+  const bearer = typeof req.headers.authorization === "string"
+    && req.headers.authorization.startsWith("Bearer ")
+    ? req.headers.authorization.slice(7).trim()
+    : null;
+  const key = headerString(req.headers, "x-api-key") ?? bearer;
+  const legacySignature = headerString(req.headers, "x-signature");
   if (!env.OPERATOR_API_KEY || !env.OPERATOR_API_SECRET) return false;
-  if (typeof key !== "string") return false;
+  if (!key) return false;
   const keyA = Buffer.from(key);
   const keyB = Buffer.from(env.OPERATOR_API_KEY);
   if (keyA.length !== keyB.length || !timingSafeEqual(keyA, keyB)) return false;
@@ -167,12 +269,15 @@ async function operatorAuthorised(req) {
     env.OPERATOR_ALLOW_LEGACY_SIGNATURES === "true" &&
     typeof legacySignature === "string"
   ) {
-    const expected = createHmac("sha256", env.OPERATOR_API_SECRET)
-      .update(canonicalJson(req.body ?? {})).digest("hex");
-    const allowed = constantTimeEqualHex(legacySignature, expected);
-    if (allowed) {
-      app.log.warn("legacy operator signature used; migrate to x-signature-v2");
-    }
+    const secret = env.OPERATOR_API_SECRET;
+    const candidates = [
+      typeof req.rawBody === "string" ? req.rawBody : null,
+      canonicalJson(req.body ?? {}),
+      JSON.stringify(req.body ?? {}),
+    ];
+    const allowed = candidates.some((body) =>
+      body !== null && constantTimeEqualHex(legacySignature, createHmac("sha256", secret).update(body).digest("hex")));
+    if (allowed) app.log.warn("legacy operator signature used; migrate to x-signature-v2");
     return allowed;
   }
   return false;
@@ -202,27 +307,6 @@ async function requestUserId(req) {
 // ---------------------------------------------------------------------------
 // Provably fair round generation
 // ---------------------------------------------------------------------------
-
-function hmacUnit(serverSeed, roundId) {
-  const digest = createHmac("sha256", serverSeed).update(roundId).digest();
-  return digest.readUInt32BE(0) / 0x100000000;
-}
-
-/** Turn a uniform unit value into a crash point. Shared by live rounds and
- * the strategy lab so both use exactly the same distribution. */
-export function pointFromUnit(u, houseEdge, maxMultiplier) {
-  if (u < houseEdge) return 1;
-  const normalised = (u - houseEdge) / (1 - houseEdge);
-  // 1/(1-p) gives the familiar heavy tail: most rounds end near 1-2x, with
-  // rare long flights. Clamp before rounding so the published value is exact.
-  const raw = Math.min(maxMultiplier, 1 / (1 - normalised * 0.99));
-  return Math.max(1, Math.floor(raw * 100) / 100);
-}
-
-/** Deterministic, verifiable crash point derived from (serverSeed, roundId). */
-export function crashPointFor(serverSeed, roundId, houseEdge, maxMultiplier) {
-  return pointFromUnit(hmacUnit(serverSeed, roundId), houseEdge, maxMultiplier);
-}
 
 function multiplierAt(elapsedMs, doublingSeconds = env.DOUBLING_SECONDS) {
   return Math.pow(2, Math.max(0, elapsedMs) / (doublingSeconds * 1000));
@@ -287,14 +371,22 @@ function verifyRound(round) {
   const crashPoint = Number(round.crash_point);
   if (!round.server_seed || !Number.isFinite(crashPoint) || crashPoint <= 0) return null;
   const { houseEdge, maxMultiplier } = roundConfig(round);
-  const expected = crashPointFor(round.server_seed, round.id, houseEdge, maxMultiplier);
-  return {
+  const proof = verifyRoundFairness({
     serverSeed: round.server_seed,
-    seedHash: createHash("sha256").update(round.server_seed).digest("hex"),
+    roundId: round.id,
+    seedHash: round.seed_hash,
     crashPoint,
     houseEdge,
     maxMultiplier,
-    valid: Math.abs(expected - crashPoint) < 0.001,
+  });
+  return {
+    serverSeed: round.server_seed,
+    seedHash: proof.seedHash,
+    crashPoint: proof.crashPoint,
+    houseEdge,
+    maxMultiplier,
+    valid: proof.valid,
+    algorithm: proof.algorithm,
   };
 }
 
@@ -311,19 +403,32 @@ function publicRound(row) {
     bettingEndsAt: row.status === "betting" && row.created_at
       ? new Date(new Date(row.created_at).getTime() + env.BETTING_WINDOW_MS).toISOString()
       : null,
+    // Protocol v1 uses epoch milliseconds. ISO fields stay for older clients.
+    createdAtMs: epochMs(row.created_at),
+    startedAtMs: epochMs(row.started_at),
+    bettingEndsAtMs: row.status === "betting" && row.created_at
+      ? epochMs(row.created_at) + env.BETTING_WINDOW_MS
+      : null,
     flightStart: row.started_at ?? null,
+    flightStartMs: epochMs(row.started_at),
     // The client renders the same exponential curve the server pays.
     doublingSeconds: roundConfig(row).doublingSeconds,
     maxMultiplier: roundConfig(row).maxMultiplier,
     houseEdge: roundConfig(row).houseEdge,
     phases: PHASES,
   };
-  if (row.status === "finished" || row.status === "cancelled") {
+  // A cancelled round was never played. Its committed point and seed stay
+  // sealed forever: publishing them would disclose an outcome no player could
+  // ever have bet on and would let a client replay it against another round.
+  if (row.status === "finished") {
     Object.assign(out, {
       crashPoint: row.crash_point === null ? null : Number(row.crash_point),
       finishedAt: row.finished_at ?? null,
+      finishedAtMs: epochMs(row.finished_at),
       proof: verifyRound(row),
     });
+  } else if (row.status === "cancelled") {
+    Object.assign(out, { finishedAt: row.finished_at ?? null, finishedAtMs: epochMs(row.finished_at) });
   }
   return out;
 }
@@ -412,18 +517,11 @@ async function wageringAllowed(userId, amount) {
   // player's other operator-side settings and checked before any stake leaves
   // the wallet; clearing it is an explicit operator action.
   try {
-    const stored = await pool.query(
-      `SELECT user_id, settings FROM crash_player_settings WHERE user_id = $1 OR user_id = $2`,
-      [userId, "currency:INR"],
-    );
-    const player = stored.rows.find((row) => row.user_id === userId)?.settings ?? {};
-    const currency = stored.rows.find((row) => row.user_id === "currency:INR")?.settings ?? {};
-    if (player.blocked === true || currency.blocked === true) return false;
-    // Currency limits are the default; a player-specific limit overrides them.
-    const limits = { ...(currency.limits ?? {}), ...(player.limits ?? {}) };
+    const policy = await operatorPolicy(userId);
+    if (policy.blocked) return false;
     const stake = Number(amount);
-    if (Number.isFinite(Number(limits.minBet)) && stake < Number(limits.minBet)) return false;
-    if (Number.isFinite(Number(limits.maxBet)) && stake > Number(limits.maxBet)) return false;
+    if (Number.isFinite(Number(policy.limits.minBet)) && stake < Number(policy.limits.minBet)) return false;
+    if (Number.isFinite(Number(policy.limits.maxBet)) && stake > Number(policy.limits.maxBet)) return false;
   } catch (err) {
     app.log.warn({ err, userId }, "operator policy lookup failed; blocking wager");
     return false;
@@ -450,7 +548,101 @@ async function wageringAllowed(userId, amount) {
   }
 }
 
+/** Optional external operator wallet. When configured, the operator holds the
+ * funds and the provider signs every callback with the shared secret. The
+ * deterministic txId is the same claim key already used for the internal
+ * ledger, so a replay after a timeout cannot move money twice. */
+function operatorWalletCall(path, body) {
+  if (!env.OPERATOR_WALLET_URL || !env.OPERATOR_WALLET_SECRET) return null;
+  const txId = body.idempotencyKey;
+  const playerId = body.userId;
+  const currency = "INR";
+  if (path === "/internal/wallet/balance") {
+    return { endpoint: "/wallet/balance", payload: { txId, playerId, currency } };
+  }
+  if (path === "/internal/wallet/debit") {
+    return {
+      endpoint: "/wallet/debit",
+      payload: {
+        txId, playerId, currency,
+        roundId: body.referenceId,
+        betId: body.betId ?? txId,
+        amount: toMoney(body.amount),
+      },
+    };
+  }
+  if (path === "/internal/wallet/credit" && body.referenceType === "crash_refund") {
+    return {
+      endpoint: "/wallet/rollback",
+      payload: {
+        txId, originalTxId: body.originalTxId, reason: "ROUND_VOIDED", currency,
+      },
+    };
+  }
+  if (path === "/internal/wallet/credit") {
+    return {
+      endpoint: "/wallet/credit",
+      payload: {
+        txId, playerId, currency,
+        roundId: body.roundId ?? body.referenceId,
+        betId: body.referenceId,
+        amount: toMoney(body.amount),
+      },
+    };
+  }
+  return null;
+}
+
+async function operatorWalletRequest(path, body) {
+  const call = operatorWalletCall(path, body);
+  if (!call) throw new WalletRequestError("unsupported operator wallet call", 400, "VALIDATION_FAILED");
+  const raw = JSON.stringify(call.payload);
+  const signature = createHmac("sha256", env.OPERATOR_WALLET_SECRET).update(raw).digest("hex");
+  let response;
+  try {
+    response = await fetchWithTimeout(
+      `${env.OPERATOR_WALLET_URL.replace(/\/$/, "")}${call.endpoint}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-signature": signature,
+        },
+        body: raw,
+      },
+      5000,
+    );
+  } catch (err) {
+    // Same ambiguity rule as the internal ledger: the operator may have
+    // committed before the socket died, so replay the same txId.
+    throw new WalletAmbiguousError(`operator wallet request failed: ${err.message}`, 0, err.code);
+  }
+  const text = await response.text();
+  if (!response.ok) {
+    const ErrorClass = response.status >= 500 ? WalletAmbiguousError : WalletRequestError;
+    throw new ErrorClass(`operator wallet returned ${response.status}`, response.status);
+  }
+  const supplied = response.headers.get("x-signature");
+  if (supplied) {
+    const expected = createHmac("sha256", env.OPERATOR_WALLET_SECRET).update(text).digest("hex");
+    const a = Buffer.from(supplied.toLowerCase());
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !timingSafeEqual(a, b))
+      throw new WalletRequestError("operator wallet response signature invalid", 400, "INVALID_SIGNATURE");
+  }
+  let payload;
+  try { payload = text ? JSON.parse(text) : {}; } catch { throw new WalletAmbiguousError("operator wallet returned invalid JSON", 502); }
+  if (payload.status && payload.status !== "OK")
+    throw new WalletRequestError(payload.message ?? "operator wallet rejected the request", 409, payload.code);
+  return {
+    transaction: { idempotency_key: payload.txId ?? body.idempotencyKey },
+    balance: payload.balance ?? null,
+  };
+}
+
 async function walletRequest(path, body, scopedTokenValue) {
+  if (env.OPERATOR_WALLET_URL && env.OPERATOR_WALLET_SECRET)
+    return operatorWalletRequest(path, body);
   // Send only the narrow capability for this call. Peer containers no longer
   // receive the full wallet token, so there is nothing to fall back to; a
   // compromised crash process cannot escalate to arbitrary credit/debit types.
@@ -524,6 +716,7 @@ const walletDebit = (bet) =>
     amount: Number(bet.amount),
     referenceType: "crash_bet",
     referenceId: bet.round_id,
+    betId: bet.id,
     idempotencyKey: debitKey(bet),
   }, debitToken()));
 
@@ -534,6 +727,7 @@ const walletCredit = (bet, payout = Number(bet.payout)) =>
     type: "win",
     referenceType: "crash_bet",
     referenceId: bet.id,
+    roundId: bet.round_id,
     idempotencyKey: creditKey(bet),
   }, winToken()));
 
@@ -549,8 +743,115 @@ const walletRefund = (bet) =>
     type: "adjustment",
     referenceType: "crash_refund",
     referenceId: bet.id,
+    roundId: bet.round_id,
+    originalTxId: debitKey(bet),
     idempotencyKey: refundKey(bet),
   }, winToken()));
+
+/** Read-only balance lookup used by snapshots and balance events. A wallet
+ * outage must not break the game protocol, so failures return null here. */
+async function walletBalance(userId, authorization) {
+  try {
+    if (env.OPERATOR_WALLET_URL && env.OPERATOR_WALLET_SECRET) {
+      const result = await operatorWalletRequest("/internal/wallet/balance", {
+        idempotencyKey: randomUUID(), userId,
+      });
+      const source = result.balance;
+      const amount = Number(source?.amount ?? source?.balance ?? source);
+      const currency = String(source?.currency ?? "INR").slice(0, 8);
+      return Number.isFinite(amount) ? { amount: toMoney(amount), currency } : null;
+    }
+    const response = await fetchWithTimeout(
+      `${env.WALLET_INTERNAL_URL}/v1/wallet/balance`,
+      {
+        headers: {
+          "content-type": "application/json",
+          ...(authorization ? { authorization } : {}),
+          "x-user-id": userId,
+        },
+      },
+      3000,
+    );
+    if (!response.ok) return null;
+    const account = (await response.json())?.data?.account;
+    if (!account) return null;
+    const amount = Number(account.balance);
+    if (!Number.isFinite(amount)) return null;
+    return { amount: amount.toFixed(2), currency: account.currency ?? "INR" };
+  } catch {
+    return null;
+  }
+}
+
+/** Ask auth (the sole holder of the signing key) for a real access token that
+ * the gateway already trusts. The operator never supplies identity claims. */
+async function mintOperatorSession(userId, metadata) {
+  try {
+    const response = await fetchWithTimeout(
+      `${env.AUTH_INTERNAL_URL}/internal/auth/session`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-service-token": env.AUTH_SESSION_SERVICE_TOKEN,
+        },
+        body: JSON.stringify({ userId, ttlSeconds: 300, metadata }),
+      },
+      5000,
+    );
+    if (!response.ok) {
+      // Auth denies non-player targets. Surface that refusal to the operator
+      // instead of hiding it behind a generic upstream failure; all other
+      // upstream errors remain opaque and fail closed.
+      if (response.status === 403) {
+        return { error: [403, ERROR_CODES.FORBIDDEN, "operator sessions cannot target a privileged account"] };
+      }
+      return null;
+    }
+    return (await response.json())?.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** One deterministic policy read: currency defaults first, player overrides
+ * second, independent of SQL row order. Both the wager gate and the advertised
+ * limits use this so the UI never shows stakes the API will reject. */
+async function operatorPolicy(userId) {
+  const stored = await pool.query(
+    `SELECT user_id, settings FROM crash_player_settings WHERE user_id = $1 OR user_id = $2`,
+    [userId, "currency:INR"],
+  );
+  const player = stored.rows.find((row) => row.user_id === userId)?.settings ?? {};
+  const currency = stored.rows.find((row) => row.user_id === "currency:INR")?.settings ?? {};
+  return {
+    blocked: player.blocked === true || currency.blocked === true,
+    limits: { ...(currency.limits ?? {}), ...(player.limits ?? {}) },
+  };
+}
+
+/** Operator-configured limits override the global defaults for the player. */
+async function effectiveLimits(userId) {
+  const defaultLimits = {
+    minBet: env.MIN_BET,
+    maxBet: env.MAX_BET,
+    maxWin: env.MAX_BET * env.MAX_MULTIPLIER,
+  };
+  if (!userId) return defaultLimits;
+  try {
+    const { limits: merged } = await operatorPolicy(userId);
+    return {
+      minBet: Number.isFinite(Number(merged.minBet)) && Number(merged.minBet) > 0
+        ? Number(merged.minBet) : defaultLimits.minBet,
+      maxBet: Number.isFinite(Number(merged.maxBet)) && Number(merged.maxBet) > 0
+        ? Number(merged.maxBet) : defaultLimits.maxBet,
+      maxWin: Number.isFinite(Number(merged.maxWin)) && Number(merged.maxWin) > 0
+        ? Number(merged.maxWin) : defaultLimits.maxWin,
+    };
+  } catch {
+    return defaultLimits;
+  }
+}
 
 async function publish(topic, payload) {
   try {
@@ -687,7 +988,7 @@ async function reserveBet(roundId, userId, amount, autoCashout, sessionId, panel
     );
     if (!round.rowCount) {
       await client.query("ROLLBACK");
-      return { error: [409, ERROR_CODES.CONFLICT, "betting is closed for this round"] };
+      return { error: [409, AV.NOT_IN_BETTING_PHASE, "betting is closed for this round"] };
     }
     // A retry after an ambiguous response must reuse the original claim (and
     // therefore its wallet keys). Never DELETE and re-INSERT here: a fresh bet
@@ -814,7 +1115,7 @@ async function activateReservedBet(bet) {
   // Still pending: the debit succeeded but the round stopped accepting bets
   // before activation. This one genuinely owes the player their stake back.
   return {
-    error: [409, ERROR_CODES.CONFLICT, "betting is closed for this round"],
+    error: [409, AV.NOT_IN_BETTING_PHASE, "betting is closed for this round"],
     refund: status === "pending",
   };
 }
@@ -974,12 +1275,16 @@ async function finalizeCashout(bet) {
       throw new Error(`cash-out finalisation failed for bet ${bet.id}`);
     return payout;
   }
-  // Broadcast only public fields. Realtime versions before topic-aware
-  // redaction must not be able to leak another player's identity or payout.
+  // Only masked/public fields are broadcast. Realtime has a narrow allowlist
+  // for these exact keys on feed topics; everything else stays redacted.
   await publish("crash.cashout", {
     id: bet.id,
+    betId: bet.id,
     roundId: bet.round_id,
-    multiplier,
+    stake: Number(bet.amount).toFixed(2),
+    mult: multiplier.toFixed(2),
+    payout: payout.toFixed(2),
+    user: maskPlayer(bet.user_id),
   });
   return payout;
 }
@@ -1139,6 +1444,10 @@ async function finishRound(id, scheduleNext = true) {
     valid: proof?.valid ?? false,
     losers: losers.map((bet) => bet.id),
   });
+  // Canonical lifecycle: CRASHED -> SETTLING -> WAITING. Publishing settlement
+  // as its own event lets clients show the phase without changing the ledger
+  // status that all existing reconciliation queries rely on.
+  await publish("crash.round_settling", { id: round.id, status: "settling" });
   if (scheduleNext) later(() => createRound(), env.ROUND_GAP_MS);
 }
 
@@ -1163,8 +1472,11 @@ async function cancelRound(id, { allowRunning = false } = {}) {
   await publish("crash.round_cancelled", {
     id: round.id,
     seedHash: round.seed_hash,
-    crashPoint: round.crash_point === null ? null : Number(round.crash_point),
-    valid: verifyRound(round)?.valid ?? false,
+    // A voided round has no public outcome: never expose its seed or point and
+    // never let a client render it as an ordinary crash/loss.
+    crashPoint: null,
+    voided: true,
+    reason: "round_cancelled",
   });
   return round;
 }
@@ -1282,8 +1594,8 @@ async function tick() {
 
 async function stopAutoSession(session, reason) {
   await pool.query(
-    `UPDATE crash_auto_sessions SET status = 'stopped', updated_at = now()
-      WHERE id = $1 AND status = 'active'`, [session.id]);
+    `UPDATE crash_auto_sessions SET status = 'stopped', stop_reason = $2, updated_at = now()
+      WHERE id = $1 AND status = 'active'`, [session.id, reason]);
   await publish("crash.auto_stopped", { userId: session.user_id, panel: session.panel, reason });
 }
 
@@ -1314,6 +1626,13 @@ async function placeAutoBets(round) {
     if (Number.isFinite(Number(rules.singleWinAbove)) && best >= Number(rules.singleWinAbove)) {
       await stopAutoSession(session, "single_win_above");
       continue;
+    }
+    if (Number.isFinite(Number(rules.balanceBelow)) && Number(rules.balanceBelow) > 0) {
+      const balance = await walletBalance(session.user_id, null);
+      if (balance && Number(balance.amount) < Number(rules.balanceBelow)) {
+        await stopAutoSession(session, "balance_below");
+        continue;
+      }
     }
     if (!(await wageringAllowed(session.user_id, Number(session.stake)))) {
       await stopAutoSession(session, "player_blocked");
@@ -1349,7 +1668,9 @@ async function placeAutoBets(round) {
       [session.id, round.id],
     );
     await publish("crash.bet", {
-      id: activation.bet.id, roundId: round.id, panel: session.panel,
+      id: activation.bet.id, betId: activation.bet.id, roundId: round.id, panel: session.panel,
+      stake: Number(activation.bet.amount).toFixed(2),
+      user: maskPlayer(activation.bet.user_id),
       status: activation.bet.status, auto: true,
     });
   }
@@ -1419,10 +1740,16 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
   const parsed = BetSchema.safeParse(req.body);
   if (!parsed.success)
-    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+    return deny(reply, 422, AV.VALIDATION_FAILED, JSON.stringify(parsed.error.flatten()));
   const { amount, autoCashout, sessionId, panel, requestId } = parsed.data;
-  if (amount < env.MIN_BET || amount > env.MAX_BET)
-    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "bet amount out of range");
+  const prior = await replayRequest(userId, requestId, "bet");
+  if (prior && !prior.pending) {
+    reply.header("x-idempotent-replay", "1");
+    return reply.code(prior.status).send(prior.body);
+  }
+  const limits = await effectiveLimits(userId);
+  if (amount < limits.minBet || amount > limits.maxBet)
+    return deny(reply, 422, AV.BET_LIMIT_EXCEEDED, "bet amount out of range");
 
   // The two panels share a combined per-player stake limit for the round.
   const committed = await pool.query(
@@ -1431,20 +1758,23 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
         AND status IN ('pending','active','cashing_out','cashed_out')`,
     [req.params.id, userId, panel],
   );
-  if (Number(committed.rows[0]?.total ?? 0) + amount > env.MAX_BET)
-    return deny(reply, 422, "BET_LIMIT_EXCEEDED", "combined stake exceeds the round limit");
+  if (Number(committed.rows[0]?.total ?? 0) + amount > limits.maxBet)
+    return deny(reply, 422, AV.BET_LIMIT_EXCEEDED, "combined stake exceeds the round limit");
 
   // Fail-closed self-exclusion gate: no stake may be reserved for a player the
   // RG service has excluded (or cannot confirm is eligible).
   if (!(await wageringAllowed(userId, amount)))
-    return deny(reply, 403, ERROR_CODES.FORBIDDEN, "wagering is not allowed for this player");
+    return deny(reply, 403, AV.PLAYER_BLOCKED, "wagering is not allowed for this player");
 
   const roundResult = await pool.query(`SELECT * FROM crash_rounds WHERE id = $1`, [req.params.id]);
   const round = roundResult.rows[0];
   if (!round) return deny(reply, 404, ERROR_CODES.NOT_FOUND, "round not found");
   if (round.status !== "betting")
-    return deny(reply, 409, ERROR_CODES.CONFLICT, "betting is closed for this round");
+    return deny(reply, 409, AV.NOT_IN_BETTING_PHASE, "betting is closed for this round");
 
+  // Claim the request before any money moves so an interrupted reply can be
+  // reconciled against the same bet claim on retry.
+  await markRequestPending(userId, requestId, "bet");
   // Reservation and status guard are one DB transaction; the wallet debit
   // follows only once the bet row is durably committed as `pending`.
   const reserved = await reserveBet(round.id, userId, amount, autoCashout, sessionId, panel);
@@ -1463,13 +1793,13 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
       await pool.query(
         `UPDATE crash_bets SET status = 'cancelled', settled_at = now()
           WHERE id = $1 AND status = 'pending'`, [bet.id]);
-      return deny(reply, 409, ERROR_CODES.CONFLICT, "insufficient balance");
+      return deny(reply, 402, AV.INSUFFICIENT_FUNDS, "insufficient balance");
     }
     req.log.error({ err, betId: bet.id }, "crash bet debit is ambiguous");
     return deny(
       reply,
       503,
-      ERROR_CODES.SERVICE_UNAVAILABLE,
+      AV.WALLET_UNAVAILABLE,
       "bet is pending; retry this request to reconcile",
       { idempotencyKey: debitKey(bet), betId: bet.id, ambiguous: err instanceof WalletAmbiguousError },
     );
@@ -1489,23 +1819,35 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
     return deny(reply, ...activation.error);
   }
   bet = activation.bet;
-  await publish("crash.bet", {
-    id: bet.id,
-    roundId: round.id,
-    panel: bet.panel,
-    status: bet.status,
-  });
-  return ok(reply, activation.replay ? 200 : 201, {
-    bet: {
-      betId: bet.id,
+  if (!activation.replay) {
+    await publish("crash.bet", {
       id: bet.id,
-      reqId: requestId ?? null,
+      betId: bet.id,
+      roundId: round.id,
       panel: bet.panel,
-      amount: Number(bet.amount),
-      autoCashout: bet.auto_cashout === null ? null : Number(bet.auto_cashout),
+      stake: Number(bet.amount).toFixed(2),
+      user: maskPlayer(bet.user_id),
       status: bet.status,
+    });
+  }
+  const body = {
+    request_id: String(reply.getHeader("x-request-id") ?? ""),
+    success: true,
+    data: {
+      bet: {
+        betId: bet.id,
+        id: bet.id,
+        reqId: requestId ?? null,
+        panel: bet.panel,
+        amount: toMoney(bet.amount),
+        autoCashout: bet.auto_cashout === null ? null : toMoney(bet.auto_cashout),
+        status: bet.status,
+      },
     },
-  });
+  };
+  const responseStatus = activation.replay ? 200 : 201;
+  await rememberRequest(userId, requestId, "bet", responseStatus, body);
+  return reply.code(responseStatus).send(body);
 });
 
 const CashoutSchema = z.object({
@@ -1520,8 +1862,14 @@ app.post("/v1/crash/rounds/:id/cashout", async (req, reply) => {
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
   const requested = CashoutSchema.safeParse(req.body ?? {});
   if (!requested.success)
-    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(requested.error.flatten()));
-  const { panel, betId } = requested.data;
+    return deny(reply, 422, AV.VALIDATION_FAILED, JSON.stringify(requested.error.flatten()));
+  const { panel, betId, requestId } = requested.data;
+  const prior = await replayRequest(userId, requestId, "cashout");
+  if (prior && !prior.pending) {
+    reply.header("x-idempotent-replay", "1");
+    return reply.code(prior.status).send(prior.body);
+  }
+  await markRequestPending(userId, requestId, "cashout");
   let payout;
   let pendingBet = null;
   try {
@@ -1544,29 +1892,32 @@ app.post("/v1/crash/rounds/:id/cashout", async (req, reply) => {
       // An interrupted credit can be finalized even after the round ends.
       if (bet.status === "cashing_out") {
         const value = await finalizeCashout(bet);
-        return { value, multiplier: Number(bet.cashout_at) };
+        return { value, multiplier: Number(bet.cashout_at), betId: bet.id, panel: bet.panel };
       }
       if (bet.status === "cashed_out")
         return { error: [409, ERROR_CODES.CONFLICT, "already cashed out"] };
       // Status, deadline and bet state are re-checked under Postgres row locks
       // inside cashoutBet; these reads only shape the user-facing error.
       if (round.status !== "running")
-        return { error: [409, ERROR_CODES.CONFLICT, "round is not running"] };
+        return { error: [409, AV.ROUND_CRASHED, "round is not running"] };
       const multiplier = liveMultiplier(round);
       if (multiplier === null || multiplier < 1.01)
-        return { error: [409, ERROR_CODES.CONFLICT, "cash-out is not available"] };
+        return { error: [409, AV.ROUND_CRASHED, "cash-out is not available"] };
       const outcome = await cashoutBet(bet, undefined, { userId });
       if (outcome?.error) return { error: outcome.error };
       if (!outcome || outcome.pending)
         return { error: [409, ERROR_CODES.CONFLICT, "bet is no longer active"] };
-      return { value: outcome.payout, multiplier: outcome.multiplier };
+      return {
+        value: outcome.payout, multiplier: outcome.multiplier,
+        betId: bet.id, panel: bet.panel,
+      };
     });
   } catch (err) {
     req.log.error({ err }, "crash cash-out is ambiguous");
     return deny(
       reply,
       503,
-      ERROR_CODES.SERVICE_UNAVAILABLE,
+      AV.WALLET_UNAVAILABLE,
       "cash-out could not be confirmed; retry this request to reconcile",
       {
         idempotencyKey: pendingBet ? creditKey(pendingBet) : null,
@@ -1576,7 +1927,18 @@ app.post("/v1/crash/rounds/:id/cashout", async (req, reply) => {
     );
   }
   if (payout.error) return deny(reply, payout.error[0], payout.error[1], payout.error[2]);
-  return ok(reply, 200, { payout: payout.value, multiplier: payout.multiplier });
+  const body = {
+    request_id: String(reply.getHeader("x-request-id") ?? ""),
+    success: true,
+    data: {
+      payout: toMoney(payout.value), multiplier: toMoney(payout.multiplier),
+      betId: payout.betId ?? null,
+      panel: payout.panel === 1 || payout.panel === 2 ? payout.panel : null,
+      reqId: requestId ?? null,
+    },
+  };
+  await rememberRequest(userId, requestId, "cashout", 200, body);
+  return reply.code(200).send(body);
 });
 
 app.get("/v1/crash/me/bets", async (req, reply) => {
@@ -1605,7 +1967,7 @@ app.get("/v1/crash/snapshot", async (req, reply) => {
       ORDER BY created_at DESC LIMIT 1`,
   );
   const history = await pool.query(
-    `SELECT crash_point FROM crash_rounds WHERE status IN ('finished','cancelled')
+    `SELECT crash_point FROM crash_rounds WHERE status = 'finished'
         AND crash_point IS NOT NULL
       ORDER BY finished_at DESC NULLS LAST, created_at DESC LIMIT $1`,
     [boundedInt(req.query.limit, 20, 1, 100)],
@@ -1620,34 +1982,73 @@ app.get("/v1/crash/snapshot", async (req, reply) => {
     );
     myBets = bets.rows;
   }
+  const [balance, limits] = await Promise.all([
+    userId ? walletBalance(userId, req.headers.authorization) : Promise.resolve(null),
+    effectiveLimits(userId),
+  ]);
   return ok(reply, 200, {
-    snapshot: buildSnapshot({
+    // The socket boundary applies sanitizeSnapshot again; keeping the filter
+    // here too means REST clients cannot read a committed outcome early.
+    snapshot: sanitizeSnapshot(buildSnapshot({
       round: current.rows[0] ?? null,
+      balance,
       myBets,
       history: history.rows.map((row) => Number(row.crash_point)),
-      limits: { minBet: env.MIN_BET, maxBet: env.MAX_BET, maxWin: env.MAX_MULTIPLIER * env.MAX_BET },
+      limits,
       serverTime: Date.now(),
       bettingWindowMs: env.BETTING_WINDOW_MS,
-    }),
+    })),
   });
 });
 
 const FairnessSchema = z.object({
   serverSeed: z.string().min(1).max(256),
+  // Live rounds are committed from (serverSeed, roundId). The client-seed
+  // construction is still accepted for clients verifying older proofs.
+  roundId: z.string().max(128).optional(),
   clientSeed: z.string().max(256).optional().default(""),
   seedHash: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   crashPoint: z.coerce.number().positive().optional(),
-  edge: z.coerce.number().min(0).max(0.5).optional().default(0.03),
+  // `edge` is the legacy client-seed parameter. Live rounds use the persisted
+  // house edge from /v1/crash/rules, exposed here as `houseEdge`.
+  edge: z.coerce.number().min(0).max(0.5).optional(),
+  houseEdge: z.coerce.number().min(0).max(0.5).optional(),
+  maxMultiplier: z.coerce.number().positive().max(10000).optional(),
+  algorithm: z.enum([FAIRNESS_ALGORITHM, CLIENT_SEED_ALGORITHM]).optional(),
 });
 
 app.post("/v1/crash/fairness/verify", async (req, reply) => {
   const parsed = FairnessSchema.safeParse(req.body);
   if (!parsed.success)
-    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
-  const { serverSeed, clientSeed, seedHash, crashPoint, edge } = parsed.data;
-  return ok(reply, 200, {
-    verification: verifyFairness({ serverSeed, clientSeed, seedHash, crashPoint, edge }),
-  });
+    return deny(reply, 422, AV.VALIDATION_FAILED, JSON.stringify(parsed.error.flatten()));
+  const input = parsed.data;
+  // Without a roundId (and without an explicit live algorithm) the caller is
+  // verifying a legacy client-seed proof. An empty clientSeed is valid for
+  // those rounds, so it must not silently route the call into the live path.
+  const useClientSeed = input.algorithm === CLIENT_SEED_ALGORITHM
+    || (!input.roundId && input.algorithm !== FAIRNESS_ALGORITHM);
+  let persistedConfig = null;
+  if (!useClientSeed && input.roundId) {
+    const round = await pool.query(
+      `SELECT * FROM crash_rounds WHERE id = $1`, [input.roundId],
+    );
+    if (round.rowCount) persistedConfig = roundConfig(round.rows[0]);
+  }
+  const verification = useClientSeed
+    ? verifyFairness({ ...input, edge: input.edge ?? 0.03 })
+    : verifyRoundFairness({
+        serverSeed: input.serverSeed,
+        roundId: input.roundId,
+        seedHash: input.seedHash,
+        crashPoint: input.crashPoint,
+        // A round's committed configuration wins over current env values and
+        // caller overrides: old proofs stay verifiable after a config change.
+        houseEdge: persistedConfig?.houseEdge ?? input.houseEdge ?? input.edge ?? env.HOUSE_EDGE,
+        maxMultiplier: persistedConfig?.maxMultiplier ?? input.maxMultiplier ?? env.MAX_MULTIPLIER,
+      });
+  // Documented fields live at the top level of `data`; `verification` is kept
+  // as an alias for clients built against the previous envelope.
+  return ok(reply, 200, { ...verification, verification });
 });
 
 // Spec-aligned aliases over the same authoritative ledger.
@@ -1683,14 +2084,39 @@ app.get("/v1/crash/bets", async (req, reply) => {
   if (!userId)
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
   const limit = boundedInt(req.query.limit, 50, 1, 100);
+  const params = [userId, limit];
+  let where = `WHERE user_id = $1`;
+  if (typeof req.query.cursor === "string" && req.query.cursor) {
+    let cursor = null;
+    try { cursor = JSON.parse(Buffer.from(req.query.cursor, "base64url").toString("utf8")); } catch { /* legacy form below */ }
+    const legacy = typeof req.query.cursor === "string" ? Date.parse(req.query.cursor) : NaN;
+    const at = cursor?.createdAt ?? (Number.isFinite(legacy) ? new Date(legacy).toISOString() : null);
+    if (at) {
+      params.push(at, cursor?.id ?? "00000000-0000-0000-0000-000000000000");
+      where += ` AND (created_at < $3 OR (created_at = $3 AND id < $4))`;
+    }
+  }
   const result = await pool.query(
     `SELECT id, round_id, panel, amount, auto_cashout, cashout_at, payout, status, created_at, settled_at
-      FROM crash_bets WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
-    [userId, limit],
+      FROM crash_bets ${where} ORDER BY created_at DESC, id DESC LIMIT $2`, params,
   );
+  const last = result.rows[result.rows.length - 1];
   return ok(reply, 200, {
-    items: result.rows.map((bet) => ({ ...bet, betId: bet.id })),
-    nextCursor: result.rows.length === limit ? result.rows[result.rows.length - 1].id : null,
+    items: result.rows.map((bet) => ({
+      ...bet,
+      betId: bet.id,
+      roundId: bet.round_id,
+      stake: toMoney(bet.amount),
+      cashedAt: bet.cashout_at === null ? null : toMoney(bet.cashout_at),
+      payout: bet.payout === null ? null : toMoney(bet.payout),
+      createdAt: bet.created_at,
+    })),
+    nextCursor: last && result.rows.length === limit
+      ? Buffer.from(JSON.stringify({
+          createdAt: last.created_at.toISOString(),
+          id: last.id,
+        })).toString("base64url")
+      : null,
   });
 });
 
@@ -1699,7 +2125,10 @@ app.get("/v1/crash/bets/:id", async (req, reply) => {
   if (!userId)
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
   const result = await pool.query(
-    `SELECT b.*, r.seed_hash, r.server_seed, r.crash_point, r.finished_at,
+    `SELECT b.*, r.seed_hash,
+            CASE WHEN r.status = 'finished' THEN r.server_seed END AS server_seed,
+            CASE WHEN r.status = 'finished' THEN r.crash_point END AS crash_point,
+            r.finished_at, r.status AS round_status,
             r.house_edge, r.max_multiplier, r.doubling_seconds
       FROM crash_bets b JOIN crash_rounds r ON r.id = b.round_id
       WHERE b.id = $1 AND b.user_id = $2`,
@@ -1711,7 +2140,12 @@ app.get("/v1/crash/bets/:id", async (req, reply) => {
     bet: {
       ...bet,
       betId: bet.id,
-      proof: verifyRound({ ...bet, id: bet.round_id }),
+      // An active round's point is still a secret. Only settled rounds carry
+      // a verifiable proof; exposing it during BETTING would let the player
+      // cash out at the exact peak.
+      proof: bet.round_status === "finished"
+        ? verifyRound({ ...bet, id: bet.round_id })
+        : null,
     },
   });
 });
@@ -1746,16 +2180,19 @@ app.get("/v1/crash/stats/top", async (req, reply) => {
   });
 });
 
-app.get("/v1/crash/rules", async (_req, reply) => {
+app.get("/v1/crash/rules", async (req, reply) => {
+  const limits = await effectiveLimits(await requestUserId(req));
   return ok(reply, 200, {
     rules: {
       houseEdge: env.HOUSE_EDGE,
-      minBet: env.MIN_BET,
-      maxBet: env.MAX_BET,
+      minBet: limits.minBet,
+      maxBet: limits.maxBet,
+      maxWin: limits.maxWin,
       maxMultiplier: env.MAX_MULTIPLIER,
       doublingSeconds: env.DOUBLING_SECONDS,
       bettingWindowMs: env.BETTING_WINDOW_MS,
-      algorithm: "hmac-sha256-v1",
+      algorithm: FAIRNESS_ALGORITHM,
+      currency: "INR",
       text: "Bet during BETTING. Cash out before the server crash to win stake × multiplier. Auto cash-out is evaluated server-side on every tick.",
     },
   });
@@ -1799,6 +2236,14 @@ app.post("/v1/crash/rounds/:id/bets/:betId/cancel", async (req, reply) => {
   const userId = await requestUserId(req);
   if (!userId)
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
+  const requestId = typeof req.body?.requestId === "string"
+    ? req.body.requestId.slice(0, 128) : null;
+  const prior = await replayRequest(userId, requestId, "cancel");
+  if (prior && !prior.pending) {
+    reply.header("x-idempotent-replay", "1");
+    return reply.code(prior.status).send(prior.body);
+  }
+  await markRequestPending(userId, requestId, "cancel");
   const outcome = await serialized(async () => {
     const round = await pool.query(`SELECT status FROM crash_rounds WHERE id = $1`, [req.params.id]);
     if (!round.rowCount) return { error: [404, ERROR_CODES.NOT_FOUND, "round not found"] };
@@ -1815,7 +2260,13 @@ app.post("/v1/crash/rounds/:id/bets/:betId/cancel", async (req, reply) => {
     return { cancelled: true, betId: req.params.betId };
   });
   if (outcome.error) return deny(reply, ...outcome.error);
-  return ok(reply, 200, outcome);
+  const body = {
+    request_id: String(reply.getHeader("x-request-id") ?? ""),
+    success: true,
+    data: outcome,
+  };
+  await rememberRequest(userId, requestId, "cancel", 200, body);
+  return reply.code(200).send(body);
 });
 
 // ---------------------------------------------------------------------------
@@ -1839,7 +2290,8 @@ app.get("/v1/crash/auto", async (req, reply) => {
   if (!userId)
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
   const result = await pool.query(
-    `SELECT id, panel, stake, auto_cashout, rounds_left, stop_rules, status, last_round_id, created_at
+    `SELECT id, panel, stake, auto_cashout, rounds_left, stop_rules, stop_reason, status,
+       last_round_id, created_at
       FROM crash_auto_sessions WHERE user_id = $1 ORDER BY panel`, [userId]);
   return ok(reply, 200, { sessions: result.rows });
 });
@@ -1852,7 +2304,8 @@ app.post("/v1/crash/auto", async (req, reply) => {
   if (!parsed.success)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
   const { panel, amount, autoCashout, rounds, stopRules } = parsed.data;
-  if (amount < env.MIN_BET || amount > env.MAX_BET)
+  const limits = await effectiveLimits(userId);
+  if (amount < limits.minBet || amount > limits.maxBet)
     return deny(reply, 422, "BET_LIMIT_EXCEEDED", "bet amount out of range");
   await pool.query(
     `INSERT INTO crash_auto_sessions
@@ -1895,32 +2348,19 @@ app.get("/v1/crash/me", async (req, reply) => {
   const userId = await requestUserId(req);
   if (!userId)
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid user context");
-  let balance = null;
-  try {
-    const response = await fetchWithTimeout(
-      `${env.WALLET_INTERNAL_URL}/v1/wallet/balance`,
-      {
-        headers: {
-          "content-type": "application/json",
-          authorization: req.headers.authorization ?? "",
-          "x-user-id": userId,
-        },
-      },
-      3000,
-    );
-    if (response.ok) balance = (await response.json())?.data?.account ?? null;
-  } catch {
-    // Limits and identity still work when the wallet is briefly unavailable.
-  }
+  const [balance, limits] = await Promise.all([
+    walletBalance(userId, req.headers.authorization),
+    effectiveLimits(userId),
+  ]);
   return ok(reply, 200, {
     userId,
     username: req.headers["x-username"] ?? null,
     currency: "INR",
-    balance: balance ? { amount: Number(balance.balance).toFixed(2), currency: "INR" } : null,
+    balance,
     limits: {
-      minBet: toMoney(env.MIN_BET),
-      maxBet: toMoney(env.MAX_BET),
-      maxWin: toMoney(env.MAX_BET * env.MAX_MULTIPLIER),
+      minBet: toMoney(limits.minBet),
+      maxBet: toMoney(limits.maxBet),
+      maxWin: toMoney(limits.maxWin),
     },
   });
 });
@@ -1929,37 +2369,52 @@ app.post("/v1/crash/operator/launch", async (req, reply) => {
   if (!(await requireOperator(req, reply))) return undefined;
   const parsed = z.object({
     operatorId: z.string().min(1).max(64),
+    // The operator's player ID is the platform user ID: auth resolves it and
+    // mints the session, so no untrusted identity claim enters the gateway.
     playerId: z.string().min(1).max(128),
     currency: z.string().max(8).optional().default("INR"),
     mode: z.enum(["real", "demo"]).optional().default("real"),
+    language: z.string().max(16).optional().default("en"),
     returnUrl: z.string().url().optional(),
   }).safeParse(req.body);
   if (!parsed.success)
-    return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
+    return deny(reply, 422, AV.VALIDATION_FAILED, JSON.stringify(parsed.error.flatten()));
   const input = parsed.data;
-  // The launch token is opaque to the operator and never grants wallet access.
-  // It is derived from the same signed identity the gateway already trusts;
-  // operators exchange it for a session through their normal login flow.
-  const nonce = randomBytes(16).toString("hex");
-  const payload = Buffer.from(JSON.stringify({
-    operatorId: input.operatorId, playerId: input.playerId,
-    currency: input.currency, mode: input.mode, exp: Date.now() + 5 * 60_000, nonce,
-  })).toString("base64url");
-  const signature = createHmac("sha256", env.OPERATOR_API_SECRET).update(payload).digest("base64url");
-  const token = `${payload}.${signature}`;
+  // A demo session must never move real money. This deployment has no separate
+  // play-money ledger, so fail closed instead of pretending the mode isolates
+  // the wallet. Operators needing demo play must integrate one first.
+  if (input.mode === "demo")
+    return deny(reply, 403, AV.PLAYER_BLOCKED, "demo sessions are not enabled on this deployment");
+  const session = await mintOperatorSession(input.playerId, {
+    operatorId: input.operatorId,
+    playerId: input.playerId,
+    currency: input.currency,
+    mode: input.mode,
+    language: input.language,
+  });
+  if (session?.error) return deny(reply, ...session.error);
+  if (!session?.token || !session?.expiresAt)
+    return deny(reply, 503, ERROR_CODES.SERVICE_UNAVAILABLE, "operator session could not be issued");
   const base = env.OPERATOR_LAUNCH_URL ?? `http://${req.headers.host ?? "localhost:3000"}/`;
   const launch = new URL(base);
-  launch.searchParams.set("token", token);
+  launch.searchParams.set("token", session.token);
+  launch.searchParams.set("v", String(PROTOCOL_VERSION));
+  launch.searchParams.set("lang", input.language);
   if (input.returnUrl) launch.searchParams.set("returnUrl", input.returnUrl);
   await publish("crash.operator_launch", {
-    operatorId: input.operatorId, playerId: input.playerId, mode: input.mode, nonce,
+    operatorId: input.operatorId, playerId: input.playerId, mode: input.mode,
+    language: input.language,
   });
   return ok(reply, 201, {
     launchUrl: launch.toString(),
-    sessionToken: token,
-    expiresIn: 300,
+    sessionToken: session.token,
+    expiresAt: session.expiresAt,
+    expiresIn: Math.max(0, Math.floor((Date.parse(session.expiresAt) - Date.now()) / 1000)),
+    userId: session.userId,
     currency: input.currency,
     mode: input.mode,
+    language: input.language,
+    protocol: `aviator-v${PROTOCOL_VERSION}`,
   });
 });
 

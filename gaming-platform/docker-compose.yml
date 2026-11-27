@@ -224,6 +224,9 @@ services:
       # The private signing key is deliberately absent from common-env: auth
       # is the only process allowed to mint access tokens.
       JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?JWT_PRIVATE_KEY must be an RSA private key}
+      # Only crash can request operator-launch sessions; auth never accepts
+      # this credential from the public gateway.
+      AUTH_SESSION_SERVICE_TOKEN: ${AUTH_SESSION_SERVICE_TOKEN:?AUTH_SESSION_SERVICE_TOKEN must be set}
     expose:
       - "3015"
 
@@ -373,6 +376,7 @@ services:
       WALLET_DEBIT_SERVICE_TOKEN: ${WALLET_DEBIT_SERVICE_TOKEN:?WALLET_DEBIT_SERVICE_TOKEN must be set}
       WALLET_WIN_SERVICE_TOKEN: ${WALLET_WIN_SERVICE_TOKEN:?WALLET_WIN_SERVICE_TOKEN must be set}
       REALTIME_SERVICE_TOKEN: ${REALTIME_SERVICE_TOKEN:?REALTIME_SERVICE_TOKEN must be set}
+      AUTH_SESSION_SERVICE_TOKEN: ${AUTH_SESSION_SERVICE_TOKEN:?AUTH_SESSION_SERVICE_TOKEN must be set}
       WALLET_INTERNAL_URL: http://wallet:3011
       REALTIME_INTERNAL_URL: http://realtime:3010
       # Optional signed operator integration. Both keys must be set to enable
@@ -381,6 +385,9 @@ services:
       OPERATOR_API_SECRET: ${OPERATOR_API_SECRET:-}
       OPERATOR_LAUNCH_URL: ${OPERATOR_LAUNCH_URL:-}
       OPERATOR_ALLOW_LEGACY_SIGNATURES: ${OPERATOR_ALLOW_LEGACY_SIGNATURES:-false}
+      # Optional external operator wallet. Both values must be set together.
+      OPERATOR_WALLET_URL: ${OPERATOR_WALLET_URL:-}
+      OPERATOR_WALLET_SECRET: ${OPERATOR_WALLET_SECRET:-}
     expose:
       - "3023"
 
