@@ -30,8 +30,9 @@ $fb2 = SocialProfile::fromSocialite((object) ['id' => '42', 'name' => 'Mallory']
 check('facebook identity is namespaced', $fb->identity(), 'facebook:42');
 check('vkontakte identity is namespaced', $fb2->identity(), 'vkontakte:42');
 check('identities cannot collide across providers', $fb->identity() === $fb2->identity(), false);
-check('legacy bare id is retained for upgrade lookups', in_array('42', $fb->lookupIds(), true), true);
-check('new rows always use the namespaced identity', $fb->lookupIds()[0], 'facebook:42');
+check('bare provider id is never accepted as an identity', in_array('42', $fb->lookupIds(), true), false);
+check('lookups always use the namespaced identity', $fb->lookupIds(), ['facebook:42']);
+check('the same bare id from another provider cannot collide', $fb2->lookupIds(), ['vkontakte:42']);
 check('name comes from the mapped attribute', $fb->name, 'Alice');
 check('missing id falls back to a safe sentinel', SocialProfile::fromSocialite((object) [], 'google')->identity(), 'google:unknown');
 

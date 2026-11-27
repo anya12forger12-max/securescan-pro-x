@@ -81,14 +81,17 @@ final class SocialProfile
     }
 
     /**
-     * Legacy rows stored the bare provider id; keep accepting them for
-     * existing accounts so upgrading does not duplicate or lock out players.
+     * Only the provider-scoped identity is accepted. Provider ids are unique
+     * per provider, not globally: including the bare id let a facebook user
+     * with id "42" resolve to a vkontakte/google row with the same id and take
+     * over that account. Legacy bare-id rows must be namespaced explicitly
+     * (see the migration note in SECURITY_NOTICE.md) before they can log in.
      *
      * @return string[]
      */
     public function lookupIds()
     {
-        return array_values(array_unique([$this->identity(), $this->providerId]));
+        return [$this->identity()];
     }
 
     /** @return string */
