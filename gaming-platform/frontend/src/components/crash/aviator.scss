@@ -49,6 +49,13 @@ $pink: #ff5fb0;
     color: inherit;
   }
 
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible {
+    outline: 2px solid $blue;
+    outline-offset: 2px;
+  }
+
   button {
     cursor: pointer;
     border: 1px solid $border;
@@ -61,18 +68,21 @@ $pink: #ff5fb0;
       border-color: $blue;
     }
 
-    &:focus-visible,
-    input:focus-visible,
-    select:focus-visible {
-      outline: 2px solid $blue;
-      outline-offset: 2px;
-    }
-
     &:disabled {
       cursor: not-allowed;
       opacity: 0.45;
     }
   }
+}
+
+.socket-status {
+  padding: 6px 10px;
+  border: 1px solid rgba(224, 51, 74, 0.45);
+  border-radius: 8px;
+  background: rgba(224, 51, 74, 0.12);
+  color: #ffb3be;
+  font-size: 12px;
+  text-align: center;
 }
 
 .aviator-header {
@@ -242,17 +252,49 @@ $pink: #ff5fb0;
 
   .countdown-bar {
     width: 70px;
-    height: 3px;
+    height: 4px;
     border-radius: 3px;
-    background: $blue;
-    animation: countdown 1s linear infinite;
-    transform-origin: left;
+    overflow: hidden;
+    background: rgba(139, 148, 167, 0.25);
+
+    i {
+      display: block;
+      height: 100%;
+      background: $blue;
+      transition: width 80ms linear;
+    }
+  }
+
+  &.urgent {
+    span { color: $red; }
+    .countdown-bar i { background: $red; }
   }
 }
 
-@keyframes countdown {
-  from { transform: scaleX(1); }
-  to { transform: scaleX(0); }
+.canvas-status {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(11, 13, 19, 0.85);
+  border: 1px solid rgba(224, 51, 74, 0.4);
+  color: #ffb3be;
+  font-size: 11px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.panel-error {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(224, 51, 74, 0.4);
+  background: rgba(224, 51, 74, 0.1);
+  color: #ffb3be;
+  font-size: 11px;
 }
 
 .aviator-panels {
@@ -369,6 +411,7 @@ $pink: #ff5fb0;
 
     &.cashout { background: linear-gradient(135deg, $green, #1d9c5c); }
     &.cancel { background: $surface-2; color: $muted; border-color: $border; }
+    &.queued { background: linear-gradient(135deg, $pink, #b83f85); }
 
     &:hover:not(:disabled) { filter: brightness(1.1); }
   }
@@ -397,6 +440,37 @@ $pink: #ff5fb0;
     h3 { margin: 0; font-size: 13px; }
     span { color: $muted; font-size: 10px; text-transform: uppercase; }
     button { padding: 4px 9px; font-size: 11px; }
+
+    .period-switch select {
+      padding: 4px 8px;
+      border-radius: 6px;
+      border: 1px solid $border;
+      background: $surface-2;
+      color: $text;
+      font-size: 11px;
+    }
+  }
+
+  .activity-tabs {
+    display: flex;
+    gap: 4px;
+
+    button {
+      flex: 1;
+      padding: 5px 8px;
+      font-size: 11px;
+      color: $muted;
+      border-color: transparent;
+      background: transparent;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+
+      &.active {
+        color: $blue;
+        border-color: rgba(74, 163, 255, 0.35);
+        background: $blue-soft;
+      }
+    }
   }
 
   .activity-list {
@@ -560,7 +634,7 @@ $pink: #ff5fb0;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .countdown-bar { animation: none; }
+  .countdown-bar i { transition: none; }
   .aviator-stage button { transition: none; }
 }
 

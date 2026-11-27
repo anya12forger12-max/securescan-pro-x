@@ -31,6 +31,12 @@ const ADMIN_BOOTSTRAP_TOKEN = process.env.ADMIN_BOOTSTRAP_TOKEN;
 // `http://localhost:3000/` would silently fail CORS while still appearing in
 // connect-src. Malformed entries are kept as-is and rejected by both checks.
 const CORS_ORIGINS = parseCorsOrigins(process.env.CORS_ORIGIN);
+// Operator shells that embed the stage must be opted in explicitly. Without
+// this list the frame-ancestors directive stays 'none', so an unconfigured
+// operator cannot silently frame the game. Same-origin framing is always OK.
+const FRAME_ANCESTORS = process.env.FRAME_ANCESTORS_ORIGINS
+  ? cspConnectSrc(parseCorsOrigins(process.env.FRAME_ANCESTORS_ORIGINS))
+  : "'none'";
 
 /** Echo only a configured origin. A comma-separated allow-list in one header
  * is invalid, and credentials require an exact origin rather than `*`. */
@@ -79,8 +85,25 @@ const BASE_SECURITY_HEADERS = Object.freeze({
   "content-security-policy":
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
     `img-src 'self' data:; font-src 'self' data:; connect-src ${CONNECT_SRC}; ` +
-    "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+    `frame-ancestors ${FRAME_ANCESTORS}; base-uri 'self'; object-src 'none'`,
 });
+
+/** Structured REST errors from the API design document. `message` and
+ * `request_id` stay at the top level for older clients that only read those
+ * fields; new clients read `error.code` and can correlate with x-request-id. */
+function apiError(reply, status, code, message, details) {
+  const requestId = String(reply.getHeader("x-request-id") ?? "");
+  return reply.code(status).send({
+    request_id: requestId,
+    error: {
+      code,
+      message,
+      requestId,
+      ...(details === undefined ? {} : { details }),
+    },
+    message,
+  });
+}
 
 const UPSTREAM_MODE = process.env.UPSTREAM_MODE === "docker" ? "docker" : "local";
 const ADMIN_RISK_URL =
@@ -131,6 +154,9 @@ const rateLimitConfig = {
   userMax: Number(process.env.RATE_LIMIT_USER_MAX) || 120,
   mutateMax: Number(process.env.RATE_LIMIT_MUTATE_MAX) || 30,
   streamMax: Number(process.env.RATE_LIMIT_STREAM_MAX) || 20,
+  // Signed operator callbacks are server-to-server traffic: a separate bucket
+  // keeps them independent of any one browser's quota.
+  operatorMax: Number(process.env.RATE_LIMIT_OPERATOR_MAX) || 120,
   // Fail closed by default once a shared limiter is configured; an explicit
   // "false" keeps the deliberate local-only development mode working.
   failClosed:
@@ -541,6 +567,10 @@ app.addContentTypeParser(["application/json", "application/*+json"], { parseAs: 
 });
 
 app.addHook("onRequest", async (req, reply) => {
+  const requestId = typeof req.headers["x-request-id"] === "string" && req.headers["x-request-id"].length > 0
+    ? req.headers["x-request-id"].slice(0, 128) : randomUUID();
+  req.headers["x-request-id"] = requestId;
+  reply.header("x-request-id", requestId);
   for (const [name, value] of Object.entries(BASE_SECURITY_HEADERS)) {
     reply.header(name, value);
   }
@@ -641,10 +671,7 @@ app.addHook("onRequest", async (req, reply) => {
   if (!IP_LIMITED_AUTH_PATH.test(path)) {
     authResult = await resolveBearer(req);
     if (authResult.status === "unavailable") {
-      return reply.code(503).send({
-        error: "SERVICE_UNAVAILABLE",
-        message: "access-token verification unavailable",
-      });
+      return apiError(reply, 503, "SERVICE_UNAVAILABLE", "access-token verification unavailable");
     }
   }
 
@@ -655,11 +682,10 @@ app.addHook("onRequest", async (req, reply) => {
     if (result.allowed) return undefined;
     const retryAfter = Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1000));
     reply.header("retry-after", String(retryAfter));
-    return reply.code(429).send({
-      error: result.unavailable ? "RATE_LIMIT_UNAVAILABLE" : "RATE_LIMITED",
-      message: result.unavailable ? "rate limiter unavailable" : "too many requests",
-      retryAfter,
-    });
+    return apiError(reply, 429,
+      result.unavailable ? "RATE_LIMIT_UNAVAILABLE" : "RATE_LIMITED",
+      result.unavailable ? "rate limiter unavailable" : "too many requests",
+      { retryAfter });
   };
 
   // An invalid token is still counted by IP; the proxy will reject it before
@@ -682,7 +708,10 @@ app.addHook("onRequest", async (req, reply) => {
 
   let limit;
   let key;
-  if (IP_LIMITED_AUTH_PATH.test(path)) {
+  if (matchesPrefix(path, "/v1/operator") || matchesPrefix(path, "/v1/crash/operator")) {
+    limit = rateLimitConfig.operatorMax;
+    key = `operator:${ip}`;
+  } else if (IP_LIMITED_AUTH_PATH.test(path)) {
     limit = rateLimitConfig.authMax;
     // Auth and generic anonymous traffic must not share a bucket: on a NAT,
     // ordinary public reads would otherwise exhaust everyone's login quota.
@@ -713,10 +742,10 @@ const KNOWN_PERMISSIONS = [
 app.get("/v1/me/permissions", async (req, reply) => {
   const authResult = await resolveBearer(req);
   if (authResult.status === "unavailable") {
-    return reply.code(503).send({ error: "SERVICE_UNAVAILABLE", message: "token verification unavailable" });
+    return apiError(reply, 503, "SERVICE_UNAVAILABLE", "token verification unavailable");
   }
   if (authResult.status !== "valid") {
-    return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid token" });
+    return apiError(reply, 401, "UNAUTHORIZED", "invalid token");
   }
   const decoded = authResult.claims;
   const granted = await Promise.all(
@@ -732,14 +761,14 @@ async function proxy(req, reply) {
   // cannot pass one route's checks and reach a different upstream endpoint.
   const parsed = parseProxyUrl(req.url);
   if (!parsed) {
-    return reply.code(400).send({ error: "BAD_REQUEST", message: "invalid request path" });
+    return apiError(reply, 400, "BAD_REQUEST", "invalid request path");
   }
   const path = parsed.pathname;
 
   const target = ROUTES.find(
     (route) => matchesRoute(path, route) && (!route.methods || route.methods.includes(req.method)),
   );
-  if (!target) return reply.code(404).send({ error: "NOT_FOUND", message: "unknown route" });
+  if (!target) return apiError(reply, 404, "NOT_FOUND", "unknown route");
 
   // Capture the caller's service token before removing it. Every downstream
   // identity header is gateway-owned; clients may not supply them.
@@ -747,6 +776,10 @@ async function proxy(req, reply) {
   const headers = { ...req.headers };
   delete headers.host;
   delete headers["content-length"];
+  // Replace any client-supplied chain with the address Fastify resolved from
+  // the configured trusted-proxy hop. Downstream operator IP checks trust
+  // this value, so a browser must not be able to choose it.
+  headers["x-forwarded-for"] = req.ip ?? req.socket?.remoteAddress ?? "unknown";
   for (const name of [
     "x-user-id",
     "x-username",
@@ -768,10 +801,7 @@ async function proxy(req, reply) {
     ? { status: "none" }
     : await resolveBearer(req);
   if (authResult.status === "unavailable") {
-    return reply.code(503).send({
-      error: "SERVICE_UNAVAILABLE",
-      message: "access-token verification unavailable",
-    });
+    return apiError(reply, 503, "SERVICE_UNAVAILABLE", "access-token verification unavailable");
   }
   const decoded = authResult.status === "valid" ? authResult.claims : null;
   if (decoded) {
@@ -783,28 +813,22 @@ async function proxy(req, reply) {
   // requiring a player JWT here would make every documented service call 401.
   const peerToken = [...SERVICE_TOKEN_ONLY].find(([prefix]) => matchesPrefix(path, prefix))?.[1];
   if ((target.requirePlayer || target.bootstrap || (target.privileged && !peerToken)) && !decoded?.userId) {
-    return reply.code(401).send({
-      error: "UNAUTHORIZED",
-      message: "a player token is required for this route",
-    });
+    return apiError(reply, 401, "UNAUTHORIZED", "a player token is required for this route");
   }
 
   if (target.bootstrap) {
     if (!tokenMatches(req.headers["x-bootstrap-token"], ADMIN_BOOTSTRAP_TOKEN)) {
-      return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid bootstrap token" });
+      return apiError(reply, 401, "UNAUTHORIZED", "invalid bootstrap token");
     }
   } else if (target.privileged) {
     if (peerToken) {
       if (!tokenMatches(callerServiceToken, peerToken)) {
-        return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid service token" });
+        return apiError(reply, 401, "UNAUTHORIZED", "invalid service token");
       }
     } else {
       const permission = requiredPermission(target, path, req.method);
       if (!(await hasPermission(decoded.userId, permission, req.log))) {
-        return reply.code(403).send({
-          error: "FORBIDDEN",
-          message: `missing permission ${permission}`,
-        });
+        return apiError(reply, 403, "FORBIDDEN", `missing permission ${permission}`);
       }
     }
   }
@@ -825,10 +849,7 @@ async function proxy(req, reply) {
       ? await rateLimiter.acquireLease(key, member, rateLimitConfig.streamMax, STREAM_LEASE_MS)
       : acquireLocalStreamSlot(key);
     if (!acquired) {
-      return reply.code(429).send({
-        error: "TOO_MANY_STREAMS",
-        message: "concurrent event stream limit reached",
-      });
+      return apiError(reply, 429, "TOO_MANY_STREAMS", "concurrent event stream limit reached");
     }
     // Long-lived streams refresh their lease so a healthy socket never looks
     // expired to another replica. The timer is unref'd and always cleared on
@@ -971,10 +992,7 @@ async function proxy(req, reply) {
     releaseStream();
     req.log.warn({ err, service: target.service }, "upstream request failed");
     // Do not reflect upstream/internal error details back to callers.
-    return reply.code(503).send({
-      error: "SERVICE_UNAVAILABLE",
-      message: `upstream ${target.service} unavailable`,
-    });
+    return apiError(reply, 503, "SERVICE_UNAVAILABLE", `upstream ${target.service} unavailable`);
   }
 }
 
@@ -985,6 +1003,7 @@ registerAviatorSocket(app, {
   allowedOrigin: (origin) => Boolean(corsOrigin({ headers: { origin } })),
   upstream: (service, port) => `http://${upstreamHost(service)}:${port}`,
   realtimeToken: REALTIME_SERVICE_TOKEN,
+  crashToken: CRASH_SERVICE_TOKEN,
   maxPerUser: 4,
   rateLimiter,
   rateLimitConfig,
@@ -1043,16 +1062,18 @@ async function webFile(urlPath) {
 app.get("/*", async (req, reply) => {
   const file = await webFile(req.url);
   if (!file) {
-    return reply.code(404).send({
-      error: "NOT_FOUND",
-      message: "frontend build not found; run npm --prefix frontend run build",
-    });
+    return apiError(reply, 404, "NOT_FOUND", "frontend build not found; run npm --prefix frontend run build");
   }
   const body = await readFile(file);
   reply.header("cache-control", file.endsWith("index.html") ? "no-cache" : "public, max-age=31536000, immutable");
   reply.type(MIME_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream");
   return reply.send(body);
 });
+
+// Fastify's default 404 shape is not the documented error envelope. Keep
+// unknown API routes consistent with every other gateway-level rejection.
+app.setNotFoundHandler((req, reply) =>
+  apiError(reply, 404, "NOT_FOUND", `unknown route ${req.method} ${req.url.split(/[?#]/, 1)[0]}`));
 
 try {
   await app.listen({ port: PORT, host: process.env.HOST ?? "0.0.0.0" });

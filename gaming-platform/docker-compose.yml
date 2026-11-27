@@ -175,6 +175,9 @@ services:
       PROMOTIONS_SERVICE_TOKEN: ${PROMOTIONS_SERVICE_TOKEN:?PROMOTIONS_SERVICE_TOKEN must be set}
       CRASH_SERVICE_TOKEN: ${CRASH_SERVICE_TOKEN:?CRASH_SERVICE_TOKEN must be set}
       ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:?ADMIN_BOOTSTRAP_TOKEN must be set}
+      # Explicit operator parents allowed to frame the game. Empty keeps
+      # frame-ancestors 'none'; same-origin is always permitted.
+      FRAME_ANCESTORS_ORIGINS: ${FRAME_ANCESTORS_ORIGINS:-}
       # Player-facing abuse controls; counters are shared through REDIS_URL.
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
@@ -184,6 +187,8 @@ services:
       # Fail closed if Redis is down: never silently drop to local counters.
       RATE_LIMIT_FAIL_CLOSED: ${RATE_LIMIT_FAIL_CLOSED:-true}
       RATE_LIMIT_STREAM_MAX: ${RATE_LIMIT_STREAM_MAX:-20}
+      # Separate quota for signed operator callbacks, independent of any browser.
+      RATE_LIMIT_OPERATOR_MAX: ${RATE_LIMIT_OPERATOR_MAX:-120}
       # The documented TLS terminator is one trusted loopback proxy hop. Set
       # TRUST_PROXY_HOPS=0 only for direct local development without a proxy.
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
@@ -384,7 +389,14 @@ services:
       OPERATOR_API_KEY: ${OPERATOR_API_KEY:-}
       OPERATOR_API_SECRET: ${OPERATOR_API_SECRET:-}
       OPERATOR_LAUNCH_URL: ${OPERATOR_LAUNCH_URL:-}
+      # v2 signatures are required by default. The legacy body-only mode is a
+      # temporary, explicitly opted-in migration step.
       OPERATOR_ALLOW_LEGACY_SIGNATURES: ${OPERATOR_ALLOW_LEGACY_SIGNATURES:-false}
+      # Legacy signers may add an x-timestamp/x-nonce envelope; strict mode
+      # requires it. The IP allow-list accepts IPs or CIDRs and is empty by default.
+      OPERATOR_TIMESTAMP_REQUIRED: ${OPERATOR_TIMESTAMP_REQUIRED:-false}
+      OPERATOR_TIMESTAMP_SKEW_MS: ${OPERATOR_TIMESTAMP_SKEW_MS:-300000}
+      OPERATOR_IP_ALLOWLIST: ${OPERATOR_IP_ALLOWLIST:-}
       # Optional external operator wallet. Both values must be set together.
       OPERATOR_WALLET_URL: ${OPERATOR_WALLET_URL:-}
       OPERATOR_WALLET_SECRET: ${OPERATOR_WALLET_SECRET:-}
