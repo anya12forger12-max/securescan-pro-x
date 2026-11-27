@@ -233,53 +233,76 @@ class PagesController extends Controller
 		$code = strtolower(htmlspecialchars($r->get('code')));
         if(!$code) return response()->json(['success' => false, 'msg' => 'You don`t entered a code!', 'type' => 'error']);
 		
-        $promocode = Promocode::where('code', $code)->first();
-        if(!$promocode) return response()->json(['success' => false, 'msg' => 'This code does not exist!', 'type' => 'error']);
-		
-		$money = $promocode->amount;
-		$check = PromoLog::where('user_id', $this->user->id)->where('code', $code)->first();
+        // Limited-use codes are a shared counter. The per-user action lock
+        // does not serialise different users, so take a row lock and re-check
+        // the remaining uses inside the transaction before crediting anyone.
+        DB::beginTransaction();
+        try {
+            $promocode = Promocode::where('code', $code)->lockForUpdate()->first();
+            if(!$promocode) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'msg' => 'This code does not exist!', 'type' => 'error']);
+            }
 
-		if($check) return response()->json(['success' => false, 'msg' => 'You already activated this code!', 'type' => 'error']);
-		if($promocode->limit == 1 && $promocode->count_use <= 0) return response()->json(['success' => false, 'msg' => 'This code is no longer valid!', 'type' => 'error']);
-		if($promocode->user_id == $this->user->id) return response()->json(['success' => false, 'msg' => 'You can`t activate your promo code!', 'type' => 'error']);
+            $money = $promocode->amount;
+            $check = PromoLog::where('user_id', $this->user->id)->where('code', $code)->first();
 
-		if($promocode->type == 'balance') {
-			$this->user->balance += $money;
-			$this->user->save();
-			
-			Profit::create([
-				'game' => 'ref',
-				'sum' => -$money
-			]);
-			
-			$this->redis->publish('updateBalance', json_encode([
-				'unique_id' => $this->user->unique_id,
-				'balance'	=> $this->user->balance
-			]));
-		}
+            if($check) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'msg' => 'You already activated this code!', 'type' => 'error']);
+            }
+            if($promocode->limit == 1 && $promocode->count_use <= 0) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'msg' => 'This code is no longer valid!', 'type' => 'error']);
+            }
+            if($promocode->user_id == $this->user->id) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'msg' => 'You can`t activate your promo code!', 'type' => 'error']);
+            }
 
-		if($promocode->type == 'bonus') {
-			$this->user->bonus += $money;
-			$this->user->save();
-			
-			$this->redis->publish('updateBonus', json_encode([
-				'unique_id' => $this->user->unique_id,
-				'bonus'	=> $this->user->bonus
-			]));
-		}
+            if($promocode->type == 'balance') {
+                $this->user->balance += $money;
+                $this->user->save();
 
-		if($promocode->limit == 1 && $promocode->count_use > 0){
-			$promocode->count_use -= 1;
-			$promocode->save();
-		}
+                Profit::create([
+                    'game' => 'ref',
+                    'sum' => -$money
+                ]);
 
-		PromoLog::insert([
-			'user_id' => $this->user->id,
-			'sum' => $money,
-			'code' => $code,
-			'type' => $promocode->type
-		]);
-		
+                $this->redis->publish('updateBalance', json_encode([
+                    'unique_id' => $this->user->unique_id,
+                    'balance'	=> $this->user->balance
+                ]));
+            }
+
+            if($promocode->type == 'bonus') {
+                $this->user->bonus += $money;
+                $this->user->save();
+
+                $this->redis->publish('updateBonus', json_encode([
+                    'unique_id' => $this->user->unique_id,
+                    'bonus' => $this->user->bonus
+                ]));
+            }
+
+            if($promocode->limit == 1) {
+                $promocode->count_use -= 1;
+                $promocode->save();
+            }
+
+            PromoLog::insert([
+                'user_id' => $this->user->id,
+                'sum' => $money,
+                'code' => $code,
+                'type' => $promocode->type
+            ]);
+
+            DB::commit();
+        } catch(Exception $e) {
+            DB::rollBack();
+            return response()->json(['success' => false, 'msg' => 'Something went wrong...', 'type' => 'error']);
+        }
+
 		return response()->json(['success' => true, 'msg' => 'Code activated!', 'type' => 'success']);
 	}
 	
