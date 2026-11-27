@@ -40,6 +40,7 @@ import {
   operatorRoute,
   verifyOperatorSignatureV2,
 } from "./operator-auth.js";
+import { combinedStakeExceeded } from "./bet-limits.js";
 
 // Re-exported for the strategy-lab tests and for scripts that import the
 // generator directly. The implementation now lives in @gp/aviator so the
@@ -1080,7 +1081,7 @@ async function startRound(id) {
 //   * all wallet keys are deterministic per bet, so retries never double-pay.
 // ---------------------------------------------------------------------------
 
-async function reserveBet(roundId, userId, amount, autoCashout, sessionId, panel = 1) {
+async function reserveBet(roundId, userId, amount, autoCashout, sessionId, panel = 1, maxBet = env.MAX_BET) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1145,16 +1146,16 @@ async function reserveBet(roundId, userId, amount, autoCashout, sessionId, panel
       return { error: [409, ERROR_CODES.CONFLICT, message] };
     }
     // Both panels share one per-player stake cap. Doing this inside the same
-    // transaction that locks the round closes the auto-bet bypass: the manual
-    // route checked it before reserveBet, but auto sessions called reserveBet
-    // directly and could stake MAX_BET on each panel in the same round.
+    // transaction that locks the round closes the auto-bet bypass, and using
+    // the resolved `maxBet` (not just global env.MAX_BET) enforces the
+    // operator's per-player ceiling for manual and auto sessions alike.
     const committed = await client.query(
       `SELECT COALESCE(SUM(amount), 0) AS total FROM crash_bets
         WHERE round_id = $1 AND user_id = $2 AND panel <> $3
           AND status IN ('pending','active','cashing_out','cashed_out')`,
       [roundId, userId, panel],
     );
-    if (Number(committed.rows[0]?.total ?? 0) + amount > env.MAX_BET) {
+    if (combinedStakeExceeded(committed.rows[0]?.total, amount, maxBet)) {
       await client.query("ROLLBACK");
       return {
         error: [422, "BET_LIMIT_EXCEEDED", "combined stake exceeds the round limit"],
@@ -1746,6 +1747,11 @@ async function placeAutoBets(round) {
         continue;
       }
     }
+    const limits = await effectiveLimits(session.user_id);
+    if (Number(session.stake) > limits.maxBet) {
+      await stopAutoSession(session, "bet_limit_exceeded");
+      continue;
+    }
     if (!(await wageringAllowed(session.user_id, Number(session.stake)))) {
       await stopAutoSession(session, "player_blocked");
       continue;
@@ -1755,7 +1761,7 @@ async function placeAutoBets(round) {
       reserved = await reserveBet(
         round.id, session.user_id, Number(session.stake),
         session.auto_cashout === null ? undefined : Number(session.auto_cashout),
-        undefined, session.panel,
+        undefined, session.panel, limits.maxBet,
       );
     } catch (err) {
       app.log.warn({ err, sessionId: session.id }, "auto-bet reservation failed");
@@ -1870,7 +1876,7 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
         AND status IN ('pending','active','cashing_out','cashed_out')`,
     [req.params.id, userId, panel],
   );
-  if (Number(committed.rows[0]?.total ?? 0) + amount > limits.maxBet)
+  if (combinedStakeExceeded(committed.rows[0]?.total, amount, limits.maxBet))
     return deny(reply, 422, AV.BET_LIMIT_EXCEEDED, "combined stake exceeds the round limit");
 
   // Fail-closed self-exclusion gate: no stake may be reserved for a player the
@@ -1889,7 +1895,7 @@ app.post("/v1/crash/rounds/:id/bets", async (req, reply) => {
   await markRequestPending(userId, requestId, "bet");
   // Reservation and status guard are one DB transaction; the wallet debit
   // follows only once the bet row is durably committed as `pending`.
-  const reserved = await reserveBet(round.id, userId, amount, autoCashout, sessionId, panel);
+  const reserved = await reserveBet(round.id, userId, amount, autoCashout, sessionId, panel, limits.maxBet);
   if (reserved.error) return deny(reply, ...reserved.error);
   let bet = reserved.bet;
 
