@@ -272,9 +272,11 @@ export function buildSnapshot({
   round, balance, myBets = [], history = [], limits = {},
   serverTime = Date.now(), bettingWindowMs = 5000,
 }) {
+  // The crash point is precomputed when the round is created. It is a secret
+  // until settlement. A cancelled round was never played, so its committed
+  // point stays sealed too and must not be treated as revealed anywhere in the
+  // protocol.
   const status = round?.status ?? round?.state ?? null;
-  // A cancelled round was never played: its committed point stays sealed, so
-  // it must not be treated as a revealed round anywhere in the protocol.
   const revealed = round?.revealed === true || status === "finished"
     || (["CRASHED", "SETTLING"].includes(status) && round?.crashPoint !== null
       && round?.crashPoint !== undefined);
