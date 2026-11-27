@@ -71,12 +71,14 @@ export async function verifyGameResult(pool: PoolType, input: VerifyGameResultIn
          FROM game_players WHERE session_id = $1
      ), scored AS (
      SELECT CASE
-       -- A concession (/end) is not a win: only /meld sets win_type to
-       -- 'validated' after checking the winner's complete hand.
+       -- gin_rummy_outcomes is the durable evidence written with the game's
+       -- terminal transition. gin_rummy_games.win_type is cache-like and has
+       -- been rewritten by backfills, so it must not decide points.
        WHEN s.game_type = 'gin-rummy' AND EXISTS (
          SELECT 1 FROM gin_rummy_games g
+          JOIN gin_rummy_outcomes o ON o.game_id = g.id
           WHERE g.session_id = s.id AND g.winner_id = $2
-            AND g.win_type = 'validated') THEN 100
+            AND o.win_type = 'validated') THEN 100
        -- A concession (/end) and an unverifiable historical 'completed' win
        -- are still games the player finished, so score submission succeeds.
        -- Neither earns points: only the hand-checked /meld win above does, so
@@ -84,8 +86,9 @@ export async function verifyGameResult(pool: PoolType, input: VerifyGameResultIn
        -- an old result we can no longer validate.
        WHEN s.game_type = 'gin-rummy' AND EXISTS (
          SELECT 1 FROM gin_rummy_games g
+          JOIN gin_rummy_outcomes o ON o.game_id = g.id
           WHERE g.session_id = s.id AND g.winner_id = $2
-            AND g.win_type IN ('concession','completed')) THEN 0
+            AND o.win_type IN ('concession','completed')) THEN 0
        WHEN s.game_type = 'pictionary' AND EXISTS (
          SELECT 1 FROM pictionary_rounds r
           WHERE r.session_id = s.id AND r.winner_id = $2) THEN 100

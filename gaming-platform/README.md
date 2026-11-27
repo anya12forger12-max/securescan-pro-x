@@ -24,7 +24,7 @@ and unified behind the new crash service; see below.
 | responsible-gaming | 3012 | new | Self-exclusion checks and audit log |
 | admin-risk | 3013 | new | RBAC roles/permissions, hash-chained admin audit |
 | tournaments | 3014 | new | Tournament catalogue and registration |
-| auth | 3015 | new | Registration, login, refresh, logout, `me`; mints HS256 `{userId,username}` tokens |
+| auth | 3015 | new | Registration, login, refresh, logout, `me`; sole holder of the RS256 private key |
 | chat | 3016 | recovered | Rooms and messages; publishes `chat.*` events to realtime |
 | codenames | 3017 | recovered | Games, shuffled 25-word board, clues, guesses, winner |
 | game-engine | 3018 | recovered | Game sessions and players |
@@ -51,7 +51,17 @@ executed by the platform. Their playable ideas are now implemented natively:
   instead of booking a duplicate net-zero pair.
 * The browser stage renders the multiplier curve locally from the server's
   `startedAt`, while all outcomes, settlement and auto cash-outs stay
-  authoritative in the service.
+  authoritative in the service. It also consumes protocol v1 frames from
+  `GET /v1/ws` (REST/SSE remain the fallback), including two independent bet
+  panels, auto-bet stop rules and the live fairness proof. Its strings live in
+  `frontend/src/i18n/aviator.ts` (English, Hindi and Arabic with RTL layout),
+  formatting uses `Intl`, sound is opt-in with a persisted preference, and an
+  iframe shell can exchange origin-checked `postMessage` events without ever
+  receiving a token.
+* `packages/aviator` holds the shared, pure crash-point/phase/protocol helpers;
+  `migrations/0019_aviator_features.sql` adds panel uniqueness, auto-bet
+  sessions and player/operator settings. Signed operator endpoints and the
+  standalone reference map are documented in `aviator-reference/`.
 * The bot's strategies live on as `POST /v1/crash/strategy-lab/run`, a
   deterministic **paper-only** simulator that uses our own provably-fair
   generator and never contacts an external betting site.
@@ -72,6 +82,14 @@ These are fixed here (each fix is commented inline at the site):
   verified player JWT, and injects only the capability token that route is
   allowed to use. Previously any caller could set `x-user-id: <victim>` and gain
   full impersonation against wallet, promotions, RG and tournaments.
+- **Asymmetric, revocable player tokens** — auth alone holds `JWT_PRIVATE_KEY`
+  and signs RS256 tokens with pinned `iss`/`aud` and a unique `jti`. Every other
+  service verifies with the public key only, and the gateway checks the `jti`
+  against `auth_access_tokens` plus the user's current `token_version` before
+  trusting a request. Logout and refresh-replay detection bump that version and
+  revoke outstanding access tokens; `TOKEN_VERSION_CACHE_MS` bounds how long a
+  cached positive check can survive a revocation. A shared HMAC secret no longer
+  lets any compromised game service mint player identities.
 - **Abuse control at the edge** — the gateway applies Redis-backed sliding-window
   limits: unauthenticated auth endpoints per source IP and all ordinary player
   routes per verified user. Every limited response carries `X-RateLimit-*`
@@ -171,10 +189,19 @@ The client calls `/v1/*` with the in-memory token and opens
 cannot send the required `Authorization` header. The gateway injects all
 identity and capability headers.
 
+Access tokens carry a `jti` recorded by auth and a generation number from
+`auth_users.token_version`. The gateway verifies the RS256 signature and pinned
+claims, then checks that record before forwarding any request; a `401` means
+the client should call `/v1/auth/refresh`. Logout and refresh-token replay
+revoke all of that user's access tokens immediately, with at most
+`TOKEN_VERSION_CACHE_MS` of propagation delay across gateway replicas.
+
 ## Shared packages
 
 - `packages/config` — `baseEnvSchema`, `loadEnv`, `registerErrorHandler`,
-  `fetchWithTimeout`, and `dbPoolOptions` (the fleet-wide connection budget).
+  `fetchWithTimeout`, `dbPoolOptions` (the fleet-wide connection budget), and
+  RS256 helpers (`jwtVerifyEnvFields`, `jwtSignEnvFields`, `normalizePem`,
+  pinned verify options) plus `assertDistinctSecrets`.
 - `packages/event-bus` — Redis-backed `EventBus.publish`/`close`, available for
   services that need fire-and-forget notifications. Publish failures are logged
   and swallowed so a committed claim never fails the user. The running services
@@ -204,8 +231,10 @@ identity and capability headers.
 | `0015_query_indexes.sql` | hot-path indexes for clue counts, event retention and leaderboards |
 | `0016_pictionary_guess_limit.sql` | index for per-player incorrect-guess allowance checks |
 | `0017_gin_rummy_outcomes.sql` | append-only record of validated wins and explicit concessions |
+| `0018_access_token_revocation.sql` | user token versions and issued `jti` records for RS256 access tokens |
+| `0019_aviator_features.sql` | two bet panels per round, auto-bet sessions, operator/player settings |
 
-All seventeen are applied by the one-shot `migrate` service before any application
+All nineteen are applied by the one-shot `migrate` service before any application
 starts, on first boot and on every upgrade. Applied files are checksummed, so
 editing an already-applied migration fails the deploy instead of drifting.
 
@@ -221,9 +250,13 @@ host and point it at `http://127.0.0.1:3000`; redirect HTTP to HTTPS, set HSTS
 at the terminator, and keep 3000 firewalled. Do not change the mapping to
 `0.0.0.0` — if the proxy lives on a different machine, put the gateway and proxy
 on a shared Docker network instead of publishing a plain-HTTP port. Use an
-`https://` origin in `CORS_ORIGIN`. The example values in `.env.example` and in
-the local-run section below are **non-production placeholders**; generate real
-secrets with `npm run env:init`.
+`https://` origin in `CORS_ORIGIN`. Keep `TRUST_PROXY_HOPS=1` so anonymous IP
+rate limits see the browser address behind that single proxy; use `0` only for
+direct local development with no proxy in front of the gateway.
+`UPSTREAM_TIMEOUT_MS` bounds upstream connection/response-header waits without
+cutting off established event streams. The example values in `.env.example` and
+in the local-run section below are **non-production placeholders**; generate
+real secrets with `npm run env:init`.
 
 ```bash
 cd coffee/gaming-platform
@@ -232,8 +265,8 @@ docker compose up -d --build
 npm run smoke
 ```
 
-`env:init` generates a fresh Postgres password, a Redis password, a JWT signing
-key, nine internal capability tokens (including the three wallet-scoped ones)
+`env:init` generates a fresh Postgres password, a Redis password, an RS256
+access-token keypair, nine internal capability tokens (including the three wallet-scoped ones)
 and the one-time admin bootstrap token, writes a `0600` `.env`, and refuses to
 replace an existing one unless `--force` is passed. Compose fails before
 starting anything if any required secret, `DATABASE_URL`, `REDIS_URL` or
@@ -288,6 +321,10 @@ For an upgrade, refresh the tree, keep the same `.env`, and run
 `docker compose up -d --build`. The one-shot `migrate` service runs before the
 applications on every recreate, so an existing database volume is upgraded in
 place. It receives only `DATABASE_URL`, not the fleet's capability tokens.
+Upgrading from the shared HMAC access-token format requires the new
+`JWT_PUBLIC_KEY`/`JWT_PRIVATE_KEY` values and migration `0018`; all old access
+tokens become invalid, so clients must refresh on the first `401`. Regenerating
+`.env` also rotates the keypair and therefore logs every player out.
 
 ## Run locally from Node
 
@@ -304,7 +341,11 @@ export DATABASE_URL=postgresql://gp:<password>@127.0.0.1:5432/gaming_platform
 export REDIS_URL=redis://127.0.0.1:6379
 # EXAMPLE-ONLY, NON-PRODUCTION SECRETS BELOW. Never reuse these values; copy
 # the distinct generated values from .env or mint fresh ones for a test run.
-export JWT_ACCESS_SECRET='a-long-random-secret-at-least-32-chars'
+# PEM newlines stay as literal \n; normalizePem() expands them at startup.
+export JWT_PUBLIC_KEY='-----BEGIN PUBLIC KEY-----\n...generated public key...\n-----END PUBLIC KEY-----'
+export JWT_PRIVATE_KEY='-----BEGIN PRIVATE KEY-----\n...generated private key...\n-----END PRIVATE KEY-----'
+export JWT_ISSUER=gaming-platform
+export JWT_AUDIENCE=gaming-platform-api
 export SERVICE_TOKEN='another-long-random-secret-at-least-32-chars'
 export ADMIN_SERVICE_TOKEN='admin-service-secret-at-least-32-characters'
 # Full wallet capability: gateway/test/admin only (a local-only fallback for peers).
@@ -359,8 +400,10 @@ npm start --prefix frontend       # http://localhost:4000, proxying to :3000
 ```
 
 `REACT_APP_API_URL` may be set at build time to an absolute gateway origin;
-leave it blank for the published Docker image. Copy `frontend/.env.example` if
-you need local overrides. Frontend dependencies and `frontend/build` are not
+leave it blank for the published Docker image. `REACT_APP_OPERATOR_ORIGINS`
+lists comma-separated parent origins allowed to send `postMessage` commands
+when the game is embedded; same-origin is always allowed. Copy
+`frontend/.env.example` if you need local overrides. Frontend dependencies and `frontend/build` are not
 committed; the Dockerfile reproduces both from `frontend/package-lock.json`.
 
 ## Calling the API

@@ -3,8 +3,8 @@ import { z } from "zod";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { randomUUID } from "node:crypto";
-import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv } from "@gp/config";
-import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
+import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, parseCorsOrigins } from "@gp/config";
+import { ERROR_CODES, boundedInt, serviceTokenOk } from "@gp/shared-types";
 
 /**
  * Realtime fan-out service (3010) -- the default REALTIME_URL of the game
@@ -24,9 +24,7 @@ const envSchema = baseEnvSchema.extend({
 const env = loadEnv(envSchema);
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL, 10));
 
-const CORS_ORIGINS = env.CORS_ORIGIN.split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+const CORS_ORIGINS = parseCorsOrigins(env.CORS_ORIGIN);
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
 await app.register(cors, { origin: CORS_ORIGINS });
 
@@ -114,26 +112,36 @@ const SENSITIVE_KEYS = new Set([
   "username",
 ]);
 
+/** Crash feed rows are public by design, but only in their masked, rounded
+ * form. Allowing these exact keys on these exact topics keeps the Aviator
+ * history strip useful without reopening the generic payout/identity leak. */
+const FEED_TOPICS = new Set(["crash.bet", "crash.cashout"]);
+const FEED_PUBLIC_KEYS = new Set(["betId", "stake", "mult", "payout", "user"]);
+
 /** Recursive, idempotent redaction for public-broadcast payloads. Dates are
  * returned untouched so JSON.stringify can serialize them normally. */
-function sanitizeEventData(value) {
+function sanitizeEventData(value, topic, depth = 0) {
   if (value instanceof Date) return value;
-  if (Array.isArray(value)) return value.map(sanitizeEventData);
+  if (Array.isArray(value)) return value.map((item) => sanitizeEventData(item, topic, depth + 1));
   if (value === null || typeof value !== "object") return value;
+  const feedTopic = FEED_TOPICS.has(topic);
   const clean = {};
   for (const [key, item] of Object.entries(value)) {
-    if (SENSITIVE_KEYS.has(key) || key === "__proto__") continue;
-    clean[key] = sanitizeEventData(item);
+    if (key === "__proto__") continue;
+    // Feed whitelists are top-level only. A nested `user` object or `payout`
+    // must not slip through just because a parent happens to be a feed row.
+    if (SENSITIVE_KEYS.has(key) && !(feedTopic && depth === 0 && FEED_PUBLIC_KEYS.has(key))) continue;
+    clean[key] = sanitizeEventData(item, topic, depth + 1);
   }
   return clean;
 }
 
 /** Applied on write and on every read so older rows cannot leak either. */
-const sanitizePayload = (payload) => sanitizeEventData(payload ?? {});
+const sanitizePayload = (payload, topic) => sanitizeEventData(payload ?? {}, topic);
 
 function publicEvent(event) {
   if (event === null || typeof event !== "object" || Array.isArray(event)) return event;
-  return { ...event, payload: sanitizePayload(event.payload) };
+  return { ...event, payload: sanitizePayload(event.payload, event.topic) };
 }
 
 /** SSE `event:` is a single line: a topic containing CR/LF would start forged
@@ -371,7 +379,7 @@ app.post("/internal/events", async (req, reply) => {
   if (!parsed.success)
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, JSON.stringify(parsed.error.flatten()));
 
-  const payload = sanitizePayload(parsed.data.payload ?? {});
+  const payload = sanitizePayload(parsed.data.payload ?? {}, parsed.data.topic);
   const client = await pool.connect();
   try {
     const result = await client.query(
@@ -393,8 +401,8 @@ app.post("/internal/events", async (req, reply) => {
 });
 
 app.get("/v1/events", async (req, reply) => {
-  const since = Math.max(0, Number(req.query.since ?? 0) || 0);
-  const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
+  const since = boundedInt(req.query.since, 0, 0, Number.MAX_SAFE_INTEGER);
+  const limit = boundedInt(req.query.limit, 50, 1, 200);
   // Keep `items` and `latest` unchanged for existing pollers; only add the
   // gap metadata when the cursor predates the oldest retained row. The query
   // still returns the earliest available events in seq order after the gap.
@@ -419,7 +427,8 @@ app.get("/v1/events", async (req, reply) => {
 
 app.get("/v1/events/stream", async (req, reply) => {
   const sinceParam = req.query.since;
-  const requested = sinceParam === undefined ? null : Math.max(0, Number(sinceParam) || 0);
+  const requested =
+    sinceParam === undefined ? null : boundedInt(sinceParam, 0, 0, Number.MAX_SAFE_INTEGER);
   // One snapshot supplies both the replay cursor and the retention check. A
   // request without `since` is explicitly live-only, so it has no gap to
   // report even if older rows have already been pruned.

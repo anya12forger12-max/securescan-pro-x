@@ -24,8 +24,14 @@ function LeaderboardRow({ entry, rank }: { entry: LeaderboardEntry; rank: number
   );
 }
 
-export default function TopHistory() {
-  const { leaderboard, tournaments, loadLeaderboard } = useGamingContext();
+export default function TopHistory({
+  game,
+  onGameChange,
+}: {
+  game: string;
+  onGameChange: (game: string) => void;
+}) {
+  const { leaderboard, tournaments } = useGamingContext();
 
   return (
     <div className="data-list">
@@ -33,8 +39,8 @@ export default function TopHistory() {
         <span>Leaderboard</span>
         <select
           aria-label="Leaderboard game"
-          onChange={(event) => void loadLeaderboard(event.target.value)}
-          defaultValue="codenames"
+          value={game}
+          onChange={(event) => onGameChange(event.target.value)}
         >
           <option value="codenames">Codenames</option>
           <option value="gin-rummy">Gin-rummy</option>

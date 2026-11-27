@@ -1,4 +1,4 @@
-import { registerErrorHandler } from "@gp/config";
+import { jwtVerifyPluginOptions, parseCorsOrigins, registerErrorHandler } from "@gp/config";
 import Fastify from "fastify";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
@@ -126,8 +126,8 @@ export async function buildPromotionsService(deps: PromotionsDeps): Promise<Fast
   const { env, repo } = deps;
   const app = Fastify({ logger: { level: env.LOG_LEVEL }, genReqId: () => randomUUID() });
   registerErrorHandler(app);
-  await app.register(cors, { origin: env.CORS_ORIGIN.split(","), credentials: true });
-  await app.register(jwt, { secret: env.JWT_ACCESS_SECRET });
+  await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN), credentials: true });
+  await app.register(jwt, jwtVerifyPluginOptions(env));
   app.addHook("onRequest", async (req, reply) => {
     const requestId = req.headers["x-request-id"] ?? randomUUID();
     req.headers["x-request-id"] = requestId;
@@ -212,6 +212,16 @@ export async function buildPromotionsService(deps: PromotionsDeps): Promise<Fast
     // promotion has since ended, and it already occupies a cap slot.
     const existing = await repo.findClaimByUserAndPromo(userId, promo.id);
     if (existing) {
+      // A retained claim stays retryable, but the retry can still be the first
+      // wallet credit to commit. Apply the same responsible-gaming gate as a
+      // new claim so self-exclusion after an ambiguous response cannot be
+      // bypassed by replaying it.
+      if (deps.rg) {
+        const check = await deps.rg.check(userId, "deposit", existing.bonusAmount);
+        if (!check.allowed) {
+          return deny(reply, 403, ERROR_CODES.VALIDATION_ERROR, check.reason ?? "not eligible");
+        }
+      }
       if (deps.wallet) {
         try {
           await deps.wallet.credit({
@@ -387,11 +397,14 @@ export async function buildPromotionsService(deps: PromotionsDeps): Promise<Fast
     if (Object.keys(patch).length === 0) {
       return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "no updatable fields supplied");
     }
-    if (patch.expiresAt !== undefined) {
+    if (patch.maxClaims !== undefined || patch.expiresAt !== undefined) {
       const current = await repo.findById(id);
       if (!current)
         return deny(reply, 404, ERROR_CODES.NOT_FOUND, "promotion not found");
-      if (Date.parse(patch.expiresAt) <= Date.parse(current.startsAt)) {
+      if (patch.maxClaims !== undefined && patch.maxClaims < current.claimsCount) {
+        return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "maxClaims cannot be lower than the current claims count");
+      }
+      if (patch.expiresAt !== undefined && Date.parse(patch.expiresAt) <= Date.parse(current.startsAt)) {
         return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "expiresAt must be after startsAt");
       }
     }

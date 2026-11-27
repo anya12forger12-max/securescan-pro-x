@@ -23,6 +23,15 @@ export function moneyMul(value, multiplier) {
   return new Decimal(value ?? 0).mul(new Decimal(multiplier ?? 0)).toFixed(2);
 }
 
+/** Turn an untrusted query value into a finite integer that is safe to bind as
+ * a Postgres bigint. `Number(x) || fallback` lets fractions and Infinity
+ * through, which fails at the bigint cast with a raw 500 from the database. */
+export function boundedInt(value, fallback, min, max) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isSafeInteger(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+}
+
 /** Constant-time comparison for the gateway service token. */
 export function serviceTokenOk(headers, expected) {
   if (typeof expected !== "string" || expected.length === 0) return false;

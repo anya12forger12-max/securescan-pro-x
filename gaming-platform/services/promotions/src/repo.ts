@@ -193,6 +193,8 @@ export class InMemoryPromotionsRepository implements PromotionsRepository {
     const p = this.promotions.find((x) => x.id === id);
     if (!p)
       return null;
+    if (patch.maxClaims !== undefined && patch.maxClaims < p.claimsCount)
+      return null;
     Object.assign(p, patch);
     return p;
   }
@@ -367,9 +369,10 @@ export class PgPromotionsRepository implements PromotionsRepository {
               expires_at = COALESCE($6, expires_at),
               updated_at = now()
         WHERE id = $1
+          AND ($7::int IS NULL OR claims_count <= $7::int)
         RETURNING *`, [
       id, patch.title ?? null, patch.description ?? null, patch.active ?? null,
-      patch.maxClaims ?? null, patch.expiresAt ?? null,
+      patch.maxClaims ?? null, patch.expiresAt ?? null, patch.maxClaims ?? null,
     ]);
     return rows[0] ? toPromotion(rows[0]) : null;
   }

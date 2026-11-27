@@ -8,6 +8,7 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "@gp/config": "*",
     "fastify": "^5.2.1",
     "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.2"

@@ -1,7 +1,7 @@
 /**
  * Utility UI Components — Spinner, EmptyState, Toast, Progress, etc.
  */
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import type { JSX } from "react";
 import { clsx } from "clsx";
 import { AlertTriangleIcon, CheckCircleIcon, XCircleIcon } from "../icons";
@@ -75,12 +75,18 @@ export function Toast({
   onClose,
   autoClose = 5000,
 }: ToastProps): JSX.Element {
+  // ToastContainer passes a fresh arrow function on every render. Depending on
+  // `onClose` here would restart the timer whenever the app re-renders, so a
+  // toast shown during any interaction could stay on screen forever. Keep the
+  // latest callback in a ref and let the timer depend only on its duration.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
     if (autoClose > 0) {
-      const timer = setTimeout(onClose, autoClose);
+      const timer = setTimeout(() => onCloseRef.current(), autoClose);
       return () => clearTimeout(timer);
     }
-  }, [autoClose, onClose]);
+  }, [autoClose]);
 
   return (
     <div

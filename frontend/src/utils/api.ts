@@ -67,25 +67,28 @@ export const authApi = {
 
 export const workspaceApi = {
   list: () => api.get<any[]>("/workspaces"),
-  get: (id: string) => api.get<any>(`/workspaces/${id}`),
+  get: (id: string) => api.get<any>(`/workspaces/${encodeURIComponent(id)}`),
   create: (data: any) => api.post<any>("/workspaces", data),
-  update: (id: string, data: any) => api.patch<any>(`/workspaces/${id}`, data),
-  delete: (id: string) => api.delete<any>(`/workspaces/${id}`),
+  update: (id: string, data: any) =>
+    api.patch<any>(`/workspaces/${encodeURIComponent(id)}`, data),
+  delete: (id: string) =>
+    api.delete<any>(`/workspaces/${encodeURIComponent(id)}`),
 };
 
 export const assetApi = {
   list: (workspaceId?: string) =>
     api.get<any[]>(
-      `/assets${workspaceId ? `?workspace_id=${workspaceId}` : ""}`,
+      `/assets${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ""}`,
     ),
-  get: (id: string) => api.get<any>(`/assets/${id}`),
+  get: (id: string) => api.get<any>(`/assets/${encodeURIComponent(id)}`),
   create: (data: any, workspaceId?: string) =>
     api.post<any>(
-      `/assets${workspaceId ? `?workspace_id=${workspaceId}` : ""}`,
+      `/assets${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ""}`,
       data,
     ),
-  update: (id: string, data: any) => api.patch<any>(`/assets/${id}`, data),
-  delete: (id: string) => api.delete<any>(`/assets/${id}`),
+  update: (id: string, data: any) =>
+    api.patch<any>(`/assets/${encodeURIComponent(id)}`, data),
+  delete: (id: string) => api.delete<any>(`/assets/${encodeURIComponent(id)}`),
 };
 
 export const assessmentApi = {
@@ -93,17 +96,25 @@ export const assessmentApi = {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
     return api.get<any[]>(`/assessments${qs}`);
   },
-  get: (id: string) => api.get<any>(`/assessments/${id}`),
+  get: (id: string) => api.get<any>(`/assessments/${encodeURIComponent(id)}`),
   create: (data: any) => api.post<any>("/assessments", data),
-  update: (id: string, data: any) => api.patch<any>(`/assessments/${id}`, data),
-  delete: (id: string) => api.delete<any>(`/assessments/${id}`),
+  update: (id: string, data: any) =>
+    api.patch<any>(`/assessments/${encodeURIComponent(id)}`, data),
+  delete: (id: string) =>
+    api.delete<any>(`/assessments/${encodeURIComponent(id)}`),
   dashboard: () => api.get<any>("/assessments/dashboard"),
-  statistics: (id: string) => api.get<any>(`/assessments/${id}/statistics`),
-  findings: (id: string) => api.get<any[]>(`/assessments/${id}/findings`),
-  start: (id: string) => api.post<any>(`/assessments/${id}/start`),
-  pause: (id: string) => api.post<any>(`/assessments/${id}/pause`),
-  resume: (id: string) => api.post<any>(`/assessments/${id}/resume`),
-  cancel: (id: string) => api.post<any>(`/assessments/${id}/cancel`),
+  statistics: (id: string) =>
+    api.get<any>(`/assessments/${encodeURIComponent(id)}/statistics`),
+  findings: (id: string) =>
+    api.get<any[]>(`/assessments/${encodeURIComponent(id)}/findings`),
+  start: (id: string) =>
+    api.post<any>(`/assessments/${encodeURIComponent(id)}/start`),
+  pause: (id: string) =>
+    api.post<any>(`/assessments/${encodeURIComponent(id)}/pause`),
+  resume: (id: string) =>
+    api.post<any>(`/assessments/${encodeURIComponent(id)}/resume`),
+  cancel: (id: string) =>
+    api.post<any>(`/assessments/${encodeURIComponent(id)}/cancel`),
 };
 
 export const scanApi = {

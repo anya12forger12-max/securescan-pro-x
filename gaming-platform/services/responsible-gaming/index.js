@@ -4,7 +4,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { randomUUID } from "node:crypto";
-import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv } from "@gp/config";
+import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, parseCorsOrigins, jwtVerifyEnvFields, jwtVerifyPluginOptions } from "@gp/config";
 import { ERROR_CODES, serviceTokenOk, toMoney } from "@gp/shared-types";
 
 /**
@@ -18,7 +18,7 @@ const envSchema = baseEnvSchema.extend({
   ...capabilityFields("SERVICE_TOKEN"),
   PORT: z.coerce.number().int().positive().default(3012),
   DATABASE_URL: z.string().min(1).url(),
-  JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 characters"),
+  ...jwtVerifyEnvFields,
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
@@ -26,8 +26,8 @@ const env = loadEnv(envSchema);
 const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
-await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
-await app.register(jwt, { secret: env.JWT_ACCESS_SECRET });
+await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
+await app.register(jwt, jwtVerifyPluginOptions(env));
 
 app.addHook("onRequest", async (req, reply) => {
   const requestId = req.headers["x-request-id"] ?? randomUUID();

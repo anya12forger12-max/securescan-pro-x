@@ -4,7 +4,8 @@ import Fastify from "fastify";
 import type { FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
-import { getPool, closePool, createSession, getSession, endSession, joinSession, listSessionPlayers } from "./db.js";
+import { jwtVerifyPluginOptions, parseCorsOrigins } from "@gp/config";
+import { getPool, closePool, createSession, getSession, endSession, joinSession, listSessionPlayers, isSessionParticipant } from "./db.js";
 import type { GameEngineEnv } from "./env.js";
 
 /**
@@ -36,11 +37,8 @@ const JoinSessionSchema = z.object({
 
 export async function buildGameEngineService(env: GameEngineEnv) {
   const app = Fastify({ logger: { level: env.LOG_LEVEL } });
-  await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
-  await app.register(jwt, {
-    secret: env.JWT_ACCESS_SECRET,
-    sign: { expiresIn: Math.floor(900) },
-  });
+  await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
+  await app.register(jwt, jwtVerifyPluginOptions(env));
 
   // Auth middleware
   app.addHook("onRequest", async (req, reply) => {
@@ -72,23 +70,38 @@ export async function buildGameEngineService(env: GameEngineEnv) {
     const token = authHeader.replace("Bearer ", "");
     const decoded = await app.jwt.verify<{ userId: string }>(token);
     const pool = getPool(env.DATABASE_URL);
+    // createSession also inserts the host seat in the same statement, so a
+    // failed response cannot leave an invisible hostless session behind.
     const session = await createSession(pool, {
       id: randomUUID(),
       game_type: parsed.data.game_type,
       host_id: decoded.userId,
     });
-    // Host joins the session
-    await joinSession(pool, session.id, decoded.userId);
     return reply.code(201).send({ session });
   });
 
   // ---------- get session ----------
   app.get("/v1/game/sessions/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const token = headerBearer(req.headers.authorization);
+    if (!token)
+      return reply.code(401).send({ error: "UNAUTHORIZED", message: "missing bearer token" });
+    let decoded: { userId: string };
+    try {
+      decoded = await app.jwt.verify<{ userId: string }>(token);
+    } catch {
+      return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid or expired token" });
+    }
     const pool = getPool(env.DATABASE_URL);
     const session = await getSession(pool, id);
     if (!session) {
       return reply.code(404).send({ error: "SESSION_NOT_FOUND", message: "session not found" });
+    }
+    // Session metadata and the player list are only meaningful to people in
+    // the game; an authenticated outsider must not be able to enumerate them
+    // by guessing/learning a UUID.
+    if (!(await isSessionParticipant(pool, id, decoded.userId))) {
+      return reply.code(403).send({ error: "FORBIDDEN", message: "only session players may view this session" });
     }
     const players = await listSessionPlayers(pool, id);
     return reply.send({ session, players });

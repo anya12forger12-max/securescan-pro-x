@@ -4,6 +4,7 @@ import Fastify from "fastify";
 import type { FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
+import { jwtVerifyPluginOptions, parseCorsOrigins } from "@gp/config";
 import {
   getPool,
   closePool,
@@ -44,11 +45,8 @@ type JwtClaims = { userId: string; username: string };
 export async function buildPictionaryService(env: PictionaryEnv) {
   const app = Fastify({ logger: { level: env.LOG_LEVEL } });
 
-  await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
-  await app.register(jwt, {
-    secret: env.JWT_ACCESS_SECRET,
-    sign: { expiresIn: Math.floor(900) },
-  });
+  await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
+  await app.register(jwt, jwtVerifyPluginOptions(env));
 
   // Auth middleware
   app.addHook("onRequest", async (req, reply) => {
@@ -124,7 +122,10 @@ export async function buildPictionaryService(env: PictionaryEnv) {
     // once the round ends the word is public and the full log is safe.
     const safeGuesses = guesses.map((guess) => {
       if (round.status === "ended" || guess.user_id === decoded.userId) return guess;
-      const { guess: _hidden, ...safeGuess } = guess;
+      // Both the text and its correctness are secret while the word is still
+      // on the easel: a boolean right/wrong turns every guess into an oracle
+      // for the answer even when the text itself is redacted.
+      const { guess: _hidden, correct: _outcome, ...safeGuess } = guess;
       return safeGuess;
     });
     const { word: _word, ...safeRound } = round;

@@ -1,7 +1,7 @@
 /**
  * Form Components — Input, Select, Textarea, Checkbox, Switch
  */
-import React, { useState } from "react";
+import React, { useId, useState } from "react";
 import type { JSX } from "react";
 import { clsx } from "clsx";
 import { EyeIcon, EyeOffIcon } from "../icons";
@@ -23,8 +23,16 @@ export function Input({
   type,
   ...props
 }: InputProps): JSX.Element {
+  // A label-derived id is not unique: two fields with the same label (or a
+  // modal duplicating a background form) produced duplicate DOM ids, breaking
+  // htmlFor/aria-describedby associations. Keep the readable prefix but make
+  // the id stable and unique per component instance.
+  const generatedId = useId().replace(/:/g, "");
   const inputId =
-    id || (label ? label.toLowerCase().replace(/\s+/g, "-") : undefined);
+    id ||
+    (label
+      ? `${label.toLowerCase().replace(/\s+/g, "-")}-${generatedId}`
+      : generatedId);
 
   if (type === "password") {
     return (
@@ -102,6 +110,7 @@ function PasswordInput({
           className="form-input form-input--with-icon"
           type={show ? "text" : "password"}
           aria-invalid={!!error}
+          aria-describedby={error ? `${inputId}-error` : undefined}
           {...props}
         />
         <button
@@ -114,7 +123,7 @@ function PasswordInput({
         </button>
       </div>
       {error && (
-        <p className="form-error" role="alert">
+        <p id={`${inputId}-error`} className="form-error" role="alert">
           {error}
         </p>
       )}

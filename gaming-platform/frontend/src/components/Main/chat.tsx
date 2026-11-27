@@ -49,6 +49,7 @@ export default function Chat() {
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder="Message"
+            aria-label="Chat message"
             className="control-input"
           />
           <button type="submit" className="primary-button">
@@ -71,6 +72,7 @@ export default function Chat() {
           value={newRoom}
           onChange={(event) => setNewRoom(event.target.value)}
           placeholder="New room"
+          aria-label="New chat room"
           className="control-input"
         />
         <button

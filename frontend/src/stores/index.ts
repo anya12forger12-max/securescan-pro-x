@@ -2,6 +2,7 @@
  * Zustand Stores for SecureScan Pro X
  */
 import { create } from "zustand";
+import { storageGet, storageSet } from "../utils/storage";
 
 // ── Auth Store ────────────────────────────────────────────────
 
@@ -55,12 +56,12 @@ interface UIState {
 }
 
 export const useUIStore = create<UIState>((set) => ({
-  theme: localStorage.getItem("theme") || "dark",
+  theme: storageGet("theme") || "dark",
   sidebarCollapsed: false,
   notifications: [],
   setTheme: (theme) => {
     document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("theme", theme);
+    storageSet("theme", theme);
     set({ theme });
   },
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),

@@ -4,8 +4,8 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
 import { createHash, randomUUID } from "node:crypto";
-import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, registerErrorHandler } from "@gp/config";
-import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
+import { baseEnvSchema, capabilityFields, dbPoolOptions, loadEnv, registerErrorHandler, parseCorsOrigins, jwtVerifyEnvFields, jwtVerifyPluginOptions } from "@gp/config";
+import { ERROR_CODES, boundedInt, serviceTokenOk } from "@gp/shared-types";
 
 /**
  * Admin / risk service (3013).
@@ -19,7 +19,7 @@ const envSchema = baseEnvSchema.extend({
   ...capabilityFields("ADMIN_SERVICE_TOKEN", "ADMIN_BOOTSTRAP_TOKEN"),
   PORT: z.coerce.number().int().positive().default(3013),
   DATABASE_URL: z.string().min(1).url(),
-  JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 characters"),
+  ...jwtVerifyEnvFields,
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
 });
@@ -48,8 +48,8 @@ const AUDIT_LOCK_KEY = 3013001;
 const AUDIT_COLUMNS = `seq, prev_hash, hash, actor, action, target, metadata, created_at`;
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
-await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
-await app.register(jwt, { secret: env.JWT_ACCESS_SECRET });
+await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
+await app.register(jwt, jwtVerifyPluginOptions(env));
 registerErrorHandler(app);
 
 app.addHook("onRequest", async (req, reply) => {
@@ -246,7 +246,7 @@ app.get("/v1/internal/audit", async (req, reply) => {
   if (!serviceTokenOk(req.headers, env.ADMIN_SERVICE_TOKEN))
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
 
-  const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
+  const limit = boundedInt(req.query.limit, 50, 1, 200);
   const actor = headerString(req.query, "actor");
   try {
     const result = await pool.query(

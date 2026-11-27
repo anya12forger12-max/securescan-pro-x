@@ -4,6 +4,7 @@ import Fastify from "fastify";
 import type { FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import jwt from "@fastify/jwt";
+import { jwtVerifyPluginOptions, parseCorsOrigins } from "@gp/config";
 import { getPool, closePool, createMessage, listMessages, createRoom, listRooms } from "./db.js";
 import type { ChatEnv } from "./env.js";
 
@@ -23,7 +24,13 @@ const SendMessageSchema = z.object({
   content: z.string().min(1).max(4000),
 });
 const CreateRoomSchema = z.object({
-  name: z.string().min(1).max(64),
+  // A room name is one URL path segment. Encoded separators and bare dot
+  // segments are rejected by the gateway/URL parser; other dots are fine.
+  name: z.string()
+    .min(1).max(64)
+    .refine((value) => !/[\\/]/.test(value) && value !== "." && value !== "..", {
+      message: "room name cannot be '.' or '..' or contain '/', '\\'",
+    }),
 });
 
 export async function buildChatService(env: ChatEnv) {
@@ -47,11 +54,8 @@ export async function buildChatService(env: ChatEnv) {
     }
   };
 
-  await app.register(cors, { origin: env.CORS_ORIGIN.split(",") });
-  await app.register(jwt, {
-    secret: env.JWT_ACCESS_SECRET,
-    sign: { expiresIn: Math.floor(900) },
-  });
+  await app.register(cors, { origin: parseCorsOrigins(env.CORS_ORIGIN) });
+  await app.register(jwt, jwtVerifyPluginOptions(env));
 
   // Auth middleware
   app.addHook("onRequest", async (req, reply) => {

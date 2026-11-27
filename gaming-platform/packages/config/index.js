@@ -24,6 +24,8 @@ export const capabilityTokenFields = {
   REALTIME_SERVICE_TOKEN: internalToken("REALTIME_SERVICE_TOKEN"),
   PROMOTIONS_SERVICE_TOKEN: internalToken("PROMOTIONS_SERVICE_TOKEN"),
   CRASH_SERVICE_TOKEN: internalToken("CRASH_SERVICE_TOKEN"),
+  // Only the crash service may ask auth to mint an operator-launch session.
+  AUTH_SESSION_SERVICE_TOKEN: internalToken("AUTH_SESSION_SERVICE_TOKEN"),
   ADMIN_BOOTSTRAP_TOKEN: internalToken("ADMIN_BOOTSTRAP_TOKEN"),
 };
 
@@ -32,9 +34,126 @@ export function capabilityFields(...names) {
   return Object.fromEntries(names.map((name) => [name, capabilityTokenFields[name]]));
 }
 
+/**
+ * Access tokens are RS256-signed. Only auth holds the private key; every other
+ * process receives the public key and verifies with a pinned algorithm/issuer/
+ * audience. PEM newlines are stored as literal `\n` in .env so Compose can
+ * interpolate a single line, then normalised here before use.
+ */
+export const JWT_ALGORITHM = "RS256";
+export const JWT_ISSUER = "gaming-platform";
+export const JWT_AUDIENCE = "gaming-platform-api";
+
+export function normalizePem(value) {
+  return String(value ?? "").replace(/\\n/g, "\n").trim();
+}
+
+const publicKeyField = z
+  .string()
+  .min(80, "JWT_PUBLIC_KEY must be an RSA public key")
+  .refine((value) => normalizePem(value).includes("BEGIN PUBLIC KEY"), {
+    message: "JWT_PUBLIC_KEY must be a PEM-encoded RSA public key",
+  });
+const privateKeyField = z
+  .string()
+  .min(80, "JWT_PRIVATE_KEY must be an RSA private key")
+  .refine((value) => normalizePem(value).includes("BEGIN PRIVATE KEY"), {
+    message: "JWT_PRIVATE_KEY must be a PEM-encoded RSA private key",
+  });
+
+export const jwtVerifyEnvFields = {
+  JWT_PUBLIC_KEY: publicKeyField,
+  JWT_ISSUER: z.string().min(1).default(JWT_ISSUER),
+  JWT_AUDIENCE: z.string().min(1).default(JWT_AUDIENCE),
+};
+
+export const jwtSignEnvFields = {
+  ...jwtVerifyEnvFields,
+  JWT_PRIVATE_KEY: privateKeyField,
+};
+
+/** Options for jsonwebtoken.verify in the gateway and auth's /me route. */
+export function jwtVerifyOptions(env) {
+  return {
+    algorithms: [JWT_ALGORITHM],
+    issuer: env.JWT_ISSUER ?? JWT_ISSUER,
+    audience: env.JWT_AUDIENCE ?? JWT_AUDIENCE,
+  };
+}
+
+/** Verify-only registration for @fastify/jwt; signing here must fail loudly. */
+export function jwtVerifyPluginOptions(env) {
+  return {
+    secret: { public: normalizePem(env.JWT_PUBLIC_KEY) },
+    verify: jwtVerifyOptions(env),
+  };
+}
+
+/**
+ * Capability scoping silently collapses when two credentials share a value.
+ * Check every credential a process actually received at startup.
+ */
+const DISTINCT_SECRET_FIELDS = [
+  ...Object.keys(capabilityTokenFields),
+  "JWT_PUBLIC_KEY",
+  "JWT_PRIVATE_KEY",
+  "DATABASE_URL",
+  "REDIS_URL",
+];
+export function assertDistinctSecrets(env = process.env) {
+  const seen = new Map();
+  for (const name of DISTINCT_SECRET_FIELDS) {
+    const raw = env[name];
+    if (typeof raw !== "string" || raw.length === 0) continue;
+    const value = name === "JWT_PUBLIC_KEY" || name === "JWT_PRIVATE_KEY"
+      ? normalizePem(raw)
+      : raw;
+    const previous = seen.get(value);
+    if (previous) {
+      console.error(`[config] ${name} must not reuse the ${previous} value`);
+      process.exit(1);
+    }
+    seen.set(value, name);
+  }
+}
+
 export const baseEnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 });
+
+/**
+ * Parse a comma-separated CORS_ORIGIN into the exact strings browsers send.
+ * Every service and the gateway must use this one implementation: trimming and
+ * URL-normalising in only some processes made edge and peer CORS decisions
+ * diverge (for example `http://localhost:3000/` never matches an Origin
+ * header even though it appears in the gateway's connect-src).
+ *
+ * Malformed entries are kept verbatim so they fail closed as exact,
+ * non-matching origins instead of widening the allow-list.
+ */
+export function parseCorsOrigins(value = "http://localhost:5173") {
+  return String(value)
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+    .map((origin) => {
+      try {
+        const url = new URL(origin);
+        if (
+          (url.protocol === "http:" || url.protocol === "https:") &&
+          !url.username &&
+          !url.password &&
+          url.pathname === "/" &&
+          !url.search &&
+          !url.hash
+        )
+          return url.origin;
+      } catch {
+        // Keep the raw value; an invalid origin must not widen the allow-list.
+      }
+      return origin;
+    });
+}
 
 /**
  * Bounded Postgres pool settings shared by every service.
@@ -69,6 +188,7 @@ export function loadEnv(schema) {
     console.error(`[config] invalid environment:\n${issues}`);
     process.exit(1);
   }
+  assertDistinctSecrets(parsed.data);
   return parsed.data;
 }
 

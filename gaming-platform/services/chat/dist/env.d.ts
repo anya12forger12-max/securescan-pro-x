@@ -1,8 +1,10 @@
 import { z } from "zod";
 export declare const ChatEnvSchema: z.ZodObject<{
+    JWT_PUBLIC_KEY: z.ZodString;
+    JWT_ISSUER: z.ZodDefault<z.ZodString>;
+    JWT_AUDIENCE: z.ZodDefault<z.ZodString>;
     DATABASE_URL: z.ZodString;
     PORT: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
-    JWT_ACCESS_SECRET: z.ZodString;
     REALTIME_URL: z.ZodDefault<z.ZodString>;
     REALTIME_SERVICE_TOKEN: z.ZodString;
     CORS_ORIGIN: z.ZodDefault<z.ZodString>;

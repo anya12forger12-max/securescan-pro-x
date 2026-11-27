@@ -1,14 +1,24 @@
 import Fastify from "fastify";
 import jwt from "jsonwebtoken";
+import pg from "pg";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRateLimiter } from "./rate-limit.js";
+import { registerAviatorSocket } from "./aviator-ws.js";
+import {
+  assertDistinctSecrets,
+  dbPoolOptions,
+  jwtVerifyOptions,
+  normalizePem,
+  parseCorsOrigins,
+} from "@gp/config";
 
 const PORT = Number(process.env.PORT ?? 3000);
-const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
+const JWT_PUBLIC_KEY = normalizePem(process.env.JWT_PUBLIC_KEY);
+const JWT_VERIFY_OPTIONS = jwtVerifyOptions(process.env);
 const SERVICE_TOKEN = process.env.SERVICE_TOKEN;
 const ADMIN_SERVICE_TOKEN = process.env.ADMIN_SERVICE_TOKEN;
 const WALLET_SERVICE_TOKEN = process.env.WALLET_SERVICE_TOKEN;
@@ -20,27 +30,7 @@ const ADMIN_BOOTSTRAP_TOKEN = process.env.ADMIN_BOOTSTRAP_TOKEN;
 // send `Origin` without a trailing slash, so a raw allow-list entry such as
 // `http://localhost:3000/` would silently fail CORS while still appearing in
 // connect-src. Malformed entries are kept as-is and rejected by both checks.
-const CORS_ORIGINS = (process.env.CORS_ORIGIN ?? "http://localhost:5173")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean)
-  .map((value) => {
-    try {
-      const url = new URL(value);
-      if (
-        (url.protocol === "http:" || url.protocol === "https:") &&
-        !url.username &&
-        !url.password &&
-        url.pathname === "/" &&
-        !url.search &&
-        !url.hash
-      )
-        return url.origin;
-    } catch {
-      // Fall through to the raw value; it fails validation in both consumers.
-    }
-    return value;
-  });
+const CORS_ORIGINS = parseCorsOrigins(process.env.CORS_ORIGIN);
 
 /** Echo only a configured origin. A comma-separated allow-list in one header
  * is invalid, and credentials require an exact origin rather than `*`. */
@@ -97,10 +87,24 @@ const ADMIN_RISK_URL =
   process.env.ADMIN_RISK_URL ??
   (UPSTREAM_MODE === "docker" ? "http://admin-risk:3013" : "http://127.0.0.1:3013");
 
-if (!JWT_ACCESS_SECRET || JWT_ACCESS_SECRET.length < 32) {
-  console.error("[gateway] JWT_ACCESS_SECRET must be at least 32 characters");
+if (!JWT_PUBLIC_KEY.includes("BEGIN PUBLIC KEY")) {
+  console.error("[gateway] JWT_PUBLIC_KEY must be a PEM-encoded RSA public key");
   process.exit(1);
 }
+assertDistinctSecrets(process.env);
+
+if (!process.env.DATABASE_URL) {
+  console.error("[gateway] DATABASE_URL is required to verify access-token records");
+  process.exit(1);
+}
+const TOKEN_VERSION_CACHE_MS = (() => {
+  const parsed = Number(process.env.TOKEN_VERSION_CACHE_MS ?? 15_000);
+  return Number.isInteger(parsed) && parsed >= 0 ? Math.min(parsed, 60_000) : 15_000;
+})();
+const tokenPool = new pg.Pool(dbPoolOptions(process.env.DATABASE_URL));
+const tokenCache = new Map(); // jti -> { at, valid, userId, version }
+const TOKEN_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const REQUIRED_SECRETS = {
   SERVICE_TOKEN,
   ADMIN_SERVICE_TOKEN,
@@ -134,6 +138,21 @@ const rateLimitConfig = {
   redisUrl: process.env.REDIS_URL,
 };
 const rateLimiter = RATE_LIMIT_ENABLED ? createRateLimiter(rateLimitConfig) : null;
+
+// Anonymous IP limits only mean something if req.ip is the browser, not the
+// host's TLS terminator. The documented deployment uses exactly one loopback
+// proxy hop; allow that hop to supply X-Forwarded-For and no more. Set to 0 for
+// direct development access with no proxy in front of the gateway.
+const TRUST_PROXY_HOPS = (() => {
+  const parsed = Number(process.env.TRUST_PROXY_HOPS ?? 1);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 1;
+})();
+// Bound the establishment of every upstream request. SSE streams are excluded
+// once their headers arrive; their socket lifetime is independent of this cap.
+const UPSTREAM_TIMEOUT_MS = (() => {
+  const parsed = Number(process.env.UPSTREAM_TIMEOUT_MS ?? 30_000);
+  return Number.isFinite(parsed) && parsed >= 1000 ? parsed : 30_000;
+})();
 
 /**
  * SSE connections are long-lived, so they carry a separate *concurrent* socket
@@ -236,6 +255,19 @@ const ROUTES = [
   // the broad promotions `/internal` rule, which would otherwise swallow it.
   { prefix: "/v1/crash", service: "crash", port: 3023 },
   { prefix: "/internal/crash", service: "crash", port: 3023, privileged: true },
+  // Spec-compatible player/operator aliases. The crash service owns these
+  // resources; `rewrite` maps the public path onto its implementation route
+  // without exposing a second copy of the ledger.
+  { prefix: "/v1/rounds", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/rounds/, "/v1/crash/rounds") },
+  { prefix: "/v1/bets", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/bets/, "/v1/crash/bets") },
+  { prefix: "/v1/fairness/verify", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/fairness/, "/v1/crash/fairness") },
+  { prefix: "/v1/stats/top", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/stats/, "/v1/crash/stats") },
+  { prefix: "/v1/rules", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/rules/, "/v1/crash/rules") },
+  { prefix: "/v1/settings", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/settings/, "/v1/crash/settings") },
+  { prefix: "/v1/me", service: "crash", port: 3023, rewrite: () => "/v1/crash/me" },
+  // Operator endpoints carry their own API key and signed body; the crash
+  // service verifies both, so the gateway only needs to route them.
+  { prefix: "/v1/operator", service: "crash", port: 3023, rewrite: (p) => p.replace(/^\/v1\/operator/, "/v1/crash/operator") },
   { prefix: "/internal", service: "promotions", port: 3022, privileged: true },
   { prefix: "/v1/internal", service: "promotions", port: 3022, privileged: true },
   { prefix: "/v1/promotions", service: "promotions", port: 3022 },
@@ -373,12 +405,26 @@ async function recordAdminAudit(req, actorId, action, target, metadata) {
  */
 function auditedMutation(req, method, path, body) {
   const requestId = String(req.headers["x-request-id"] ?? "");
-  const auditPath = String(path ?? "");
+  // The transparent proxy keeps JSON bodies as raw strings. Decode a copy for
+  // audit metadata only; the original bytes are still forwarded unchanged.
+  let auditedBody = body;
+  if (typeof body === "string") {
+    try {
+      auditedBody = JSON.parse(body);
+    } catch {
+      auditedBody = {};
+    }
+  }
+  // `matchesRoute()` deliberately accepts one trailing slash for collection
+  // routes. Audit detection must canonicalize the same way or a privileged
+  // mutation can commit without a hash-chained audit entry.
+  const rawPath = String(path ?? "");
+  const auditPath = rawPath.length > 1 && rawPath.endsWith("/") ? rawPath.slice(0, -1) : rawPath;
   const resourceId = (value) =>
     typeof value === "string" && value.trim().length > 0 ? value.trim() : `request:${requestId}`;
 
   if (method === "POST" && auditPath === "/internal/promotions") {
-    const bodyValue = body ?? {};
+    const bodyValue = auditedBody ?? {};
     const source = bodyValue.data?.promotion ?? bodyValue;
     return {
       action: "promotion.create",
@@ -390,7 +436,7 @@ function auditedMutation(req, method, path, body) {
     return { action: "promotion.update", target: auditPath.slice("/internal/promotions/".length) };
   }
   if (method === "POST" && auditPath === "/v1/tournaments") {
-    const source = body?.tournament ?? body;
+    const source = auditedBody?.tournament ?? auditedBody;
     return {
       action: "tournament.create",
       target: `tournament:${resourceId(source.title)}`,
@@ -400,7 +446,92 @@ function auditedMutation(req, method, path, body) {
   return null;
 }
 
-const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
+const app = Fastify({
+  logger: { level: process.env.LOG_LEVEL ?? "info" },
+  trustProxy: TRUST_PROXY_HOPS,
+});
+app.addHook("onClose", async () => {
+  await tokenPool.end();
+});
+
+/**
+ * A valid RS256 signature is necessary but not sufficient: auth records every
+ * issued jti and bumps `auth_users.token_version` on logout/replay. Checking
+ * both at the edge makes a revoked token unusable without waiting for exp.
+ * Positive results are cached briefly; a negative result is cached only for
+ * the same bounded window so newly minted jtis cannot be stuck out of date.
+ */
+function pruneTokenCache(now) {
+  if (tokenCache.size < 5000) return;
+  for (const [key, value] of tokenCache) {
+    if (now - value.at >= TOKEN_VERSION_CACHE_MS) tokenCache.delete(key);
+  }
+}
+
+async function accessTokenActive(decoded, log) {
+  const { userId, jti } = decoded ?? {};
+  const version = Number(decoded?.ver);
+  if (
+    typeof userId !== "string" || !TOKEN_UUID.test(userId) ||
+    typeof jti !== "string" || !TOKEN_UUID.test(jti) ||
+    !Number.isInteger(version) || version < 1
+  )
+    return false;
+
+  const now = Date.now();
+  if (TOKEN_VERSION_CACHE_MS > 0) {
+    const cached = tokenCache.get(jti);
+    if (cached && now - cached.at < TOKEN_VERSION_CACHE_MS) {
+      return cached.valid &&
+        cached.userId === userId &&
+        cached.version === version;
+    }
+  }
+
+  try {
+    const result = await tokenPool.query(
+      `SELECT t.user_id::text AS "userId", t.token_version
+       FROM auth_access_tokens t
+       JOIN auth_users u ON u.id = t.user_id
+       WHERE t.jti = $1 AND t.user_id = $2 AND t.token_version = $3
+         AND t.revoked_at IS NULL AND t.expires_at > now()
+         AND u.token_version = t.token_version`,
+      [jti, userId, version],
+    );
+    const row = result.rows[0];
+    const valid = Boolean(row && row.userId === userId && Number(row.token_version) === version);
+    if (TOKEN_VERSION_CACHE_MS > 0) {
+      pruneTokenCache(now);
+      tokenCache.set(jti, {
+        at: now,
+        valid,
+        userId: valid ? userId : null,
+        version: valid ? version : null,
+      });
+    }
+    return valid;
+  } catch (err) {
+    // Fail closed: an unverifiable token must not be treated as anonymous and
+    // forwarded with a stale identity header.
+    log?.warn({ err, jti }, "access-token record lookup failed");
+    return null;
+  }
+}
+
+async function resolveBearer(req) {
+  const raw = req.headers.authorization;
+  if (typeof raw !== "string" || !raw.startsWith("Bearer ")) return { status: "none" };
+  let decoded;
+  try {
+    decoded = jwt.verify(raw.slice(7), JWT_PUBLIC_KEY, JWT_VERIFY_OPTIONS);
+  } catch {
+    return { status: "invalid" };
+  }
+  const active = await accessTokenActive(decoded, req.log);
+  if (active === null) return { status: "unavailable" };
+  if (!active) return { status: "invalid" };
+  return { status: "valid", claims: decoded };
+}
 
 // The gateway is a transparent proxy. Parsing JSON into an object and then
 // re-serialising it rejects legitimate empty POST bodies and can change number
@@ -436,9 +567,23 @@ app.addHook("onRequest", async (req, reply) => {
 
 app.get("/health", async () => ({ status: "ok", service: "gateway" }));
 
-/** Aggregate readiness for orchestrators and `npm run smoke`: the gateway is
- * only ready once every downstream service reports its own DB-backed /ready. */
-app.get("/ready", async (_req, reply) => {
+/**
+ * Aggregate readiness for orchestrators and `npm run smoke`: the gateway is
+ * only ready once every downstream service reports its own DB-backed /ready.
+ *
+ * This endpoint is intentionally excluded from the player rate limiter (probes
+ * must not fail closed with Redis), so without a short cache each call fans out
+ * to every peer. Cache the aggregate briefly and coalesce concurrent calls so
+ * a burst of probes can trigger at most one fan-out per window.
+ */
+const READY_CACHE_MS = (() => {
+  const value = Number(process.env.READY_CACHE_MS ?? 2000);
+  return Number.isInteger(value) && value >= 0 ? Math.min(value, 10_000) : 2000;
+})();
+let readyCache = null; // { at, status, body }
+let readyInFlight = null;
+
+async function collectReadiness() {
   const checks = await Promise.all(
     DOWNSTREAM_PORTS.map(async ([service, port]) => {
       try {
@@ -452,10 +597,28 @@ app.get("/ready", async (_req, reply) => {
     }),
   );
   const failed = checks.filter((check) => !check.ok);
-  if (failed.length) {
-    return reply.code(503).send({ status: "not_ready", failed, services: checks.length });
+  return failed.length
+    ? { status: 503, body: { status: "not_ready", failed, services: checks.length } }
+    : { status: 200, body: { status: "ready", services: checks.length } };
+}
+
+app.get("/ready", async (_req, reply) => {
+  reply.header("cache-control", "no-store");
+  const now = Date.now();
+  if (readyCache && now - readyCache.at < READY_CACHE_MS)
+    return reply.code(readyCache.status).send(readyCache.body);
+  if (!readyInFlight) {
+    readyInFlight = collectReadiness()
+      .then((result) => {
+        readyCache = { at: Date.now(), ...result };
+        return result;
+      })
+      .finally(() => {
+        readyInFlight = null;
+      });
   }
-  return { status: "ready", services: checks.length };
+  const result = await readyInFlight;
+  return reply.code(result.status).send(result.body);
 });
 
 /** Rate-limit player traffic before it reaches any downstream service.
@@ -471,6 +634,20 @@ app.addHook("onRequest", async (req, reply) => {
   if (path.startsWith("/internal/")) return;
   const ip = req.ip ?? req.socket?.remoteAddress ?? "unknown";
 
+  // Registration/login/refresh are anonymous by definition; do not require a
+  // token record lookup for them. Every other path with a Bearer credential is
+  // checked here so rate-limit buckets and proxy identity use the same truth.
+  let authResult = { status: "none" };
+  if (!IP_LIMITED_AUTH_PATH.test(path)) {
+    authResult = await resolveBearer(req);
+    if (authResult.status === "unavailable") {
+      return reply.code(503).send({
+        error: "SERVICE_UNAVAILABLE",
+        message: "access-token verification unavailable",
+      });
+    }
+  }
+
   const applyLimit = (result) => {
     reply.header("x-ratelimit-limit", String(result.limit));
     reply.header("x-ratelimit-remaining", String(result.remaining));
@@ -485,19 +662,10 @@ app.addHook("onRequest", async (req, reply) => {
     });
   };
 
-  const verifiedUserId = () => {
-    const raw = req.headers.authorization;
-    if (typeof raw === "string" && raw.startsWith("Bearer ")) {
-      try {
-        const decoded = jwt.verify(raw.slice(7), JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
-        if (typeof decoded.userId === "string") return decoded.userId;
-      } catch {
-        // An invalid token is still counted by IP; the downstream service
-        // performs the authoritative rejection.
-      }
-    }
-    return null;
-  };
+  // An invalid token is still counted by IP; the proxy will reject it before
+  // forwarding if the route requires a player identity.
+  const verifiedUserId = () =>
+    authResult.status === "valid" ? authResult.claims.userId : null;
 
   // Anonymous stream attempts are limited by IP; a verified player's stream
   // establishment is a normal read request and falls through to the per-user
@@ -543,19 +711,14 @@ const KNOWN_PERMISSIONS = [
   "roles.manage",
 ];
 app.get("/v1/me/permissions", async (req, reply) => {
-  const raw = req.headers.authorization;
-  if (typeof raw !== "string" || !raw.startsWith("Bearer ")) {
-    return reply.code(401).send({ error: "UNAUTHORIZED", message: "a player token is required" });
+  const authResult = await resolveBearer(req);
+  if (authResult.status === "unavailable") {
+    return reply.code(503).send({ error: "SERVICE_UNAVAILABLE", message: "token verification unavailable" });
   }
-  let decoded;
-  try {
-    decoded = jwt.verify(raw.slice(7), JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
-  } catch {
+  if (authResult.status !== "valid") {
     return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid token" });
   }
-  if (typeof decoded?.userId !== "string") {
-    return reply.code(401).send({ error: "UNAUTHORIZED", message: "invalid token" });
-  }
+  const decoded = authResult.claims;
   const granted = await Promise.all(
     KNOWN_PERMISSIONS.map(async (permission) =>
       (await hasPermission(decoded.userId, permission, req.log)) ? permission : null),
@@ -597,18 +760,23 @@ async function proxy(req, reply) {
     delete headers[name];
   }
 
-  // Assert identity only from a verified player JWT. Services still receive
-  // the original Authorization header and can verify it independently.
-  let decoded = null;
-  const raw = headers.authorization;
-  if (typeof raw === "string" && raw.startsWith("Bearer ")) {
-    try {
-      decoded = jwt.verify(raw.slice(7), JWT_ACCESS_SECRET, { algorithms: ["HS256"] });
-      if (typeof decoded.userId === "string") headers["x-user-id"] = decoded.userId;
-      if (typeof decoded.username === "string") headers["x-username"] = decoded.username;
-    } catch {
-      // Invalid tokens are passed through; the downstream service rejects them.
-    }
+  // Assert identity only from a verified, unrevoked player token. Services
+  // still receive the original Authorization header and verify it independently.
+  // Login/register/refresh are anonymous capabilities: a stale Authorization
+  // header must not be able to block a credential exchange.
+  const authResult = IP_LIMITED_AUTH_PATH.test(path)
+    ? { status: "none" }
+    : await resolveBearer(req);
+  if (authResult.status === "unavailable") {
+    return reply.code(503).send({
+      error: "SERVICE_UNAVAILABLE",
+      message: "access-token verification unavailable",
+    });
+  }
+  const decoded = authResult.status === "valid" ? authResult.claims : null;
+  if (decoded) {
+    headers["x-user-id"] = decoded.userId;
+    if (typeof decoded.username === "string") headers["x-username"] = decoded.username;
   }
 
   // Peer-to-peer routes are authenticated by their capability token alone;
@@ -682,7 +850,8 @@ async function proxy(req, reply) {
     reply.raw.once("close", releaseStream);
   }
 
-  const upstream = `http://${upstreamHost(target.service)}:${target.port}${parsed.pathname}${parsed.search}`;
+  const upstreamPath = target.rewrite ? target.rewrite(parsed.pathname) : parsed.pathname;
+  const upstream = `http://${upstreamHost(target.service)}:${target.port}${upstreamPath}${parsed.search}`;
   const init = { method: req.method, headers };
   if (req.body !== undefined) {
     init.body = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
@@ -701,10 +870,19 @@ async function proxy(req, reply) {
     }
   }
 
+  let upstreamTimer;
   try {
-    const res = await fetch(upstream, init);
+    const controller = new AbortController();
+    upstreamTimer = setTimeout(
+      () => controller.abort(new Error("upstream request timed out")),
+      UPSTREAM_TIMEOUT_MS,
+    );
+    const res = await fetch(upstream, { ...init, signal: controller.signal });
     const contentType = res.headers.get("content-type") ?? "";
     const requestId = res.headers.get("x-request-id");
+    // Money-affecting Aviator routes mark a cached replay so clients and
+    // support can distinguish it from a fresh wager without trusting the body.
+    const idempotentReplay = res.headers.get("x-idempotent-replay");
     // Auth's cookie refresh flow relies on the exact HttpOnly Set-Cookie value
     // surviving the proxy. Keep every value as a separate header: joining them
     // with commas would corrupt Expires attributes.
@@ -716,6 +894,10 @@ async function proxy(req, reply) {
     // the upstream body straight to the client and let the socket close decide
     // when the stream is over.
     if (contentType.includes("text/event-stream") && res.body) {
+      // The stream is long-lived; stop the establishment timer once headers
+      // have arrived instead of killing an active SSE socket.
+      clearTimeout(upstreamTimer);
+      upstreamTimer = undefined;
       // hijack() bypasses Fastify's header serializer, so copy the headers the
       // hooks already set (rate-limit counters, CORS credentials, request id).
       const pendingHeaders = reply.getHeaders();
@@ -734,46 +916,58 @@ async function proxy(req, reply) {
         ...(setCookies.length ? { "set-cookie": setCookies } : {}),
       });
       const reader = res.body.getReader();
+      // Register the close signal before pumping. `events.once` only reacts to
+      // a *future* event: a client that disconnected while the upstream fetch
+      // was in flight had already emitted "close", so racing once("drain")
+      // against once("close") parked forever after a destroyed write returned
+      // false, leaking the upstream stream and its MAX_STREAMS slot.
+      let clientClosed = false;
+      const closed = new Promise((resolve) => rawReply.once("close", resolve));
+      rawReply.on("close", () => {
+        clientClosed = true;
+        void reader.cancel().catch(() => undefined);
+      });
       const pump = async () => {
         try {
           for (;;) {
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done || clientClosed || rawReply.destroyed || rawReply.writableEnded) break;
             // Honour socket backpressure. Without this the gateway drains the
             // realtime hub as fast as it can and buffers Slowloris-style clients
             // in gateway memory instead of throttling the bounded upstream queue.
             if (!rawReply.write(value)) {
-              // A closed socket may never emit "drain" (e.g. MAX_STREAMS eviction),
-              // so race it with "close". Swallow loser rejections to avoid an
-              // unhandled rejection after one side wins.
+              // Swallow loser rejections to avoid an unhandled rejection after
+              // one side wins the race.
               const drained = once(rawReply, "drain").catch(() => undefined);
-              const closed = once(rawReply, "close").catch(() => undefined);
               await Promise.race([drained, closed]);
             }
-            if (rawReply.destroyed || rawReply.writableEnded) break;
+            if (clientClosed || rawReply.destroyed || rawReply.writableEnded) break;
           }
         } catch (err) {
           req.log.warn({ err }, "event stream closed");
         } finally {
+          // Always release the upstream reader, including when the client went
+          // away before the "close" listener above could be installed.
+          void reader.cancel().catch(() => undefined);
           rawReply.end();
           releaseStream();
         }
       };
       void pump();
-      // IncomingMessage "close" fires when the request body is complete, which
-      // for a GET SSE request can be immediate. The response/socket is the
-      // lifetime that matters for a hijacked stream.
-      rawReply.on("close", () => void reader.cancel().catch(() => undefined));
       return;
     }
 
     const text = await res.text();
+    clearTimeout(upstreamTimer);
+    upstreamTimer = undefined;
     reply.code(res.status);
     if (contentType) reply.header("content-type", contentType);
     if (requestId) reply.header("x-request-id", requestId);
+    if (idempotentReplay === "1") reply.header("x-idempotent-replay", "1");
     if (setCookies.length) reply.header("set-cookie", setCookies);
     return reply.send(text);
   } catch (err) {
+    if (upstreamTimer) clearTimeout(upstreamTimer);
     releaseStream();
     req.log.warn({ err, service: target.service }, "upstream request failed");
     // Do not reflect upstream/internal error details back to callers.
@@ -783,6 +977,17 @@ async function proxy(req, reply) {
     });
   }
 }
+
+// Aviator protocol v1 socket. Registered before the catch-all proxy because a
+// WebSocket handshake cannot be forwarded through the plain fetch proxy.
+registerAviatorSocket(app, {
+  verifyToken: resolveBearer,
+  allowedOrigin: (origin) => Boolean(corsOrigin({ headers: { origin } })),
+  upstream: (service, port) => `http://${upstreamHost(service)}:${port}`,
+  realtimeToken: REALTIME_SERVICE_TOKEN,
+  maxPerUser: 4,
+  log: app.log,
+});
 
 app.all("/v1/*", proxy);
 app.all("/internal/*", proxy);

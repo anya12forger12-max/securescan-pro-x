@@ -7,7 +7,13 @@ export default function History() {
 
   return (
     <div className="history-board">
-      <button className="history-toggle" type="button" onClick={() => setOpen((value) => !value)}>
+      <button
+        className="history-toggle"
+        type="button"
+        aria-expanded={open}
+        aria-controls="recent-event-details"
+        onClick={() => setOpen((value) => !value)}
+      >
         Recent events <span aria-hidden="true">{open ? '▵' : '▿'}</span>
       </button>
       <div className="history-strip" aria-label="Recent event sequence numbers">
@@ -19,7 +25,7 @@ export default function History() {
         {history.length === 0 && <span className="empty">no events</span>}
       </div>
       {open && (
-        <div className="history-dropdown">
+        <div className="history-dropdown" id="recent-event-details">
           {events.slice(0, 30).map((event) => (
             <div key={event.seq} className="history-entry">
               <span className="seq-number">{event.seq}</span>

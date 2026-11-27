@@ -206,3 +206,37 @@ $muted: #78A0D0;
     border: 1px solid rgba(255, 0, 168, 0.2);
   }
 }
+
+/* Board state shared by Codenames and Pictionary */
+.guess-list,
+.revealed-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+
+  span {
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(120, 160, 208, 0.25);
+    background: rgba(10, 16, 37, 0.8);
+    color: $soft-white;
+    font-size: 11px;
+
+    &.correct,
+    &.red {
+      border-color: rgba(255, 0, 168, 0.45);
+      color: $hot-pink;
+    }
+
+    &.blue {
+      border-color: rgba(0, 102, 255, 0.5);
+      color: $electric-blue;
+    }
+
+    &.hidden {
+      color: $muted;
+      border-style: dashed;
+    }
+  }
+}

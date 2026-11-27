@@ -12,21 +12,33 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { promisify } from "node:util";
-import { baseEnvSchema, dbPoolOptions, loadEnv, registerErrorHandler } from "@gp/config";
-import { ERROR_CODES } from "@gp/shared-types";
+import {
+  baseEnvSchema,
+  capabilityFields,
+  dbPoolOptions,
+  jwtSignEnvFields,
+  jwtVerifyOptions,
+  jwtVerifyPluginOptions,
+  loadEnv,
+  normalizePem,
+  parseCorsOrigins,
+  registerErrorHandler,
+} from "@gp/config";
+import { ERROR_CODES, serviceTokenOk } from "@gp/shared-types";
 
 /**
  * Auth service (3015).
  *
- * Mints the platform-wide HS256 access token contract
- * ({ userId, username } with a 900s default lifetime) and owns credential
- * storage plus rotating refresh tokens. Every other service verifies the same
- * JWT with the shared JWT_ACCESS_SECRET.
+ * The only process holding JWT_PRIVATE_KEY. It mints RS256 access tokens
+ * ({ userId, username, ver, jti, iss, aud } with a 900s default lifetime) and
+ * owns credential storage plus rotating refresh tokens. Every other service
+ * verifies with the matching public key and pinned issuer/audience.
  */
 const envSchema = baseEnvSchema.extend({
   PORT: z.coerce.number().int().positive().default(3015),
   DATABASE_URL: z.string().min(1).url(),
-  JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 characters"),
+  ...capabilityFields("AUTH_SESSION_SERVICE_TOKEN"),
+  ...jwtSignEnvFields,
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   JWT_EXPIRES_IN: z.coerce.number().int().positive().default(900),
@@ -38,26 +50,7 @@ const pool = new pg.Pool(dbPoolOptions(env.DATABASE_URL));
 // The browser talks to the gateway over the configured origin. Origins are
 // normalised once so `http://localhost:3000/` behaves exactly like the bare
 // form for both CORS and the cookie's Secure decision.
-const CORS_ORIGINS = env.CORS_ORIGIN.split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean)
-  .map((value) => {
-    try {
-      const url = new URL(value);
-      if (
-        (url.protocol === "http:" || url.protocol === "https:") &&
-        !url.username &&
-        !url.password &&
-        url.pathname === "/" &&
-        !url.search &&
-        !url.hash
-      )
-        return url.origin;
-    } catch {
-      // Keep the raw value; an invalid origin must not widen the allow-list.
-    }
-    return value;
-  });
+const CORS_ORIGINS = parseCorsOrigins(env.CORS_ORIGIN);
 const REFRESH_COOKIE = "gp_refresh_token";
 const REFRESH_COOKIE_PATH = "/v1/auth";
 const REFRESH_COOKIE_MAX_AGE = env.REFRESH_TTL_DAYS * 24 * 60 * 60;
@@ -76,7 +69,7 @@ const refreshCookieSecure = (req) => {
 
 const app = Fastify({ logger: { level: env.LOG_LEVEL } });
 await app.register(cors, { origin: CORS_ORIGINS });
-await app.register(jwt, { secret: env.JWT_ACCESS_SECRET });
+await app.register(jwt, jwtVerifyPluginOptions(env));
 registerErrorHandler(app);
 
 app.addHook("onRequest", async (req, reply) => {
@@ -143,12 +136,39 @@ const DUMMY_PASSWORD_HASH = await hashPassword("timing-equalizer-password");
 // ---------------------------------------------------------------------------
 // Token helpers
 // ---------------------------------------------------------------------------
-const mintAccessToken = (user) =>
-  jsonwebtoken.sign(
-    { userId: String(user.id), username: user.username },
-    env.JWT_ACCESS_SECRET,
-    { algorithm: "HS256", expiresIn: env.JWT_EXPIRES_IN },
+const mintAccessToken = (user, ttlSeconds = env.JWT_EXPIRES_IN) => {
+  const jti = randomUUID();
+  const ver = Number(user.token_version ?? 1);
+  const token = jsonwebtoken.sign(
+    { userId: String(user.id), username: user.username, ver },
+    normalizePem(env.JWT_PRIVATE_KEY),
+    {
+      algorithm: "RS256",
+      expiresIn: ttlSeconds,
+      issuer: env.JWT_ISSUER,
+      audience: env.JWT_AUDIENCE,
+      jwtid: jti,
+    },
   );
+  return {
+    token,
+    jti,
+    ver,
+    expiresAt: new Date(Date.now() + ttlSeconds * 1000),
+  };
+};
+
+/** Persist the jti before returning the token. The gateway refuses any signed
+ * token without a matching, unrevoked record at the current generation. */
+async function issueAccessToken(user, executor = pool, ttlSeconds = env.JWT_EXPIRES_IN) {
+  const issued = mintAccessToken(user, ttlSeconds);
+  await executor.query(
+    `INSERT INTO auth_access_tokens (jti, user_id, token_version, expires_at)
+     VALUES ($1, $2, $3, $4)`,
+    [issued.jti, user.id, issued.ver, issued.expiresAt],
+  );
+  return issued;
+}
 
 const hashRefreshToken = (token) => createHash("sha256").update(token).digest("hex");
 
@@ -163,17 +183,41 @@ const serializeRefreshCookie = (token, maxAge, secure) =>
     "SameSite=Strict",
     ...(secure ? ["Secure"] : []),
   ].join("; ");
+
+// The browser cannot read the HttpOnly refresh cookie, so without a hint it
+// would POST /v1/auth/refresh on every anonymous page load and get a 400 (plus
+// a console error). This companion cookie carries no credential - only the
+// fact that a session cookie exists - and is cleared with it on logout and on
+// refresh failure.
+const SESSION_HINT_COOKIE = "gp_session";
+const serializeSessionHint = (maxAge, secure) =>
+  [
+    `${SESSION_HINT_COOKIE}=${maxAge > 0 ? "1" : ""}`,
+    `Max-Age=${maxAge}`,
+    "Path=/",
+    "SameSite=Strict",
+    ...(secure ? ["Secure"] : []),
+  ].join("; ");
+const sessionCookies = (token, maxAge, req) => {
+  const secure = refreshCookieSecure(req);
+  return [
+    serializeRefreshCookie(token, maxAge, secure),
+    serializeSessionHint(maxAge, secure),
+  ];
+};
 const setRefreshCookie = (reply, token, req) =>
-  reply.header(
-    "set-cookie",
-    serializeRefreshCookie(token, REFRESH_COOKIE_MAX_AGE, refreshCookieSecure(req)),
-  );
+  reply.header("set-cookie", sessionCookies(token, REFRESH_COOKIE_MAX_AGE, req));
 const clearRefreshCookie = (reply, req) =>
-  reply.header("set-cookie", serializeRefreshCookie("", 0, refreshCookieSecure(req)));
+  reply.header("set-cookie", sessionCookies("", 0, req));
+const clearSessionHint = (reply, req) =>
+  reply.header("set-cookie", serializeSessionHint(0, refreshCookieSecure(req)));
 
 /** Cookie first: a browser must never fall back to an attacker-supplied body
  * token while it has a refresh cookie. Body tokens remain available only to
- * non-browser clients that have no cookie at all. */
+ * non-browser clients that have no refresh cookie at all.
+ *
+ * Return `null` only when there is no refresh cookie. An empty refresh cookie
+ * returns `""` so callers cannot silently fall through to a body token. */
 function requestRefreshToken(req) {
   const header = headerString(req.headers, "cookie");
   if (header) {
@@ -207,7 +251,9 @@ async function issueRefreshToken(executor, userId, familyId = randomUUID()) {
   return token;
 }
 
-const PUBLIC_USER_COLUMNS = "id, username, email, created_at";
+// token_version is not returned by publicUser(), but mintAccessToken needs it
+// so every issued token is bound to the current revocation generation.
+const PUBLIC_USER_COLUMNS = "id, username, email, created_at, token_version";
 const publicUser = (row) => ({
   id: row.id,
   username: row.username,
@@ -215,11 +261,12 @@ const publicUser = (row) => ({
   created_at: row.created_at,
 });
 
-function authData(user) {
+async function authData(user, executor = pool) {
   // Never include the refresh token here: it lives only in the HttpOnly cookie
   // and must be unreachable from JavaScript (and from XSS).
+  const access = await issueAccessToken(user, executor);
   return {
-    token: mintAccessToken(user),
+    token: access.token,
     token_type: "Bearer",
     expires_in: env.JWT_EXPIRES_IN,
     user: publicUser(user),
@@ -284,7 +331,7 @@ app.post("/v1/auth/login", async (req, reply) => {
   const { identifier, password } = parsed.data;
   try {
     const result = await pool.query(
-      `SELECT id, username, email, created_at, password_hash
+      `SELECT id, username, email, created_at, password_hash, token_version
        FROM auth_users WHERE username = $1 OR email = $1 LIMIT 1`,
       [identifier],
     );
@@ -296,9 +343,12 @@ app.post("/v1/auth/login", async (req, reply) => {
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid credentials");
 
     await pool.query(`UPDATE auth_users SET last_login_at = now() WHERE id = $1`, [row.id]);
+    // Mint the access record first so a failed insert cannot leave a live
+    // refresh cookie with no usable access token.
+    const data = await authData(row);
     const refreshToken = await issueRefreshToken(pool, row.id);
     setRefreshCookie(reply, refreshToken, req);
-    return ok(reply, 200, authData(row), reqId(req));
+    return ok(reply, 200, data, reqId(req));
   } catch (err) {
     req.log.error({ err }, "login failed");
     return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "login failed");
@@ -311,8 +361,10 @@ app.post("/v1/auth/refresh", async (req, reply) => {
 
   const cookieToken = requestRefreshToken(req);
   const refreshTokenInput = cookieToken ?? parsed.data.refresh_token;
-  if (!refreshTokenInput)
+  if (!refreshTokenInput) {
+    clearSessionHint(reply, req);
     return deny(reply, 400, ERROR_CODES.VALIDATION_ERROR, "refresh token required");
+  }
 
   const tokenHash = hashRefreshToken(refreshTokenInput);
   const client = await pool.connect();
@@ -329,6 +381,7 @@ app.post("/v1/auth/refresh", async (req, reply) => {
     );
     if (!found.rowCount) {
       await client.query("ROLLBACK");
+      clearSessionHint(reply, req);
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid or expired refresh token");
     }
 
@@ -336,13 +389,30 @@ app.post("/v1/auth/refresh", async (req, reply) => {
     if (revokedAt) {
       // A revoked token was reused: assume theft and revoke every still-live
       // token in the family, including the one an attacker may have obtained
-      // from a previous rotation.
+      // from a previous rotation. Record the theft signal: without this, the
+      // only evidence of a replay is a silent 401.
+      req.log.warn(
+        { userId, familyId, ip: req.ip ?? req.socket?.remoteAddress ?? "unknown" },
+        "refresh token replay detected; revoked token family",
+      );
       await client.query(
         `UPDATE auth_refresh_tokens SET revoked_at = now()
           WHERE family_id = $1 AND revoked_at IS NULL`,
         [familyId],
       );
+      // A replayed refresh token is treated as theft: revoke every access
+      // token already minted for this user, not just refresh siblings.
+      await client.query(
+        `UPDATE auth_users SET token_version = token_version + 1 WHERE id = $1`,
+        [userId],
+      );
+      await client.query(
+        `UPDATE auth_access_tokens SET revoked_at = now()
+          WHERE user_id = $1 AND revoked_at IS NULL`,
+        [userId],
+      );
       await client.query("COMMIT");
+      clearSessionHint(reply, req);
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid or expired refresh token");
     }
     await client.query(`UPDATE auth_refresh_tokens SET revoked_at = now() WHERE id = $1`, [oldId]);
@@ -353,10 +423,11 @@ app.post("/v1/auth/refresh", async (req, reply) => {
     );
     if (!userResult.rowCount) {
       await client.query("ROLLBACK");
+      clearSessionHint(reply, req);
       return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid or expired refresh token");
     }
+    const data = await authData(userResult.rows[0], client);
     await client.query("COMMIT");
-    const data = authData(userResult.rows[0]);
     if (cookieToken) {
       // Cookie clients never receive the rotated token in JSON: only the new
       // HttpOnly cookie carries it, so XSS cannot read or exfiltrate it.
@@ -390,7 +461,7 @@ app.post("/v1/auth/logout", async (req, reply) => {
       // Include revoked rows: an already-rotated token still points at the
       // family whose new sibling this logout must kill.
       const found = await client.query(
-        `SELECT family_id FROM auth_refresh_tokens WHERE token_hash = $1 FOR UPDATE`,
+        `SELECT family_id, user_id FROM auth_refresh_tokens WHERE token_hash = $1 FOR UPDATE`,
         [hashRefreshToken(token)],
       );
       if (found.rowCount && found.rows[0].family_id) {
@@ -404,6 +475,20 @@ app.post("/v1/auth/logout", async (req, reply) => {
           `UPDATE auth_refresh_tokens SET revoked_at = now()
            WHERE token_hash = $1 AND revoked_at IS NULL`,
           [hashRefreshToken(token)],
+        );
+      }
+      if (found.rowCount) {
+        // Refresh revocation alone leaves already-issued access tokens valid
+        // until exp. Bump the generation in the same transaction so the edge
+        // rejects them immediately (bounded by its short version cache TTL).
+        await client.query(
+          `UPDATE auth_users SET token_version = token_version + 1 WHERE id = $1`,
+          [found.rows[0].user_id],
+        );
+        await client.query(
+          `UPDATE auth_access_tokens SET revoked_at = now()
+            WHERE user_id = $1 AND revoked_at IS NULL`,
+          [found.rows[0].user_id],
         );
       }
       await client.query("COMMIT");
@@ -428,15 +513,33 @@ app.get("/v1/auth/me", async (req, reply) => {
 
   let decoded;
   try {
-    decoded = await app.jwt.verify(raw.slice(7), { algorithms: ["HS256"] });
+    decoded = await app.jwt.verify(raw.slice(7), jwtVerifyOptions(env));
   } catch {
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid token");
   }
   const userId = decoded?.userId;
-  if (typeof userId !== "string" || !UUID.test(userId))
+  const jti = decoded?.jti;
+  const ver = Number(decoded?.ver);
+  if (
+    typeof userId !== "string" || !UUID.test(userId) ||
+    typeof jti !== "string" || !UUID.test(jti) ||
+    !Number.isInteger(ver) || ver < 1
+  )
     return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "missing or invalid token");
 
   try {
+    // Signature validity alone is not enough after logout or refresh replay.
+    const active = await pool.query(
+      `SELECT 1 FROM auth_access_tokens t
+       JOIN auth_users u ON u.id = t.user_id
+       WHERE t.jti = $1 AND t.user_id = $2 AND t.token_version = $3
+         AND t.revoked_at IS NULL AND t.expires_at > now()
+         AND u.token_version = t.token_version`,
+      [jti, userId, ver],
+    );
+    if (!active.rowCount)
+      return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "token has been revoked");
+
     const result = await pool.query(
       `SELECT ${PUBLIC_USER_COLUMNS} FROM auth_users WHERE id = $1`,
       [userId],
@@ -447,6 +550,48 @@ app.get("/v1/auth/me", async (req, reply) => {
     req.log.error({ err }, "user lookup failed");
     return deny(reply, 500, ERROR_CODES.INTERNAL_ERROR, "could not load user");
   }
+});
+
+/**
+ * Operator launch sessions. The crash service verifies the operator's API key
+ * and signature, then asks auth (the only holder of JWT_PRIVATE_KEY) to mint a
+ * normal RS256 access token. It is registered in auth_access_tokens with a jti
+ * and generation, so the gateway accepts it exactly like a login token and can
+ * revoke it. No operator-supplied claim is trusted as identity.
+ */
+app.post("/internal/auth/session", async (req, reply) => {
+  if (!serviceTokenOk(req.headers, env.AUTH_SESSION_SERVICE_TOKEN))
+    return deny(reply, 401, ERROR_CODES.UNAUTHORIZED, "invalid service token");
+  const parsed = z.object({
+    userId: z.string().min(1).max(128),
+    // Operator launches are short-lived; never mint a full-length login token
+    // from an internal session endpoint.
+    ttlSeconds: z.coerce.number().int().min(60).max(300).default(300),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  }).safeParse(req.body);
+  if (!parsed.success) return validationError(reply, parsed);
+  const result = await pool.query(
+    `SELECT id, username, token_version FROM auth_users WHERE id = $1`,
+    [parsed.data.userId],
+  );
+  if (!result.rowCount) return deny(reply, 404, ERROR_CODES.NOT_FOUND, "player not found");
+  // An operator may launch only an ordinary player session. Without this
+  // check, anyone holding the operator key could mint a token for an admin
+  // and inherit privileged roles on the platform.
+  const privileged = await pool.query(
+    `SELECT role FROM admin_user_roles WHERE user_id = $1 AND role <> 'player'`,
+    [parsed.data.userId],
+  );
+  if (privileged.rowCount)
+    return deny(reply, 403, ERROR_CODES.FORBIDDEN, "operator sessions cannot target a privileged account");
+  const issued = await issueAccessToken(result.rows[0], pool, parsed.data.ttlSeconds);
+  return ok(reply, 201, {
+    token: issued.token,
+    jti: issued.jti,
+    expiresAt: issued.expiresAt.toISOString(),
+    userId: String(result.rows[0].id),
+    metadata: parsed.data.metadata ?? {},
+  }, reqId(req));
 });
 
 app.get("/health", async () => ({ status: "ok", service: "auth" }));

@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gaming-platform.local/aviator/protocol-v1.json",
+  "title": "Aviator protocol v1 frames",
+  "description": "Frames implemented by services/gateway/aviator-ws.js and packages/aviator. All times are epoch milliseconds and all money values are two-decimal strings.",
+  "$defs": {
+    "reqId": { "type": "string", "maxLength": 128 },
+    "money": { "type": "string", "pattern": "^-?[0-9]+\\.[0-9]{2}$" },
+    "errorCode": {
+      "enum": [
+        "UNAUTHORIZED", "FORBIDDEN", "VALIDATION_FAILED", "NOT_IN_BETTING_PHASE",
+        "INSUFFICIENT_FUNDS", "BET_LIMIT_EXCEEDED", "DUPLICATE_REQUEST",
+        "ROUND_CRASHED", "PLAYER_BLOCKED", "WALLET_UNAVAILABLE", "RATE_LIMITED",
+        "INTERNAL", "AUTO_STOPPED", "UNSUPPORTED_VERSION"
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["t", "panel", "amount"],
+      "properties": {
+        "t": { "const": "bet" },
+        "reqId": { "$ref": "#/$defs/reqId" },
+        "panel": { "enum": [1, 2] },
+        "amount": { "$ref": "#/$defs/money" },
+        "autoCashout": { "$ref": "#/$defs/money" }
+      }
+    },
+    { "type": "object", "required": ["t", "betId"], "properties": { "t": { "const": "cancel_bet" }, "reqId": { "$ref": "#/$defs/reqId" }, "betId": { "type": "string" } } },
+    { "type": "object", "required": ["t"], "properties": { "t": { "const": "cashout" }, "reqId": { "$ref": "#/$defs/reqId" }, "betId": { "type": "string" }, "panel": { "enum": [1, 2] } } },
+    {
+      "type": "object",
+      "required": ["t", "amount", "rounds"],
+      "properties": {
+        "t": { "const": "auto_start" },
+        "reqId": { "$ref": "#/$defs/reqId" },
+        "panel": { "enum": [1, 2] },
+        "amount": { "$ref": "#/$defs/money" },
+        "autoCashout": { "$ref": "#/$defs/money" },
+        "rounds": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "stopRules": { "type": "object" }
+      }
+    },
+    { "type": "object", "required": ["t"], "properties": { "t": { "const": "auto_stop" }, "reqId": { "$ref": "#/$defs/reqId" }, "panel": { "enum": [1, 2] } } },
+    { "type": "object", "required": ["t", "text"], "properties": { "t": { "const": "chat" }, "reqId": { "$ref": "#/$defs/reqId" }, "text": { "type": "string", "maxLength": 200 }, "room": { "type": "string" } } },
+    { "type": "object", "required": ["t"], "properties": { "t": { "const": "ping" }, "ts": { "type": "integer" } } },
+    {
+      "type": "object",
+      "required": ["t", "serverTime"],
+      "properties": {
+        "t": { "const": "snapshot" },
+        "v": { "const": 1 },
+        "serverTime": { "type": "integer" },
+        "round": {
+          "type": ["object", "null"],
+          "properties": {
+            "id": { "type": "string" },
+            "state": { "enum": ["WAITING", "BETTING", "FLYING", "CRASHED", "SETTLING"] },
+            "seedHash": { "type": "string" },
+            "bettingEndsAt": { "type": ["integer", "null"] },
+            "flightStart": { "type": ["integer", "null"] },
+            "doublingSeconds": { "type": "number" },
+            "maxMultiplier": { "type": "number" },
+            "crashPoint": { "type": ["number", "null"], "description": "Only present after reveal." }
+          },
+          "noneOf": [
+            { "required": ["serverSeed"] },
+            { "required": ["seed"] },
+            { "required": ["proof"] }
+          ]
+        },
+        "balance": { "type": ["object", "null"], "properties": { "amount": { "$ref": "#/$defs/money" }, "currency": { "type": "string" } } },
+        "myBets": { "type": "array", "items": { "type": "object" } },
+        "history": { "type": "array", "items": { "$ref": "#/$defs/money" } },
+        "limits": { "type": "object", "properties": { "minBet": { "$ref": "#/$defs/money" }, "maxBet": { "$ref": "#/$defs/money" }, "maxWin": { "$ref": "#/$defs/money" } } }
+      }
+    },
+    { "type": "object", "required": ["t", "roundId", "seedHash", "bettingEndsAt"], "properties": { "t": { "const": "round_start" }, "roundId": { "type": "string" }, "seedHash": { "type": "string" }, "bettingEndsAt": { "type": "integer" } } },
+    { "type": "object", "required": ["t", "roundId", "flightStart"], "properties": { "t": { "const": "betting_closed" }, "roundId": { "type": "string" }, "flightStart": { "type": "integer" } } },
+    { "type": "object", "required": ["t", "roundId", "mult"], "properties": { "t": { "const": "tick" }, "roundId": { "type": "string" }, "mult": { "$ref": "#/$defs/money" }, "serverTime": { "type": "integer" } } },
+    { "type": "object", "required": ["t", "roundId", "mult"], "properties": { "t": { "const": "crash" }, "roundId": { "type": "string" }, "mult": { "$ref": "#/$defs/money" }, "seed": { "type": ["string", "null"] } } },
+    { "type": "object", "required": ["t", "roundId", "state"], "properties": { "t": { "const": "round_settling" }, "roundId": { "type": "string" }, "state": { "const": "SETTLING" } } },
+    { "type": "object", "required": ["t", "roundId"], "properties": { "t": { "const": "round_voided" }, "roundId": { "type": "string" }, "reason": { "type": "string" } } },
+    { "type": "object", "required": ["t", "betId"], "properties": { "t": { "const": "bet_ok" }, "reqId": { "$ref": "#/$defs/reqId" }, "betId": { "type": ["string", "null"] }, "panel": { "enum": [1, 2] }, "amount": { "type": ["string", "null"] }, "cancelled": { "type": "boolean" }, "auto": { "type": "boolean" } } },
+    { "type": "object", "required": ["t", "code"], "properties": { "t": { "const": "bet_err" }, "reqId": { "$ref": "#/$defs/reqId" }, "code": { "$ref": "#/$defs/errorCode" }, "message": { "type": "string" } } },
+    { "type": "object", "required": ["t", "mult", "payout"], "properties": { "t": { "const": "cashout_ok" }, "reqId": { "$ref": "#/$defs/reqId" }, "betId": { "type": ["string", "null"] }, "panel": { "enum": [1, 2] }, "mult": { "$ref": "#/$defs/money" }, "payout": { "$ref": "#/$defs/money" } } },
+    { "type": "object", "required": ["t", "code"], "properties": { "t": { "const": "cashout_err" }, "reqId": { "$ref": "#/$defs/reqId" }, "code": { "$ref": "#/$defs/errorCode" }, "message": { "type": "string" } } },
+    { "type": "object", "required": ["t", "amount", "currency"], "properties": { "t": { "const": "balance" }, "amount": { "$ref": "#/$defs/money" }, "currency": { "type": "string" }, "reqId": { "$ref": "#/$defs/reqId" } } },
+    {
+      "type": "object",
+      "required": ["t", "list"],
+      "properties": {
+        "t": { "const": "feed" },
+        "list": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "betId", "user"],
+            "properties": {
+              "type": { "enum": ["bet", "cashout"] },
+              "betId": { "type": ["string", "null"] },
+              "user": { "type": "string", "description": "Masked." },
+              "stake": { "type": ["string", "null"] },
+              "mult": { "type": ["string", "null"] },
+              "payout": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    { "type": "object", "required": ["t", "id", "user", "text", "time"], "properties": { "t": { "const": "chat_msg" }, "id": { "type": ["string", "null"] }, "user": { "type": "string" }, "text": { "type": "string" }, "time": { "type": "integer" } } },
+    { "type": "object", "required": ["t", "code"], "properties": { "t": { "const": "error" }, "code": { "$ref": "#/$defs/errorCode" }, "message": { "type": "string" } } },
+    { "type": "object", "required": ["t", "serverTime"], "properties": { "t": { "const": "pong" }, "ts": { "type": ["integer", "null"] }, "serverTime": { "type": "integer" } } }
+  ]
+}
