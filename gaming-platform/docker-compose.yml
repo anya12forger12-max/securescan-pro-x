@@ -389,9 +389,11 @@ services:
       OPERATOR_API_KEY: ${OPERATOR_API_KEY:-}
       OPERATOR_API_SECRET: ${OPERATOR_API_SECRET:-}
       OPERATOR_LAUNCH_URL: ${OPERATOR_LAUNCH_URL:-}
-      # Opt-in replay window: strict mode requires x-timestamp/x-nonce and a
-      # signature over "timestamp\nnonce\nbody"; the allow-list accepts IPs or
-      # CIDRs and is empty by default.
+      # v2 signatures are required by default. The legacy body-only mode is a
+      # temporary, explicitly opted-in migration step.
+      OPERATOR_ALLOW_LEGACY_SIGNATURES: ${OPERATOR_ALLOW_LEGACY_SIGNATURES:-false}
+      # Legacy signers may add an x-timestamp/x-nonce envelope; strict mode
+      # requires it. The IP allow-list accepts IPs or CIDRs and is empty by default.
       OPERATOR_TIMESTAMP_REQUIRED: ${OPERATOR_TIMESTAMP_REQUIRED:-false}
       OPERATOR_TIMESTAMP_SKEW_MS: ${OPERATOR_TIMESTAMP_SKEW_MS:-300000}
       OPERATOR_IP_ALLOWLIST: ${OPERATOR_IP_ALLOWLIST:-}

@@ -3,27 +3,55 @@
 All operator endpoints live behind the gateway's `/v1/operator/*` alias and are
 implemented in `services/crash/index.js`. They are disabled (401) unless both
 `OPERATOR_API_KEY` and `OPERATOR_API_SECRET` are configured. Never reuse an
-internal service token as an operator key.
+internal service token as an operator key. Apply migration
+`0021_operator_signature_nonces.sql` before enabling operator credentials; v2
+verification fails closed if the nonce table is missing.
 
 ## Authentication
 
+The operator API key is accepted as `x-api-key` or as
+`Authorization: Bearer <operator API key>`; both must match the configured
+key. New deployments must use v2 signatures:
+
 ```
-Authorization: Bearer <operator API key>
-X-Signature: hmac_sha256(OPERATOR_API_SECRET, raw_request_body)
+x-ts: <unix seconds, ±300>
+x-nonce: <random 16-128 char string, unique per request>
+x-signature-v2: <hex hmac_sha256(OPERATOR_API_SECRET, signed_material)>
 ```
 
-`x-api-key` is accepted as a legacy alias for the bearer key. GET requests sign
-the literal `{}`. Canonical/compact JSON signatures from older integrators are
-still accepted so an in-flight integration is not broken. All comparisons are
-constant time; a missing key or signature fails closed.
+`signed_material` is newline-joined:
 
-For replay protection, add `X-Timestamp` (epoch milliseconds) and `X-Nonce`
-(unique per request) and sign the envelope
-`"<timestamp>\n<nonce>\n<raw_request_body>"`. A supplied timestamp outside
-`OPERATOR_TIMESTAMP_SKEW_MS` or a reused nonce is rejected. Set
-`OPERATOR_TIMESTAMP_REQUIRED=true` on the crash service to require this envelope
-for every call; until then, legacy body-only signatures keep working. Set
-`OPERATOR_IP_ALLOWLIST` to a comma-separated list of IPs/CIDRs to restrict
+```
+gp-operator-v2
+<METHOD>
+<route pattern, e.g. /v1/operator/players/:playerId/block>
+canonical_json(req.params)
+canonical_json(req.query)
+<ts>
+<nonce>
+canonical_json(req.body or {})
+```
+
+`canonical_json` recursively sorts object keys; arrays keep their order. The
+signature binds the player id, method, query and body, so a captured request
+cannot be replayed against a different target. Nonces are single-use per API
+key (migration `0021`) and timestamps outside the five-minute window are
+rejected. All comparisons are constant time. A request that presents v2 headers
+but gets the signature or timestamp wrong is rejected outright; it is never
+downgraded to v1.
+
+Legacy `x-signature: hmac_sha256(OPERATOR_API_SECRET, canonical_json(body))`
+is accepted only when the deployment explicitly sets
+`OPERATOR_ALLOW_LEGACY_SIGNATURES=true` as a temporary migration step. Raw-body
+and compact-JSON signatures from older integrators are accepted in that window.
+To make the replayable v1 scheme safer during migration, add `X-Timestamp`
+(epoch milliseconds) and `X-Nonce` and sign the envelope
+`"<timestamp>\n<nonce>\n<body>"`; a stale timestamp or reused nonce is then
+rejected. Set `OPERATOR_TIMESTAMP_REQUIRED=true` to require that envelope for
+legacy calls. This setting does not weaken v2, which always carries its own
+fresh timestamp and single-use nonce.
+
+Set `OPERATOR_IP_ALLOWLIST` to a comma-separated list of IPs/CIDRs to restrict
 operator calls; the gateway forwards the proxy-resolved client IP and strips
 any client-supplied value. Operator calls also have their own
 `RATE_LIMIT_OPERATOR_MAX` quota at the gateway.

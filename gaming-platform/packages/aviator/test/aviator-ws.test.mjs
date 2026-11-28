@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decodeFrames, textFrame } from "../../../services/gateway/aviator-ws.js";
+import {
+  bearerActive,
+  checkFrameRateLimit,
+  decodeFrames,
+  textFrame,
+} from "../../../services/gateway/aviator-ws.js";
 
 /** Build a masked client frame the way a browser does. */
 function maskedFrame(payload, opcode = 1, fin = true) {
@@ -79,4 +84,38 @@ test("invalid frame shapes are rejected", () => {
   assert.throws(() => decodeFrames(maskedFrame("x", 8, false)), /invalid control frame/);
   assert.throws(() => decodeFrames(Buffer.from([0xb1, 0x80, 0x00, 0x00, 0x00, 0x00])), /reserved/);
   assert.throws(() => decodeFrames(maskedFrame(Buffer.from([0xff]))), /utf-8/i);
+});
+
+test("privileged socket frames re-check token liveness", async () => {
+  let active = true;
+  const seen = [];
+  const verifyToken = async (req) => {
+    seen.push(req.headers.authorization);
+    return active
+      ? { status: "valid", claims: { userId: "u1" } }
+      : { status: "invalid" };
+  };
+  assert.equal(await bearerActive(verifyToken, "jwt-1"), true);
+  active = false;
+  assert.equal(await bearerActive(verifyToken, "jwt-1"), false);
+  assert.equal(await bearerActive(verifyToken, null), false);
+  assert.deepEqual(seen, ["Bearer jwt-1", "Bearer jwt-1"]);
+});
+
+test("socket writes share the REST per-user write bucket", async () => {
+  const calls = [];
+  const limiter = {
+    check: async (key, limit) => {
+      calls.push([key, limit]);
+      return { allowed: false, limit, remaining: 0, resetAt: 1 };
+    },
+  };
+  const result = await checkFrameRateLimit(limiter, { mutateMax: 30 }, "user-1");
+  assert.equal(result.allowed, false);
+  assert.deepEqual(calls, [["user:user-1:write", 30]]);
+
+  assert.deepEqual(await checkFrameRateLimit(null, {}, "user-1"), { allowed: true });
+  const fallback = [];
+  await checkFrameRateLimit({ check: async (key, limit) => { fallback.push([key, limit]); return { allowed: true }; } }, {}, "user-2");
+  assert.deepEqual(fallback, [["user:user-2:write", 30]]);
 });
