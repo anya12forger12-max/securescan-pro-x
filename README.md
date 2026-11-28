@@ -85,3 +85,14 @@ The assessment application is **defensive only**. Use it against systems you own
 ## License
 
 MIT © 2026 **SecureScan Pro X Contributors**, with an additional defensive-use term in [LICENSE](LICENSE); GitHub therefore reports the licence as "other". Third-party archives under `gaming-platform/integrations/aviator/` keep their own upstream licences and notices — those are preserved in place and are not relicensed by this file.
+
+## Quick start — 1 or 2 commands
+
+```bash
+./setup.sh          # install dependencies
+./setup.sh run      # start the project (when a run target exists)
+```
+
+`setup.sh` detects this repository's build system and installs the right toolchain
+dependencies. Use `./setup.sh test` to run the available checks. If a project has no
+standard run target, the script prints the correct command from the sections above.
