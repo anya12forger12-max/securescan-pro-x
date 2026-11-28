@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # One-command bootstrap for this repository.
-#   ./setup.sh          install dependencies
-#   ./setup.sh run      start the project (when a run target exists)
-#   ./setup.sh test     run the project's checks
+#   ./setup.sh              install dependencies
+#   ./setup.sh run          start the project (when a run target exists)
+#   ./setup.sh test         run the project's checks
+#   SETUP_TARGET=sub/dir ./setup.sh   choose a subproject explicitly
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$ROOT"
 MODE="${1:-install}"
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -33,8 +33,56 @@ activate_venv() {
   fi
 }
 
+# Find the root manifest, or the most likely subproject (up to 3 levels deep).
+pick_target() {
+  if [ -n "${SETUP_TARGET:-}" ]; then
+    if [ ! -d "$ROOT/$SETUP_TARGET" ]; then
+      printf 'SETUP_TARGET directory not found: %s\n' "$SETUP_TARGET" >&2
+      exit 1
+    fi
+    printf '%s' "$SETUP_TARGET"
+    return
+  fi
+  for f in pubspec.yaml package.json pyproject.toml requirements.txt setup.py go.mod Cargo.toml pom.xml composer.json Gemfile; do
+    if [ -f "$ROOT/$f" ]; then printf '.'; return; fi
+  done
+  if compgen -G "$ROOT/*.sln" >/dev/null || compgen -G "$ROOT/*.csproj" >/dev/null \
+     || [ -f "$ROOT/gradlew" ] || [ -f "$ROOT/Makefile" ]; then
+    printf '.'
+    return
+  fi
+
+  best=''
+  rank=99
+  while IFS= read -r d; do
+    r=''
+    if [ -f "$d/pubspec.yaml" ]; then r=0
+    elif [ -f "$d/package.json" ]; then r=1
+    elif [ -f "$d/pyproject.toml" ] || [ -f "$d/requirements.txt" ] || [ -f "$d/setup.py" ]; then r=2
+    elif compgen -G "$d/*.sln" >/dev/null; then r=3
+    elif [ -f "$d/go.mod" ]; then r=4
+    elif [ -f "$d/Cargo.toml" ]; then r=5
+    elif [ -f "$d/pom.xml" ]; then r=6
+    elif [ -f "$d/gradlew" ]; then r=7
+    elif [ -f "$d/composer.json" ]; then r=8
+    elif [ -f "$d/Gemfile" ]; then r=9
+    elif [ -f "$d/Makefile" ]; then r=10
+    fi
+    if [ -n "$r" ] && [ "$r" -lt "$rank" ]; then rank="$r"; best="${d#$ROOT/}"; fi
+  done < <(find "$ROOT" -mindepth 1 -maxdepth 3 -type d \
+             -not -path '*/.git*' -not -path '*/node_modules*' \
+             -not -path '*/.venv*' -not -path '*/dist*' -not -path '*/build*' \
+             2>/dev/null | sort)
+  if [ -n "$best" ]; then
+    printf '\n==> No root manifest; using ./%s (override: SETUP_TARGET=<dir>)\n' "$best" >&2
+    printf '%s' "$best"
+  else
+    printf '.'
+  fi
+}
+
 do_install() {
-  log "Detecting project type in $ROOT"
+  log "Installing dependencies in $(pwd)"
   if [ -f pubspec.yaml ]; then
     need flutter; flutter pub get
   elif [ -f package.json ]; then
@@ -54,12 +102,16 @@ do_install() {
     need cargo; cargo fetch
   elif [ -f pom.xml ]; then
     need mvn; mvn -q -DskipTests package
-  elif compgen -G 'gradlew' >/dev/null; then
+  elif [ -f gradlew ]; then
     log "Run ./gradlew build to compile"
   elif [ -f composer.json ]; then
     need composer; composer install
   elif [ -f Gemfile ]; then
     need bundle; bundle install
+  elif compgen -G '*.ino' >/dev/null; then
+    log "Arduino sketch detected. With arduino-cli installed, compile with:"
+    log "  arduino-cli compile --fqbn <your-board> <sketch-directory>"
+    log "See README.md for supported boards and wiring."
   elif [ -f Makefile ]; then
     log "Run make to build"
   else
@@ -89,6 +141,8 @@ do_run() {
     need go; go run .
   elif [ -f Cargo.toml ]; then
     need cargo; cargo run
+  elif compgen -G '*.ino' >/dev/null; then
+    log "Upload the sketch from Arduino IDE or arduino-cli; see README.md."
   elif [ -f Makefile ]; then
     log "Run make or see README.md for the run target"
   else
@@ -120,11 +174,12 @@ do_test() {
 }
 
 case "$MODE" in
-  install) do_install ;;
-  run) do_run ;;
-  test) do_test ;;
+  install) cd "$ROOT/$(pick_target)"; do_install ;;
+  run) cd "$ROOT/$(pick_target)"; do_run ;;
+  test) cd "$ROOT/$(pick_target)"; do_test ;;
   -h|--help|help)
     printf 'Usage: ./setup.sh [install|run|test]\n'
+    printf 'Set SETUP_TARGET=<dir> to pick a subproject explicitly.\n'
     ;;
   *) printf 'Unknown mode: %s\nUsage: ./setup.sh [install|run|test]\n' "$MODE" >&2; exit 2 ;;
 esac
