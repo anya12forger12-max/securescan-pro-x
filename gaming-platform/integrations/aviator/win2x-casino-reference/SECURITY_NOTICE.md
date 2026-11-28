@@ -48,3 +48,19 @@ here to avoid anyone copying a vulnerable pattern:
 This does **not** make the archived dependency stack safe. The advisories and
 deployment prohibition above still apply.
 
+
+## Legacy social ids
+
+`SocialProfile::lookupIds()` now accepts only `provider:providerId`. Provider
+ids are unique per provider, not globally, so the old bare-id fallback let any
+provider with a colliding id resolve to another provider's account (including
+an admin row). Un-migrated rows with a bare `users.user_id` therefore cannot
+log in until their ids are namespaced.
+
+Before using this archive for comparison against real data, namespace each
+legacy row with the provider that originally created it. A template is in
+`database/migrations/legacy_social_identity_namespace.sql.example`; replace
+`:provider` with the correct provider per source group and review the affected
+rows before updating. Do not assign a single provider to all bare ids unless
+they truly came from that provider — guessing reintroduces the same takeover
+class under a different name.

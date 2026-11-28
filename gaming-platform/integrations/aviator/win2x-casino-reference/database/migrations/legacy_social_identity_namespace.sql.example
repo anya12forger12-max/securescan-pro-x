@@ -1,0 +1,24 @@
+-- Provider-scoping migration for legacy bare social ids.
+--
+-- This archive does not ship a canonical users table matching the original
+-- deployment, so this is a reviewed template, not an auto-run migration.
+-- Replace ':provider' with the Socialite provider that actually created each
+-- group of rows (vkontakte, facebook, google, ...). Never apply it with a
+-- guessed provider: a bare id "42" is not proof that two rows share an owner.
+
+-- Inspect first. Rows containing ':' are already namespaced and must be left
+-- untouched.
+SELECT id, user_id, username
+FROM users
+WHERE user_id IS NOT NULL
+  AND user_id NOT LIKE '%:%';
+
+-- Apply to one verified provider group at a time:
+-- UPDATE users
+-- SET user_id = CONCAT(:provider, ':', user_id)
+-- WHERE user_id IS NOT NULL
+--   AND user_id NOT LIKE '%:%'
+--   AND <source-specific condition that identifies rows from :provider>;
+
+-- Verify no bare ids remain before enabling logins:
+-- SELECT COUNT(*) FROM users WHERE user_id IS NOT NULL AND user_id NOT LIKE '%:%';
