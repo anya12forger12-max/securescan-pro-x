@@ -264,8 +264,8 @@ export function epochMs(value) {
  *
  * A snapshot may arrive while betting is still open, so it must never carry
  * the committed outcome: including `crashPoint` before reveal lets a client
- * bet at the exact peak. Only rounds that are already revealed (finished or
- * cancelled) expose their point, and the server seed is never part of a
+ * bet at the exact peak. Only explicitly revealed/finished rounds expose their
+ * point; cancelled rounds stay sealed, and the server seed is never part of a
  * snapshot at all.
  */
 export function buildSnapshot({

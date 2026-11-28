@@ -4,7 +4,7 @@ All operator endpoints live behind the gateway's `/v1/operator/*` alias and are
 implemented in `services/crash/index.js`. They are disabled (401) unless both
 `OPERATOR_API_KEY` and `OPERATOR_API_SECRET` are configured. Never reuse an
 internal service token as an operator key. Apply migration
-`0020_operator_signature_nonces.sql` before enabling operator credentials; v2
+`0021_operator_signature_nonces.sql` before enabling operator credentials; v2
 verification fails closed if the nonce table is missing.
 
 ## Authentication
@@ -35,7 +35,7 @@ canonical_json(req.body or {})
 `canonical_json` recursively sorts object keys; arrays keep their order. The
 signature binds the player id, method, query and body, so a captured request
 cannot be replayed against a different target. Nonces are single-use per API
-key (migration `0020`) and timestamps outside the five-minute window are
+key (migration `0021`) and timestamps outside the five-minute window are
 rejected. All comparisons are constant time. A request that presents v2 headers
 but gets the signature or timestamp wrong is rejected outright; it is never
 downgraded to v1.

@@ -1147,14 +1147,17 @@ async function reserveBet(roundId, userId, amount, autoCashout, sessionId, panel
     // Both panels share one per-player stake cap. Doing this inside the same
     // transaction that locks the round closes the auto-bet bypass: the manual
     // route checked it before reserveBet, but auto sessions called reserveBet
-    // directly and could stake MAX_BET on each panel in the same round.
+    // directly and could stake the global cap on each panel in the same round.
+    // Use the player's effective limit so operator overrides apply to both
+    // manual and auto wagering.
+    const stakeLimit = (await effectiveLimits(userId)).maxBet;
     const committed = await client.query(
       `SELECT COALESCE(SUM(amount), 0) AS total FROM crash_bets
         WHERE round_id = $1 AND user_id = $2 AND panel <> $3
           AND status IN ('pending','active','cashing_out','cashed_out')`,
       [roundId, userId, panel],
     );
-    if (Number(committed.rows[0]?.total ?? 0) + amount > env.MAX_BET) {
+    if (Number(committed.rows[0]?.total ?? 0) + amount > stakeLimit) {
       await client.query("ROLLBACK");
       return {
         error: [422, "BET_LIMIT_EXCEEDED", "combined stake exceeds the round limit"],
