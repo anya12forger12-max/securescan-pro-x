@@ -1005,6 +1005,8 @@ registerAviatorSocket(app, {
   realtimeToken: REALTIME_SERVICE_TOKEN,
   crashToken: CRASH_SERVICE_TOKEN,
   maxPerUser: 4,
+  rateLimiter,
+  rateLimitConfig,
   log: app.log,
 });
 

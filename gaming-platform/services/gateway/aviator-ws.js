@@ -108,6 +108,29 @@ export function decodeFrames(buffer, fragments = [], fragmentState = { opcode: n
   return { frames, rest: buffer.subarray(offset) };
 }
 
+/** Re-check the player's access token on the socket's own privileged path.
+ * REST requests pass through the gateway, which rejects revoked/rotated tokens
+ * via `accessTokenActive`; these internal `api()` calls go straight to the
+ * crash and chat services and would otherwise keep a logged-out socket live
+ * until the JWT's natural expiry. */
+export async function bearerActive(verifyToken, token, log) {
+  if (!token) return false;
+  const auth = await verifyToken({
+    headers: { authorization: `Bearer ${token}` },
+    log,
+  });
+  return auth?.status === "valid";
+}
+
+/** Socket frames are privileged writes but bypass Fastify's onRequest hook.
+ * Use the same per-user write bucket as REST so one player cannot multiply
+ * their abuse budget by opening four sockets and streaming frames. `ping` is
+ * handled by the caller before this check. */
+export async function checkFrameRateLimit(rateLimiter, config, userId) {
+  if (!rateLimiter) return { allowed: true };
+  return rateLimiter.check(`user:${userId}:write`, config?.mutateMax ?? 30);
+}
+
 /** Render the public flight curve from the configured ceiling only. Reading
  * the hidden crash point here would plateau the tick at the outcome and leak
  * it before betting closes. */
@@ -198,7 +221,8 @@ function frameForEvent(event) {
 /**
  * Register GET /v1/ws on the gateway.
  *
- * deps: { verifyToken, allowedOrigin, upstream, realtimeToken, maxPerUser, log }
+ * deps: { verifyToken, allowedOrigin, upstream, realtimeToken, maxPerUser,
+ *         rateLimiter, rateLimitConfig, log }
  */
 export function registerAviatorSocket(app, deps) {
   const sockets = new Map();
@@ -449,6 +473,14 @@ export function registerAviatorSocket(app, deps) {
       }
       const reqId = typeof msg.reqId === "string" && msg.reqId.length <= 128 ? msg.reqId : null;
       const replyKey = reqId ? `${msg.t}:${reqId}` : null;
+      // A cached reply is still a privileged response. Re-check the access
+      // token before replaying it; otherwise a revoked session could keep
+      // collecting money-frame results for the whole cache window.
+      if (msg.t !== "ping" && !(await bearerActive(deps.verifyToken, state.token, deps.log))) {
+        send({ t: "error", code: "UNAUTHORIZED", message: "session revoked" });
+        close();
+        return;
+      }
       const cached = replyKey ? state.replies.get(replyKey) : null;
       if (cached) {
         send(cached.frame);
@@ -466,25 +498,6 @@ export function registerAviatorSocket(app, deps) {
         }
         send(frame);
       };
-      // Socket intents reach the money handlers directly, bypassing the REST
-      // limiter. Bound each intent type per connection; chat is deliberately
-      // the slowest because it is public and fanned out to every player.
-      const INTENT_MIN_MS = {
-        bet: 120, cancel_bet: 120, cashout: 120,
-        auto_start: 300, auto_stop: 300, chat: 1000,
-      };
-      const minimum = INTENT_MIN_MS[msg.t];
-      if (minimum) {
-        const now = Date.now();
-        if (now - (state.intentLast.get(msg.t) ?? 0) < minimum) {
-          send({
-            t: "error", code: "RATE_LIMITED", ...(reqId ? { reqId } : {}),
-            message: `${msg.t} too fast; retry shortly`,
-          });
-          return;
-        }
-        state.intentLast.set(msg.t, now);
-      }
       const replyErr = (frameName, err) => send({
         t: frameName,
         ...(reqId ? { reqId } : {}),
@@ -503,6 +516,33 @@ export function registerAviatorSocket(app, deps) {
       try {
         if (msg.t === "ping") {
           send({ t: "pong", ts: msg.ts ?? null, serverTime: Date.now() });
+          return;
+        }
+        // Advance per-intent cooldowns only after token liveness and cache
+        // replay are resolved, so a rejected frame cannot consume the budget.
+        const INTENT_MIN_MS = {
+          bet: 120, cancel_bet: 120, cashout: 120,
+          auto_start: 300, auto_stop: 300, chat: 1000,
+        };
+        const minimum = INTENT_MIN_MS[msg.t];
+        if (minimum) {
+          const now = Date.now();
+          if (now - (state.intentLast.get(msg.t) ?? 0) < minimum) {
+            send({
+              t: "error", code: "RATE_LIMITED", ...(reqId ? { reqId } : {}),
+              message: `${msg.t} too fast; retry shortly`,
+            });
+            return;
+          }
+          state.intentLast.set(msg.t, now);
+        }
+        const limit = await checkFrameRateLimit(deps.rateLimiter, deps.rateLimitConfig, userId);
+        if (!limit.allowed) {
+          send({
+            t: "error",
+            code: limit.unavailable ? "RATE_LIMIT_UNAVAILABLE" : "RATE_LIMITED",
+            message: limit.unavailable ? "rate limiter unavailable" : "too many requests",
+          });
           return;
         }
         if (msg.t === "bet") {
